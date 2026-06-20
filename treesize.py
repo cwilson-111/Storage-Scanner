@@ -14,8 +14,8 @@ import threading
 import queue
 import subprocess
 from tkinter import (
-    Tk, Toplevel, ttk, StringVar, BOTH, X, Y, LEFT, RIGHT, TOP, BOTTOM, END, W, E,
-    Menu, filedialog, messagebox,
+    Tk, Toplevel, Canvas, ttk, StringVar, BOTH, X, Y, LEFT, RIGHT, TOP, BOTTOM,
+    END, W, E, Menu, filedialog, messagebox,
 )
 
 
@@ -138,7 +138,6 @@ def scan(path, progress_q, cancel_event, workers=None):
     ]
     for t in threads:
         t.start()
-
     work.join()  # block until every queued directory has been processed
 
     # Roll sizes/counts up the tree (iterative post-order; deep trees safe).
@@ -178,10 +177,129 @@ def human_size(num):
         num /= 1024.0
 
 
-def bar(fraction, width=10):
+_PARTIALS = "░▏▎▍▌▋▊▉█"   # 1/8-cell steps for a smooth, precise bar
+
+
+def bar(fraction, width=14):
     fraction = max(0.0, min(1.0, fraction))
-    filled = int(round(fraction * width))
-    return "█" * filled + "░" * (width - filled)
+    full = fraction * width
+    filled = int(full)
+    cells = ["█"] * filled
+    if filled < width:
+        cells.append(_PARTIALS[int(round((full - filled) * 8))])
+        cells.extend("░" * (width - filled - 1))
+    return "".join(cells)
+
+
+# --------------------------------------------------------------------------- #
+# Theme — dark "cyber terminal" palette
+# --------------------------------------------------------------------------- #
+
+COLORS = {
+    "bg":      "#0a0e16",   # window background (deep navy-black)
+    "bg2":     "#0f1626",   # headings / scrollbar troughs
+    "panel":   "#0d1320",   # tree body / input fields
+    "border":  "#1c2740",
+    "fg":      "#b8c6db",    # default text
+    "muted":   "#48566e",    # disabled / placeholder
+    "accent":  "#00e5ff",    # neon cyan (primary)
+    "accent2": "#39ff14",    # neon green (highlights)
+    "sel":     "#13294a",    # selection background
+    "dir":     "#22d3ee",    # directories
+    "file":    "#8aa0bd",    # files
+    "error":   "#ff3864",    # unreadable / errors
+    "stripe":  "#0b111e",    # alternating row
+}
+
+FONT = ("Segoe UI", 9)
+FONT_BOLD = ("Segoe UI Semibold", 9)
+FONT_MONO = ("Consolas", 10)
+FONT_MONO_BOLD = ("Consolas", 10, "bold")
+FONT_TITLE = ("Segoe UI", 20, "bold")
+
+
+def heat_color(fraction):
+    """Map 0..1 to a green→amber→red heat gradient (big hogs run hot)."""
+    f = max(0.0, min(1.0, fraction))
+    if f < 0.5:                       # green → amber
+        t = f / 0.5
+        c1, c2 = (0x39, 0xff, 0x14), (0xff, 0xe0, 0x00)
+    else:                             # amber → red
+        t = (f - 0.5) / 0.5
+        c1, c2 = (0xff, 0xe0, 0x00), (0xff, 0x38, 0x64)
+    r = round(c1[0] + (c2[0] - c1[0]) * t)
+    g = round(c1[1] + (c2[1] - c1[1]) * t)
+    b = round(c1[2] + (c2[2] - c1[2]) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def apply_theme(root):
+    """Style every ttk widget with the dark cyber palette."""
+    C = COLORS
+    style = ttk.Style()
+    try:
+        style.theme_use("clam")  # only theme that allows full recoloring
+    except Exception:  # noqa: BLE001
+        pass
+    root.configure(bg=C["bg"])
+
+    style.configure(".", background=C["bg"], foreground=C["fg"],
+                    fieldbackground=C["panel"], font=FONT)
+    style.configure("TFrame", background=C["bg"])
+    style.configure("TLabel", background=C["bg"], foreground=C["fg"], font=FONT)
+    style.configure("Accent.TLabel", background=C["bg"], foreground=C["accent"],
+                    font=FONT_BOLD)
+
+    # Buttons — flat terminal chips that invert on hover.
+    style.configure("TButton", background=C["panel"], foreground=C["accent"],
+                    bordercolor=C["border"], lightcolor=C["panel"],
+                    darkcolor=C["panel"], relief="flat", padding=(12, 5),
+                    font=FONT_BOLD)
+    style.map("TButton",
+              background=[("active", C["accent"]), ("disabled", C["bg"])],
+              foreground=[("active", C["bg"]), ("disabled", C["muted"])],
+              bordercolor=[("active", C["accent"])])
+
+    # Comboboxes (+ their drop-down listbox via option db).
+    style.configure("TCombobox", fieldbackground=C["panel"], background=C["panel"],
+                    foreground=C["fg"], arrowcolor=C["accent"],
+                    bordercolor=C["border"], lightcolor=C["border"],
+                    darkcolor=C["border"], selectbackground=C["sel"],
+                    selectforeground=C["fg"], padding=4)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", C["panel"]), ("disabled", C["bg"])],
+              foreground=[("disabled", C["muted"])],
+              arrowcolor=[("disabled", C["muted"]), ("active", C["accent2"])])
+    root.option_add("*TCombobox*Listbox.background", C["panel"])
+    root.option_add("*TCombobox*Listbox.foreground", C["fg"])
+    root.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
+    root.option_add("*TCombobox*Listbox.selectForeground", C["bg"])
+    root.option_add("*TCombobox*Listbox.font", FONT)
+
+    # Treeview — monospaced rows so the bars line up perfectly.
+    style.configure("Treeview", background=C["panel"], fieldbackground=C["panel"],
+                    foreground=C["fg"], rowheight=24, font=FONT_MONO,
+                    bordercolor=C["border"])
+    style.configure("Treeview.Heading", background=C["bg2"], foreground=C["accent"],
+                    relief="flat", font=FONT_BOLD, padding=(6, 6))
+    style.map("Treeview.Heading",
+              background=[("active", C["bg2"])],
+              foreground=[("active", C["accent2"])])
+    style.map("Treeview",
+              background=[("selected", C["sel"])],
+              foreground=[("selected", C["accent2"])])
+
+    # Scrollbars.
+    for orient in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+        style.configure(orient, background=C["bg2"], troughcolor=C["bg"],
+                        bordercolor=C["bg"], arrowcolor=C["accent"],
+                        relief="flat")
+        style.map(orient, background=[("active", C["accent"])])
+
+    # Progressbar — solid neon sweep.
+    style.configure("TProgressbar", background=C["accent"], troughcolor=C["panel"],
+                    bordercolor=C["border"], lightcolor=C["accent"],
+                    darkcolor=C["accent"])
 
 
 # --------------------------------------------------------------------------- #
@@ -193,6 +311,7 @@ class StorageScannerApp:
         self.root = root
         root.title("Storage Scanner")
         root.geometry("960x640")
+        apply_theme(root)
         try:
             root.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001 - icon is cosmetic; never fail over it
@@ -203,7 +322,9 @@ class StorageScannerApp:
         self.scan_thread = None
         self.root_node = None
         self.node_by_iid = {}   # treeview iid -> Node
+        self._heat_tags = set()  # quantized heat tags configured so far
 
+        self._build_header()
         self._build_toolbar()
         self._build_tree()
         self._build_statusbar()
@@ -212,11 +333,55 @@ class StorageScannerApp:
 
     # -- UI construction --------------------------------------------------- #
 
+    def _build_header(self):
+        """A neon banner. tkinter has no blur, so the glow is faked by drawing
+        the title several times in dim cyan at small offsets (a halo) with the
+        bright text on top — a classic neon-sign trick."""
+        self.header = Canvas(self.root, height=64, bg=COLORS["bg"],
+                             highlightthickness=0, bd=0)
+        self.header.pack(side=TOP, fill=X)
+        self.header.bind("<Configure>", self._draw_header)
+
+    def _draw_header(self, _event=None):
+        cv = self.header
+        cv.delete("all")
+        C = COLORS
+        width = cv.winfo_width()
+        height = int(cv["height"])
+        title = "◈  STORAGE SCANNER"
+        x, y = 18, 30
+
+        # Faint scanline grid behind everything — a CRT/terminal texture.
+        step = 8
+        if width > 1:
+            for gx in range(0, width, step):
+                cv.create_line(gx, 0, gx, height, fill="#0e1626")
+            for gy in range(0, height, step):
+                cv.create_line(0, gy, width, gy, fill="#0e1626")
+
+        # Halo: far/dim ring, then near/brighter ring, then the crisp core.
+        far = [(-2, -2), (2, -2), (-2, 2), (2, 2), (-3, 0), (3, 0), (0, -3), (0, 3)]
+        near = [(-1, -1), (1, -1), (-1, 1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)]
+        for dx, dy in far:
+            cv.create_text(x + dx, y + dy, text=title, fill="#0a3a42",
+                           font=FONT_TITLE, anchor=W)
+        for dx, dy in near:
+            cv.create_text(x + dx, y + dy, text=title, fill="#0f6d7a",
+                           font=FONT_TITLE, anchor=W)
+        cv.create_text(x, y, text=title, fill=C["accent"], font=FONT_TITLE, anchor=W)
+
+        # Tagline + a glowing baseline rule under the banner.
+        cv.create_text(x + 2, 52, text="// disk usage analyzer",
+                       fill=C["muted"], font=FONT, anchor=W)
+        if width > 1:
+            cv.create_line(0, 62, width, 62, fill="#0f6d7a")
+            cv.create_line(0, 63, width, 63, fill="#0a3a42")
+
     def _build_toolbar(self):
         bar_frame = ttk.Frame(self.root, padding=(8, 8, 8, 4))
         bar_frame.pack(side=TOP, fill=X)
 
-        ttk.Label(bar_frame, text="Location:").pack(side=LEFT)
+        ttk.Label(bar_frame, text="▸ LOCATION", style="Accent.TLabel").pack(side=LEFT)
 
         self.path_var = StringVar()
         self.path_combo = ttk.Combobox(
@@ -251,7 +416,7 @@ class StorageScannerApp:
         self.top_count_combo.bind(
             "<<ComboboxSelected>>", lambda e: self.show_top_files()
         )
-        ttk.Label(bar_frame, text="Top").pack(side=RIGHT, padx=(0, 4))
+        ttk.Label(bar_frame, text="TOP", style="Accent.TLabel").pack(side=RIGHT, padx=(0, 4))
 
         drives = self._list_drives()
         if drives:
@@ -285,8 +450,16 @@ class StorageScannerApp:
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
 
-        self.tree.tag_configure("dir", foreground="#1a5fb4")
-        self.tree.tag_configure("error", foreground="#c01c28")
+        # A row carries up to three tags that each set a *different* option, so
+        # they stack cleanly: a heat tag (foreground), a type tag (font:
+        # dirs bold), and a stripe tag (background). Errors override the
+        # foreground to red. Heat tags are created lazily in _heat_tag().
+        self.tree.tag_configure("dir", font=FONT_MONO_BOLD)
+        self.tree.tag_configure("error", foreground=COLORS["error"],
+                                font=FONT_MONO_BOLD)
+        self.tree.tag_configure("placeholder", foreground=COLORS["muted"])
+        self.tree.tag_configure("even", background=COLORS["panel"])
+        self.tree.tag_configure("odd", background=COLORS["stripe"])
 
         # Lazy load children when a node is expanded.
         self.tree.bind("<<TreeviewOpen>>", self._on_open)
@@ -412,20 +585,32 @@ class StorageScannerApp:
 
     # -- Treeview population (lazy) ---------------------------------------- #
 
-    def _insert_node(self, parent_iid, node, parent_size):
+    def _heat_tag(self, fraction):
+        """Return a treeview tag whose foreground is the heat color for
+        `fraction`, quantized to 25 buckets so we configure few tags."""
+        bucket = int(max(0.0, min(1.0, fraction)) * 24 + 0.5)
+        name = f"heat{bucket}"
+        if name not in self._heat_tags:
+            self.tree.tag_configure(name, foreground=heat_color(bucket / 24))
+            self._heat_tags.add(name)
+        return name
+
+    def _insert_node(self, parent_iid, node, parent_size, index=0):
         fraction = (node.size / parent_size) if parent_size else 0
         percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
         items = f"{node.file_count:,}" if node.is_dir else ""
-        tags = ()
         if node.error:
-            tags = ("error",)
-        elif node.is_dir:
-            tags = ("dir",)
+            tags = ["error"]
+        else:
+            tags = [self._heat_tag(fraction)]   # foreground = space-hog heat
+            if node.is_dir:
+                tags.append("dir")              # bold, keeps heat color
+        tags.append("odd" if index % 2 else "even")
 
         label = node.name + ("\\" if node.is_dir and not node.name.endswith("\\") else "")
         iid = self.tree.insert(
             parent_iid, END, text=label,
-            values=(human_size(node.size), percent, items), tags=tags,
+            values=(human_size(node.size), percent, items), tags=tuple(tags),
         )
         self.node_by_iid[iid] = node
 
@@ -442,8 +627,10 @@ class StorageScannerApp:
         elif kids:
             return  # already populated
 
-        for child in sorted(node.children, key=lambda n: n.size, reverse=True):
-            self._insert_node(parent_iid, child, parent_size=node.size or 1)
+        ordered = sorted(node.children, key=lambda n: n.size, reverse=True)
+        for index, child in enumerate(ordered):
+            self._insert_node(parent_iid, child, parent_size=node.size or 1,
+                              index=index)
 
     def _on_open(self, _event):
         iid = self.tree.focus()
@@ -519,6 +706,7 @@ class StorageScannerApp:
 
         win = Toplevel(self.root)
         self._top_win = win
+        win.configure(bg=COLORS["bg"])
         win.title(f"Top {len(top)} Largest Files")
         win.geometry("820x520")
         try:
@@ -551,10 +739,27 @@ class StorageScannerApp:
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
 
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+
+        # Heat each row by its size relative to the largest file in the list.
+        max_size = top[0].size or 1
+        heat_seen = set()
+
+        def heat_tag(fraction):
+            bucket = int(max(0.0, min(1.0, fraction)) * 24 + 0.5)
+            name = f"heat{bucket}"
+            if name not in heat_seen:
+                tv.tag_configure(name, foreground=heat_color(bucket / 24))
+                heat_seen.add(name)
+            return name
+
         iid_to_path = {}
         for rank, node in enumerate(top, start=1):
             iid = tv.insert(
-                "", END, values=(rank, human_size(node.size), node.path)
+                "", END, values=(rank, human_size(node.size), node.path),
+                tags=(heat_tag(node.size / max_size),
+                      "odd" if rank % 2 else "even"),
             )
             iid_to_path[iid] = node.path
 
@@ -574,11 +779,7 @@ class StorageScannerApp:
 
 def main():
     root = Tk()
-    try:
-        ttk.Style().theme_use("vista")  # native-ish look on Windows
-    except Exception:  # noqa: BLE001
-        pass
-    StorageScannerApp(root)
+    StorageScannerApp(root)  # applies the dark cyber theme during construction
     root.mainloop()
 
 
