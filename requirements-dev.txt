@@ -1,0 +1,6 @@
+# Build-time only. TreeSize itself has no third-party runtime dependencies.
+pyinstaller>=6.0
+
+# Only needed to regenerate the app icon via make_icon.py (icon.ico is
+# already committed, so this is not required just to build the .exe).
+pillow>=10.0
