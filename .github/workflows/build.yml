@@ -1,11 +1,10 @@
-name: Build TreeSize.exe
+name: Build StorageScanner.exe
 
-# Builds the standalone Windows executable. Runs on every push (so you always
-# have a downloadable artifact) and, when you push a version tag like v1.0.0,
-# attaches TreeSize.exe to a GitHub Release automatically.
+# Builds the standalone Windows executable when you push a version tag like
+# v1.0.0, then attaches StorageScanner.exe to a GitHub Release automatically.
+# Can also be triggered manually from the Actions tab (Run workflow).
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
