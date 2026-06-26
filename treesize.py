@@ -14,6 +14,7 @@ import ctypes
 import threading
 import queue
 import subprocess
+import hashlib
 from ctypes import wintypes
 from collections import defaultdict
 from tkinter import (
@@ -445,19 +446,19 @@ class StorageScannerApp:
         )
         self.cancel_btn.pack(side=LEFT)
 
-        # Top-N largest files: dropdown for the count + a show button.
-        self.top_btn = ttk.Button(
-            bar_frame, text="Largest Files", command=self.show_top_files,
+        # Adding a tools menu dropdown
+        self.tools_btn = ttk.Button(
+            bar_frame,
+            text="Tools ▼",
+            command=self._show_tools_menu,
             state="disabled",
         )
-        self.top_btn.pack(side=RIGHT)
+        self.tools_btn.pack(side=LEFT, padx=6)
 
-        # File-type breakdown (bytes aggregated by extension).
-        self.types_btn = ttk.Button(
-            bar_frame, text="File Types", command=self.show_file_types,
-            state="disabled",
-        )
-        self.types_btn.pack(side=RIGHT, padx=(0, 6))
+        self.tools_menu = Menu(self.root, tearoff=0)
+        self.tools_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
+        self.tools_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
+        self.tools_menu.add_command(label="Largest Files", command=self.show_top_files)
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
@@ -581,8 +582,7 @@ class StorageScannerApp:
 
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
-        self.top_btn.config(state="disabled")
-        self.types_btn.config(state="disabled")
+        self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
         self.progress.pack(side=RIGHT, padx=6)
         self.progress.start(12)
@@ -631,8 +631,7 @@ class StorageScannerApp:
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
         self.tree.item(root_iid, open=True)
         self._populate_children(root_iid, node)
-        self.top_btn.config(state="normal")
-        self.types_btn.config(state="normal")
+        self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
         self.status_var.set(
@@ -851,6 +850,14 @@ class StorageScannerApp:
             )
 
     # -- Context menu actions ---------------------------------------------- #
+    def _show_tools_menu(self):
+        """Show the Tools dropdown under the Tools button."""
+        try:
+            x = self.tools_btn.winfo_rootx()
+            y = self.tools_btn.winfo_rooty() + self.tools_btn.winfo_height()
+            self.tools_menu.tk_popup(x, y)
+        finally:
+            self.tools_menu.grab_release()
 
     def _show_menu(self, event):
         iid = self.tree.identify_row(event.y)
@@ -1065,6 +1072,304 @@ class StorageScannerApp:
     def _on_close(self):
         self.cancel_event.set()
         self.root.destroy()
+    
+    # -- Duplicate file finder --------------------------------------------- #
+
+    def _hash_file(self, path, chunk_size=1024 * 1024):
+        """Return a SHA-256 hash for a file, or None if it cannot be read."""
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            return h.hexdigest()
+        except OSError:
+            return None
+
+    def _find_duplicate_files(self):
+        """Find duplicate files under the scanned root.
+
+        Duplicate detection is done in two stages:
+        1. Group files by exact byte size.
+        2. Hash only same-size files and group by SHA-256 hash.
+
+        Returns:
+            list[tuple[int, str, list[Node]]]
+            Each tuple is: file_size, hash_value, duplicate_nodes
+        """
+        if not self.root_node:
+            return []
+
+        # First pass: collect files by size.
+        by_size = defaultdict(list)
+        stack = [self.root_node]
+
+        while stack:
+            node = stack.pop()
+            if node.is_dir:
+                stack.extend(node.children)
+            else:
+                # Ignore empty files because they are commonly harmless noise.
+                # Remove this "if" if you want empty duplicates included.
+                if node.size > 0:
+                    by_size[node.size].append(node)
+
+        # Only files with the same size can be duplicates.
+        duplicate_size_groups = {
+            size: nodes for size, nodes in by_size.items() if len(nodes) > 1
+        }
+
+        # Second pass: hash files within same-size groups.
+        by_hash = defaultdict(list)
+
+        for size, nodes in duplicate_size_groups.items():
+            for node in nodes:
+                digest = self._hash_file(node.path)
+                if digest:
+                    by_hash[(size, digest)].append(node)
+
+        duplicates = []
+        for (size, digest), nodes in by_hash.items():
+            if len(nodes) > 1:
+                duplicates.append((size, digest, nodes))
+
+        duplicates.sort(
+            key=lambda item: item[0] * (len(item[2]) - 1),
+            reverse=True,
+        )
+
+        return duplicates
+
+    def show_duplicates(self):
+        if not self.root_node:
+            return
+
+        self.status_var.set("Checking duplicates by size and hash …")
+        self.root.update_idletasks()
+
+        duplicates = self._find_duplicate_files()
+
+        existing = getattr(self, "_duplicates_win", None)
+        if existing is not None and existing.winfo_exists():
+            existing.destroy()
+
+        win = Toplevel(self.root)
+        self._duplicates_win = win
+        win.configure(bg=COLORS["bg"])
+        win.title(f"Duplicate Files — {len(duplicates)} groups")
+        win.geometry("980x600")
+
+        try:
+            win.iconbitmap(resource_path("icon.ico"))
+        except Exception:
+            pass
+
+        total_wasted = sum(size * (len(nodes) - 1) for size, _digest, nodes in duplicates)
+
+        ttk.Label(
+            win,
+            padding=(10, 8),
+            text=(
+                f"Duplicate files under {self.root_node.path}  —  "
+                f"{len(duplicates):,} groups, potential cleanup: {human_size(total_wasted)}"
+            ),
+        ).pack(side=TOP, fill=X)
+
+        frame = ttk.Frame(win, padding=(10, 0, 10, 10))
+        frame.pack(fill=BOTH, expand=True)
+
+        cols = ("group", "size", "copies", "path")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+
+        tv.heading("group", text="Group")
+        tv.heading("size", text="Size")
+        tv.heading("copies", text="Copies")
+        tv.heading("path", text="Path")
+
+        tv.column("group", width=70, anchor=E, stretch=False)
+        tv.column("size", width=110, anchor=E, stretch=False)
+        tv.column("copies", width=70, anchor=E, stretch=False)
+        tv.column("path", width=700, anchor=W, stretch=True)
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+        tv.tag_configure("keep", foreground=COLORS["accent2"])
+        tv.tag_configure("dupe", foreground=COLORS["fg"])
+
+        iid_to_node = {}
+
+        row_index = 0
+        for group_num, (size, _digest, nodes) in enumerate(duplicates, start=1):
+            # Sort shortest path first; usually the "original" is easier to inspect.
+            nodes = sorted(nodes, key=lambda n: n.path.lower())
+
+            for copy_index, node in enumerate(nodes, start=1):
+                tag_type = "keep" if copy_index == 1 else "dupe"
+                stripe = "odd" if row_index % 2 else "even"
+
+                iid = tv.insert(
+                    "",
+                    END,
+                    values=(
+                        group_num,
+                        human_size(size),
+                        f"{copy_index}/{len(nodes)}",
+                        node.path,
+                    ),
+                    tags=(tag_type, stripe),
+                )
+                iid_to_node[iid] = node
+                row_index += 1
+
+        button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
+        button_bar.pack(side=BOTTOM, fill=X)
+
+        def reveal_selected():
+            sel = tv.focus()
+            node = iid_to_node.get(sel)
+            if node:
+                self._reveal(node.path, is_dir=False)
+
+        def copy_selected_path():
+            sel = tv.focus()
+            node = iid_to_node.get(sel)
+            if node:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(node.path)
+
+        def delete_selected_duplicates():
+            selected = list(tv.selection())
+            nodes = [iid_to_node[iid] for iid in selected if iid in iid_to_node]
+
+            if not nodes:
+                return
+
+            if not messagebox.askyesno(
+                "Delete selected duplicates",
+                f"Send {len(nodes)} selected file(s) to the Recycle Bin?\n\n"
+                "Warning: this does not automatically protect one copy per group. "
+                "Only delete files you intentionally selected.",
+                icon="warning",
+                parent=win,
+            ):
+                return
+
+            deleted_count = 0
+            failed = []
+
+            for iid in selected:
+                node = iid_to_node.get(iid)
+                if not node:
+                    continue
+
+                if recycle(node.path):
+                    deleted_count += 1
+                    iid_to_node.pop(iid, None)
+                    tv.delete(iid)
+                    self._remove_node_from_scan_tree(node)
+                else:
+                    failed.append(node.path)
+
+            self.status_var.set(
+                f"Deleted {deleted_count:,} duplicate file(s) to Recycle Bin."
+            )
+
+            if failed:
+                messagebox.showerror(
+                    "Storage Scanner",
+                    "Some files could not be deleted:\n\n" + "\n".join(failed[:10]),
+                    parent=win,
+                )
+
+        ttk.Button(
+            button_bar,
+            text="Reveal in Explorer",
+            command=reveal_selected,
+        ).pack(side=LEFT)
+
+        ttk.Button(
+            button_bar,
+            text="Copy Path",
+            command=copy_selected_path,
+        ).pack(side=LEFT, padx=6)
+
+        ttk.Button(
+            button_bar,
+            text="Delete Selected",
+            command=delete_selected_duplicates,
+        ).pack(side=RIGHT)
+
+        tv.bind("<Double-1>", lambda _e: reveal_selected())
+
+        if not duplicates:
+            self.status_var.set("No duplicate files found.")
+        else:
+            self.status_var.set(
+                f"Found {len(duplicates):,} duplicate groups. "
+                f"Potential cleanup: {human_size(total_wasted)}"
+            )
+
+    def _remove_node_from_scan_tree(self, target_node):
+        """Remove a deleted file node from the in-memory scan tree and update sizes.
+
+        This keeps the current scan somewhat accurate after deleting from the
+        duplicate window. It does not fully refresh every visible tree row;
+        press F5 to rescan for a perfect view.
+        """
+        if not self.root_node or target_node.is_dir:
+            return
+
+        stack = [(self.root_node, None)]
+
+        while stack:
+            node, parent = stack.pop()
+
+            if node is target_node:
+                if parent and target_node in parent.children:
+                    parent.children.remove(target_node)
+
+                # Subtract size and count from ancestors.
+                self._subtract_from_ancestors(self.root_node, target_node)
+                return
+
+            if node.is_dir:
+                for child in node.children:
+                    stack.append((child, node))
+
+    def _subtract_from_ancestors(self, current, target):
+        """Subtract target's size/count from every ancestor containing it."""
+        if not current.is_dir:
+            return False
+
+        found = False
+
+        for child in current.children:
+            if child is target:
+                found = True
+                break
+
+            if child.is_dir and self._subtract_from_ancestors(child, target):
+                found = True
+                break
+
+        if found:
+            current.size -= target.size
+            current.file_count -= target.file_count
+
+        return found
+
 
 
 def main():
