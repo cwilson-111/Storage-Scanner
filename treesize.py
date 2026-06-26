@@ -370,6 +370,12 @@ class StorageScannerApp:
         self._heat_tags = set()  # quantized heat tags configured so far
         self._sort_key = "size"  # "name" | "size" | "items"
         self._sort_reverse = True   # sizes default biggest-first
+        
+        #Progress bar for duplicates scan
+        self.dup_progress_q = queue.Queue()
+        self.dup_thread = None
+        self.dup_cancel_event = threading.Event()
+
 
         self._build_header()
         self._build_toolbar()
@@ -546,7 +552,7 @@ class StorageScannerApp:
         ttk.Label(status, textvariable=self.status_var, anchor=W).pack(
             side=LEFT, fill=X, expand=True
         )
-        self.progress = ttk.Progressbar(status, mode="indeterminate", length=160)
+        self.progress = ttk.Progressbar(status, mode="indeterminate", length=220)
 
     # -- Drive / folder selection ----------------------------------------- #
 
@@ -584,8 +590,7 @@ class StorageScannerApp:
         self.cancel_btn.config(state="normal")
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
-        self.progress.pack(side=RIGHT, padx=6)
-        self.progress.start(12)
+        self._start_indeterminate_progress()
         self.status_var.set(f"Scanning {target} …")
 
         self.scan_thread = threading.Thread(
@@ -618,8 +623,7 @@ class StorageScannerApp:
         self.root.after(100, self._poll_progress)
 
     def _finish_scan(self, node):
-        self.progress.stop()
-        self.progress.pack_forget()
+        self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
 
@@ -640,8 +644,7 @@ class StorageScannerApp:
         )
 
     def _finish_error(self, msg):
-        self.progress.stop()
-        self.progress.pack_forget()
+        self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         self.status_var.set("Scan failed.")
@@ -649,8 +652,29 @@ class StorageScannerApp:
 
     def cancel_scan(self):
         self.cancel_event.set()
+        self.dup_cancel_event.set()
         self.status_var.set("Cancelling …")
 
+    #-- Helper Methods for Progress Bar
+    def _start_indeterminate_progress(self):
+        """Show an animated progress bar when total work is unknown."""
+        self.progress.config(mode="indeterminate", maximum=100, value=0)
+        self.progress.pack(side=RIGHT, padx=6)
+        self.progress.start(12)
+
+    def _start_determinate_progress(self, maximum):
+        """Show a percentage progress bar when total work is known."""
+        self.progress.stop()
+        self.progress.config(mode="determinate", maximum=max(1, maximum), value=0)
+        self.progress.pack(side=RIGHT, padx=6)
+
+    def _update_determinate_progress(self, value):
+        self.progress.config(value=value)
+
+    def _stop_progress(self):
+        self.progress.stop()
+        self.progress.config(value=0)
+        self.progress.pack_forget()
     # -- Treeview population (lazy) ---------------------------------------- #
 
     def _heat_tag(self, fraction):
@@ -911,6 +935,9 @@ class StorageScannerApp:
                 files.append(node)
         files.sort(key=lambda n: n.size, reverse=True)
         top = files[:count]
+        if not top:
+            self.status_var.set("No files found.")
+            return
 
         # Reuse one window so changing the dropdown doesn't stack windows.
         existing = getattr(self, "_top_win", None)
@@ -956,6 +983,9 @@ class StorageScannerApp:
         tv.tag_configure("odd", background=COLORS["stripe"])
 
         # Heat each row by its size relative to the largest file in the list.
+        if not top:
+            self.status_var.set("No files found.")
+            return
         max_size = top[0].size or 1
         heat_seen = set()
 
@@ -1067,13 +1097,7 @@ class StorageScannerApp:
                 tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
             )
 
-    # -- Shutdown ---------------------------------------------------------- #
-
-    def _on_close(self):
-        self.cancel_event.set()
-        self.root.destroy()
-    
-    # -- Duplicate file finder --------------------------------------------- #
+  # -- Duplicate file finder --------------------------------------------- #
 
     def _hash_file(self, path, chunk_size=1024 * 1024):
         """Return a SHA-256 hash for a file, or None if it cannot be read."""
@@ -1089,47 +1113,88 @@ class StorageScannerApp:
         except OSError:
             return None
 
-    def _find_duplicate_files(self):
+    def _find_duplicate_files(self, progress_q=None, cancel_event=None):
         """Find duplicate files under the scanned root.
 
-        Duplicate detection is done in two stages:
-        1. Group files by exact byte size.
-        2. Hash only same-size files and group by SHA-256 hash.
-
-        Returns:
-            list[tuple[int, str, list[Node]]]
-            Each tuple is: file_size, hash_value, duplicate_nodes
+        Progress phases:
+        1. Collect files by size.
+        2. Hash only same-size files.
         """
         if not self.root_node:
             return []
 
-        # First pass: collect files by size.
-        by_size = defaultdict(list)
+        if cancel_event is None:
+            cancel_event = threading.Event()
+
+        all_files = []
         stack = [self.root_node]
 
         while stack:
+            if cancel_event.is_set():
+                return []
+
             node = stack.pop()
             if node.is_dir:
                 stack.extend(node.children)
             else:
-                # Ignore empty files because they are commonly harmless noise.
-                # Remove this "if" if you want empty duplicates included.
                 if node.size > 0:
-                    by_size[node.size].append(node)
+                    all_files.append(node)
 
-        # Only files with the same size can be duplicates.
+        total_files = max(1, len(all_files))
+
+        # Phase 1: group by size.
+        by_size = defaultdict(list)
+
+        for index, node in enumerate(all_files, start=1):
+            if cancel_event.is_set():
+                return []
+
+            by_size[node.size].append(node)
+
+            if progress_q and index % 100 == 0:
+                progress_q.put((
+                    "progress",
+                    index,
+                    total_files,
+                    f"Checking file sizes … {index:,}/{total_files:,}"
+                ))
+
         duplicate_size_groups = {
             size: nodes for size, nodes in by_size.items() if len(nodes) > 1
         }
 
-        # Second pass: hash files within same-size groups.
+        files_to_hash = []
+        for nodes in duplicate_size_groups.values():
+            files_to_hash.extend(nodes)
+
+        total_hash_files = max(1, len(files_to_hash))
+
+        if progress_q:
+            progress_q.put((
+                "progress",
+                0,
+                total_hash_files,
+                f"Hashing possible duplicates … 0/{total_hash_files:,}"
+            ))
+
+        # Phase 2: hash same-size files.
         by_hash = defaultdict(list)
 
-        for size, nodes in duplicate_size_groups.items():
-            for node in nodes:
-                digest = self._hash_file(node.path)
-                if digest:
-                    by_hash[(size, digest)].append(node)
+        for index, node in enumerate(files_to_hash, start=1):
+            if cancel_event.is_set():
+                return []
+
+            digest = self._hash_file(node.path)
+            if digest:
+                by_hash[(node.size, digest)].append(node)
+
+            if progress_q and (index % 10 == 0 or index == total_hash_files):
+                progress_q.put((
+                    "progress",
+                    index,
+                    total_hash_files,
+                    f"Hashing possible duplicates … {index:,}/{total_hash_files:,}"
+                ))
 
         duplicates = []
         for (size, digest), nodes in by_hash.items():
@@ -1147,10 +1212,90 @@ class StorageScannerApp:
         if not self.root_node:
             return
 
-        self.status_var.set("Checking duplicates by size and hash …")
-        self.root.update_idletasks()
+        if self.dup_thread and self.dup_thread.is_alive():
+            messagebox.showinfo(
+                "Storage Scanner",
+                "Duplicate scan is already running."
+            )
+            return
 
-        duplicates = self._find_duplicate_files()
+        self.dup_cancel_event.clear()
+        self.tools_btn.config(state="disabled")
+        self.top_count_combo.config(state="disabled")
+
+        total_files = max(1, self.root_node.file_count)
+        self._start_determinate_progress(total_files)
+        self.status_var.set("Preparing duplicate scan …")
+
+        self.dup_thread = threading.Thread(
+            target=self._duplicate_worker,
+            daemon=True,
+        )
+        self.dup_thread.start()
+
+        self.root.after(100, self._poll_duplicate_progress)
+
+    def _duplicate_worker(self):
+        try:
+            duplicates = self._find_duplicate_files(
+                progress_q=self.dup_progress_q,
+                cancel_event=self.dup_cancel_event,
+            )
+
+            if self.dup_cancel_event.is_set():
+                self.dup_progress_q.put(("cancelled", None))
+            else:
+                self.dup_progress_q.put(("done", duplicates))
+
+        except Exception as exc:
+            self.dup_progress_q.put(("error", str(exc)))
+
+    def _poll_duplicate_progress(self):
+        try:
+            while True:
+                msg = self.dup_progress_q.get_nowait()
+                kind = msg[0]
+
+                if kind == "progress":
+                    _kind, current, total, text = msg
+                    self.progress.config(maximum=max(1, total))
+                    self._update_determinate_progress(current)
+                    percent = (current / max(1, total)) * 100
+                    self.status_var.set(f"{text}  ({percent:5.1f}%)")
+
+                elif kind == "done":
+                    _kind, duplicates = msg
+                    self._stop_progress()
+                    self.tools_btn.config(state="normal")
+                    self.top_count_combo.config(state="readonly")
+                    self._show_duplicates_window(duplicates)
+                    return
+
+                elif kind == "cancelled":
+                    self._stop_progress()
+                    self.tools_btn.config(state="normal")
+                    self.top_count_combo.config(state="readonly")
+                    self.status_var.set("Duplicate scan cancelled.")
+                    return
+
+                elif kind == "error":
+                    _kind, error_msg = msg
+                    self._stop_progress()
+                    self.tools_btn.config(state="normal")
+                    self.top_count_combo.config(state="readonly")
+                    self.status_var.set("Duplicate scan failed.")
+                    messagebox.showerror(
+                        "Storage Scanner",
+                        f"Duplicate scan failed:\n{error_msg}"
+                    )
+                    return
+
+        except queue.Empty:
+            pass
+
+        self.root.after(100, self._poll_duplicate_progress)
+    
+    def _show_duplicates_window(self,duplicates):
 
         existing = getattr(self, "_duplicates_win", None)
         if existing is not None and existing.winfo_exists():
@@ -1320,7 +1465,6 @@ class StorageScannerApp:
                 f"Found {len(duplicates):,} duplicate groups. "
                 f"Potential cleanup: {human_size(total_wasted)}"
             )
-
     def _remove_node_from_scan_tree(self, target_node):
         """Remove a deleted file node from the in-memory scan tree and update sizes.
 
@@ -1369,6 +1513,15 @@ class StorageScannerApp:
             current.file_count -= target.file_count
 
         return found
+
+    # -- Shutdown ---------------------------------------------------------- #
+
+    def _on_close(self):
+        self.cancel_event.set()
+        self.dup_cancel_event.set()
+        self.root.destroy()
+
+    
 
 
 
