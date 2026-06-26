@@ -10,9 +10,12 @@ Run:  python treesize.py
 
 import os
 import sys
+import ctypes
 import threading
 import queue
 import subprocess
+from ctypes import wintypes
+from collections import defaultdict
 from tkinter import (
     Tk, Toplevel, Canvas, ttk, StringVar, BOTH, X, Y, LEFT, RIGHT, TOP, BOTTOM,
     END, W, E, Menu, filedialog, messagebox,
@@ -192,6 +195,47 @@ def bar(fraction, width=14):
 
 
 # --------------------------------------------------------------------------- #
+# Filesystem operations
+# --------------------------------------------------------------------------- #
+
+# SHFileOperationW flags (shellapi.h).
+_FO_DELETE = 3
+_FOF_SILENT = 0x0004
+_FOF_NOCONFIRMATION = 0x0010
+_FOF_ALLOWUNDO = 0x0040          # the bit that routes deletes to the Recycle Bin
+_FOF_NOERRORUI = 0x0400
+
+
+class _SHFILEOPSTRUCTW(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("wFunc", wintypes.UINT),
+        ("pFrom", wintypes.LPCWSTR),
+        ("pTo", wintypes.LPCWSTR),
+        ("fFlags", ctypes.c_uint16),   # FILEOP_FLAGS is a WORD
+        ("fAnyOperationsAborted", wintypes.BOOL),
+        ("hNameMappings", wintypes.LPVOID),
+        ("lpszProgressTitle", wintypes.LPCWSTR),
+    ]
+
+
+def recycle(path):
+    """Send a file or folder to the Windows Recycle Bin (so it's recoverable).
+
+    Uses the shell's SHFileOperationW with FOF_ALLOWUNDO — pure stdlib, no
+    extra dependency. `pFrom` must be double-NUL terminated. Returns True on
+    success, False otherwise.
+    """
+    op = _SHFILEOPSTRUCTW()
+    op.hwnd = None
+    op.wFunc = _FO_DELETE
+    op.pFrom = os.path.abspath(path) + "\x00\x00"
+    op.pTo = None
+    op.fFlags = _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI
+    return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
+
+
+# --------------------------------------------------------------------------- #
 # Theme — dark "cyber terminal" palette
 # --------------------------------------------------------------------------- #
 
@@ -323,6 +367,8 @@ class StorageScannerApp:
         self.root_node = None
         self.node_by_iid = {}   # treeview iid -> Node
         self._heat_tags = set()  # quantized heat tags configured so far
+        self._sort_key = "size"  # "name" | "size" | "items"
+        self._sort_reverse = True   # sizes default biggest-first
 
         self._build_header()
         self._build_toolbar()
@@ -406,6 +452,13 @@ class StorageScannerApp:
         )
         self.top_btn.pack(side=RIGHT)
 
+        # File-type breakdown (bytes aggregated by extension).
+        self.types_btn = ttk.Button(
+            bar_frame, text="File Types", command=self.show_file_types,
+            state="disabled",
+        )
+        self.types_btn.pack(side=RIGHT, padx=(0, 6))
+
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
             bar_frame, textvariable=self.top_count_var, width=5, state="disabled",
@@ -430,10 +483,17 @@ class StorageScannerApp:
         self.tree = ttk.Treeview(
             container, columns=columns, show="tree headings", selectmode="browse"
         )
-        self.tree.heading("#0", text="Name")
-        self.tree.heading("size", text="Size")
-        self.tree.heading("percent", text="% of Parent")
-        self.tree.heading("items", text="Files")
+        # Clickable headings sort that level (and every expanded level). The
+        # percent column sorts by size — within a level they're equivalent.
+        self.tree.heading("#0", text="Name",
+                          command=lambda: self._sort_by("name"))
+        self.tree.heading("size", text="Size",
+                          command=lambda: self._sort_by("size"))
+        self.tree.heading("percent", text="% of Parent",
+                          command=lambda: self._sort_by("size"))
+        self.tree.heading("items", text="Files",
+                          command=lambda: self._sort_by("items"))
+        self._update_heading_arrows()
 
         self.tree.column("#0", width=440, anchor=W, stretch=True)
         self.tree.column("size", width=110, anchor=E, stretch=False)
@@ -469,7 +529,14 @@ class StorageScannerApp:
         self.menu = Menu(self.root, tearoff=0)
         self.menu.add_command(label="Open in Explorer", command=self._open_in_explorer)
         self.menu.add_command(label="Copy path", command=self._copy_path)
+        self.menu.add_separator()
+        self.menu.add_command(label="Delete (to Recycle Bin)",
+                              command=self._delete_selected)
         self.tree.bind("<Button-3>", self._show_menu)
+
+        # Keyboard: Delete recycles the selection, F5 re-scans.
+        self.tree.bind("<Delete>", lambda e: self._delete_selected())
+        self.root.bind("<F5>", lambda e: self.start_scan())
 
     def _build_statusbar(self):
         status = ttk.Frame(self.root, padding=(8, 2))
@@ -515,6 +582,7 @@ class StorageScannerApp:
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
         self.top_btn.config(state="disabled")
+        self.types_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
         self.progress.pack(side=RIGHT, padx=6)
         self.progress.start(12)
@@ -564,6 +632,7 @@ class StorageScannerApp:
         self.tree.item(root_iid, open=True)
         self._populate_children(root_iid, node)
         self.top_btn.config(state="normal")
+        self.types_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
         self.status_var.set(
@@ -627,10 +696,18 @@ class StorageScannerApp:
         elif kids:
             return  # already populated
 
-        ordered = sorted(node.children, key=lambda n: n.size, reverse=True)
+        ordered = sorted(node.children, key=self._node_sort_key,
+                         reverse=self._sort_reverse)
         for index, child in enumerate(ordered):
             self._insert_node(parent_iid, child, parent_size=node.size or 1,
                               index=index)
+
+    def _node_sort_key(self, node):
+        if self._sort_key == "name":
+            return node.name.lower()
+        if self._sort_key == "items":
+            return node.file_count
+        return node.size
 
     def _on_open(self, _event):
         iid = self.tree.focus()
@@ -643,6 +720,135 @@ class StorageScannerApp:
         node = self.node_by_iid.get(iid)
         if node and not node.is_dir:
             self._open_in_explorer()
+
+    # -- Column sorting ---------------------------------------------------- #
+
+    _HEADINGS = {"#0": "Name", "size": "Size",
+                 "percent": "% of Parent", "items": "Files"}
+
+    def _sort_by(self, key):
+        """Handle a heading click: toggle direction if it's the active key,
+        else switch to it (names ascend, sizes/counts descend by default)."""
+        if key == self._sort_key:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_key = key
+            self._sort_reverse = (key != "name")
+        self._update_heading_arrows()
+        self._resort_tree()
+
+    def _update_heading_arrows(self):
+        arrow = " ▼" if self._sort_reverse else " ▲"
+        # The percent column is driven by the size sort, so it shares the mark.
+        active_cols = {"size": ("size", "percent"),
+                       "name": ("#0",), "items": ("items",)}[self._sort_key]
+        for col, base in self._HEADINGS.items():
+            text = base + (arrow if col in active_cols else "")
+            self.tree.heading(col, text=text)
+
+    def _resort_tree(self):
+        """Re-order every already-populated level in place (preserves which
+        nodes are expanded; lazy children sort on expand via _populate)."""
+        def walk(parent_iid):
+            self._sort_level(parent_iid)
+            for iid in self.tree.get_children(parent_iid):
+                node = self.node_by_iid.get(iid)
+                if node and node.is_dir:
+                    walk(iid)
+        walk("")
+
+    def _sort_level(self, parent_iid):
+        kids = [k for k in self.tree.get_children(parent_iid)
+                if k in self.node_by_iid]
+        if not kids:
+            return
+        kids.sort(key=lambda iid: self._node_sort_key(self.node_by_iid[iid]),
+                  reverse=self._sort_reverse)
+        for index, iid in enumerate(kids):
+            self.tree.move(iid, parent_iid, index)
+            self._set_stripe(iid, index)
+
+    def _set_stripe(self, iid, index):
+        """Rewrite a row's even/odd background tag, keeping its other tags."""
+        tags = [t for t in self.tree.item(iid, "tags") if t not in ("even", "odd")]
+        tags.append("odd" if index % 2 else "even")
+        self.tree.item(iid, tags=tuple(tags))
+
+    def _refresh_row(self, iid):
+        """Recompute a row's size / percent / files text from its node."""
+        node = self.node_by_iid.get(iid)
+        if not node:
+            return
+        parent_node = self.node_by_iid.get(self.tree.parent(iid))
+        parent_size = (parent_node.size if parent_node else node.size) or 1
+        fraction = (node.size / parent_size) if parent_size else 0
+        percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
+        items = f"{node.file_count:,}" if node.is_dir else ""
+        self.tree.item(iid, values=(human_size(node.size), percent, items))
+
+    # -- Delete to Recycle Bin --------------------------------------------- #
+
+    def _forget_subtree(self, iid):
+        """Drop an iid and all its descendants from the node map."""
+        for child in self.tree.get_children(iid):
+            self._forget_subtree(child)
+        self.node_by_iid.pop(iid, None)
+
+    def _delete_selected(self):
+        iid = self.tree.focus()
+        node = self.node_by_iid.get(iid)
+        if not node:
+            return
+        kind = "folder" if node.is_dir else "file"
+        if not messagebox.askyesno(
+            "Delete to Recycle Bin",
+            f"Send this {kind} to the Recycle Bin?\n\n{node.path}\n\n"
+            f"{human_size(node.size)}"
+            + (f" in {node.file_count:,} files" if node.is_dir else ""),
+            icon="warning",
+        ):
+            return
+
+        if not recycle(node.path):
+            messagebox.showerror(
+                "Storage Scanner",
+                f"Could not delete:\n{node.path}\n\n"
+                "It may be in use, protected, or require admin rights.",
+            )
+            return
+
+        parent_iid = self.tree.parent(iid)
+        parent_node = self.node_by_iid.get(parent_iid)
+
+        # Subtract the removed size/count from every ancestor (incl. the root
+        # row, whose parent is ""). root_node is the same object as its row.
+        anc = parent_iid
+        while anc:
+            an = self.node_by_iid.get(anc)
+            if an:
+                an.size -= node.size
+                an.file_count -= node.file_count
+            anc = self.tree.parent(anc)
+        if parent_node and node in parent_node.children:
+            parent_node.children.remove(node)
+
+        self._forget_subtree(iid)
+        self.tree.delete(iid)
+
+        # Siblings' "% of parent" and the ancestor sizes all shifted — refresh.
+        for index, sib in enumerate(self.tree.get_children(parent_iid)):
+            self._refresh_row(sib)
+            self._set_stripe(sib, index)
+        anc = parent_iid
+        while anc:
+            self._refresh_row(anc)
+            anc = self.tree.parent(anc)
+
+        if self.root_node:
+            self.status_var.set(
+                f"{self.root_node.path}  —  {human_size(self.root_node.size)} "
+                f"in {self.root_node.file_count:,} files"
+            )
 
     # -- Context menu actions ---------------------------------------------- #
 
@@ -769,6 +975,90 @@ class StorageScannerApp:
                 self._reveal(iid_to_path[sel], is_dir=False)
 
         tv.bind("<Double-1>", on_double)
+
+    # -- File-type breakdown ----------------------------------------------- #
+
+    def show_file_types(self):
+        if not self.root_node:
+            return
+
+        # Aggregate bytes + counts by lowercased extension across the tree.
+        sizes = defaultdict(int)
+        counts = defaultdict(int)
+        stack = [self.root_node]
+        while stack:
+            node = stack.pop()
+            if node.is_dir:
+                stack.extend(node.children)
+            else:
+                ext = os.path.splitext(node.name)[1].lower() or "(no extension)"
+                sizes[ext] += node.size
+                counts[ext] += 1
+        rows = sorted(sizes.items(), key=lambda kv: kv[1], reverse=True)
+        total = self.root_node.size or 1
+
+        # Reuse one window so re-opening doesn't stack them.
+        existing = getattr(self, "_types_win", None)
+        if existing is not None and existing.winfo_exists():
+            existing.destroy()
+
+        win = Toplevel(self.root)
+        self._types_win = win
+        win.configure(bg=COLORS["bg"])
+        win.title(f"File Types — {len(rows)} extensions")
+        win.geometry("760x520")
+        try:
+            win.iconbitmap(resource_path("icon.ico"))
+        except Exception:  # noqa: BLE001
+            pass
+
+        ttk.Label(
+            win, padding=(10, 8),
+            text=f"Space by file type under {self.root_node.path}",
+        ).pack(side=TOP, fill=X)
+
+        frame = ttk.Frame(win, padding=(10, 0, 10, 10))
+        frame.pack(fill=BOTH, expand=True)
+
+        cols = ("ext", "size", "percent", "files")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+        tv.heading("ext", text="Type")
+        tv.heading("size", text="Size")
+        tv.heading("percent", text="% of Total")
+        tv.heading("files", text="Files")
+        tv.column("ext", width=150, anchor=W, stretch=False)
+        tv.column("size", width=110, anchor=E, stretch=False)
+        tv.column("percent", width=260, anchor=W, stretch=True)
+        tv.column("files", width=90, anchor=E, stretch=False)
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+
+        heat_seen = set()
+
+        def heat_tag(fraction):
+            bucket = int(max(0.0, min(1.0, fraction)) * 24 + 0.5)
+            name = f"heat{bucket}"
+            if name not in heat_seen:
+                tv.tag_configure(name, foreground=heat_color(bucket / 24))
+                heat_seen.add(name)
+            return name
+
+        for index, (ext, size) in enumerate(rows):
+            fraction = size / total
+            percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
+            tv.insert(
+                "", END,
+                values=(ext, human_size(size), percent, f"{counts[ext]:,}"),
+                tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
+            )
 
     # -- Shutdown ---------------------------------------------------------- #
 
