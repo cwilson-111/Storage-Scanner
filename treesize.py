@@ -289,8 +289,11 @@ def apply_theme(root):
     root.configure(bg=C["bg"])
 
     style.configure(".", background=C["bg"], foreground=C["fg"],
-                    fieldbackground=C["panel"], font=FONT)
-    style.configure("TFrame", background=C["bg"])
+                    fieldbackground=C["panel"], font=FONT,
+                    bordercolor=C["border"], lightcolor=C["bg"],
+                    darkcolor=C["bg"])
+    style.configure("TFrame", background=C["bg"], borderwidth=0, relief="flat",
+                    lightcolor=C["bg"], darkcolor=C["bg"])
     style.configure("TLabel", background=C["bg"], foreground=C["fg"], font=FONT)
     style.configure("Accent.TLabel", background=C["bg"], foreground=C["accent"],
                     font=FONT_BOLD)
@@ -433,50 +436,55 @@ class StorageScannerApp:
     def _build_toolbar(self):
         bar_frame = ttk.Frame(self.root, padding=(8, 8, 8, 4))
         bar_frame.pack(side=TOP, fill=X)
+        bar_frame.columnconfigure(1, weight=1)  # path combo column stretches
 
-        ttk.Label(bar_frame, text="▸ LOCATION", style="Accent.TLabel").pack(side=LEFT)
+        ttk.Label(bar_frame, text="▸ LOCATION", style="Accent.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 4)
+        )
 
         self.path_var = StringVar()
         self.path_combo = ttk.Combobox(
-            bar_frame, textvariable=self.path_var, width=50,
+            bar_frame, textvariable=self.path_var,
             values=self._list_drives(),
         )
-        self.path_combo.pack(side=LEFT, padx=6)
+        self.path_combo.grid(row=0, column=1, padx=(0, 6), sticky="ew")
         self.path_combo.bind("<Return>", lambda e: self.start_scan())
 
-        ttk.Button(bar_frame, text="Browse…", command=self.browse).pack(side=LEFT)
+        ttk.Button(bar_frame, text="Browse…", command=self.browse).grid(row=0, column=2)
         self.scan_btn = ttk.Button(bar_frame, text="Scan", command=self.start_scan)
-        self.scan_btn.pack(side=LEFT, padx=6)
+        self.scan_btn.grid(row=0, column=3, padx=(6, 0))
+
         self.cancel_btn = ttk.Button(
             bar_frame, text="Cancel", command=self.cancel_scan, state="disabled"
         )
-        self.cancel_btn.pack(side=LEFT)
+        self.cancel_btn.grid(row=0, column=4, padx=(6, 0))
 
-        # Adding a tools menu dropdown
         self.tools_btn = ttk.Button(
             bar_frame,
             text="Tools ▼",
             command=self._show_tools_menu,
             state="disabled",
         )
-        self.tools_btn.pack(side=LEFT, padx=6)
+        self.tools_btn.grid(row=0, column=5, padx=(6, 16))
 
         self.tools_menu = Menu(self.root, tearoff=0)
         self.tools_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
         self.tools_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
         self.tools_menu.add_command(label="Largest Files", command=self.show_top_files)
 
+        ttk.Label(bar_frame, text="TOP", style="Accent.TLabel").grid(
+            row=0, column=6, padx=(0, 4), sticky="e"
+        )
+
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
             bar_frame, textvariable=self.top_count_var, width=5, state="disabled",
             values=("25", "50", "100"),
         )
-        self.top_count_combo.pack(side=RIGHT, padx=(0, 6))
-        # Re-running with a new count is instant, so update live on selection.
+        self.top_count_combo.grid(row=0, column=7)
         self.top_count_combo.bind(
             "<<ComboboxSelected>>", lambda e: self.show_top_files()
         )
-        ttk.Label(bar_frame, text="TOP", style="Accent.TLabel").pack(side=RIGHT, padx=(0, 4))
 
         drives = self._list_drives()
         if drives:
@@ -1222,6 +1230,7 @@ class StorageScannerApp:
         self.dup_cancel_event.clear()
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
+        self.cancel_btn.config(state="normal")
 
         total_files = max(1, self.root_node.file_count)
         self._start_determinate_progress(total_files)
@@ -1266,6 +1275,7 @@ class StorageScannerApp:
                 elif kind == "done":
                     _kind, duplicates = msg
                     self._stop_progress()
+                    self.cancel_btn.config(state="disabled")
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
                     self._show_duplicates_window(duplicates)
@@ -1273,6 +1283,7 @@ class StorageScannerApp:
 
                 elif kind == "cancelled":
                     self._stop_progress()
+                    self.cancel_btn.config(state="disabled")
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
                     self.status_var.set("Duplicate scan cancelled.")
@@ -1281,6 +1292,7 @@ class StorageScannerApp:
                 elif kind == "error":
                     _kind, error_msg = msg
                     self._stop_progress()
+                    self.cancel_btn.config(state="disabled")
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
                     self.status_var.set("Duplicate scan failed.")
