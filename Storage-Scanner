@@ -236,25 +236,40 @@ def recycle(path):
     op.fFlags = _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
+#----------------------------------------------------------------------------#
+# DEFAULTS CONSTRAINTS
+#----------------------------------------------------------------------------#
+
+DEFAULT_DUPLICATE_EXCLUDES = (
+    r"\Windows",
+    r"\Program Files\WindowsApps",
+    r"\Program Files\Common Files\Microsoft Shared",
+    r"\Program Files\Microsoft Office",
+    r"\Program Files (x86)\Microsoft",
+    r"\ProgramData\Microsoft",
+    r"\Recovery",
+    r"\System Volume Information",
+    r"\$Recycle.Bin",
+)
 
 # --------------------------------------------------------------------------- #
 # Theme — dark "cyber terminal" palette
 # --------------------------------------------------------------------------- #
 
 COLORS = {
-    "bg":      "#0a0e16",   # window background (deep navy-black)
-    "bg2":     "#0f1626",   # headings / scrollbar troughs
-    "panel":   "#0d1320",   # tree body / input fields
-    "border":  "#1c2740",
-    "fg":      "#b8c6db",    # default text
-    "muted":   "#48566e",    # disabled / placeholder
-    "accent":  "#00e5ff",    # neon cyan (primary)
-    "accent2": "#39ff14",    # neon green (highlights)
-    "sel":     "#13294a",    # selection background
-    "dir":     "#22d3ee",    # directories
-    "file":    "#8aa0bd",    # files
-    "error":   "#ff3864",    # unreadable / errors
-    "stripe":  "#0b111e",    # alternating row
+    "bg":      "#05070c",
+    "bg2":     "#08111f",
+    "panel":   "#09111d",
+    "border":  "#12324a",
+    "fg":      "#c8f7ff",
+    "muted":   "#536b82",
+    "accent":  "#00e5ff",
+    "accent2": "#7df9ff",
+    "sel":     "#102f4f",
+    "dir":     "#00ccff",
+    "file":    "#93b8d8",
+    "error":   "#ff3864",
+    "stripe":  "#07101b",
 }
 
 FONT = ("Segoe UI", 9)
@@ -267,12 +282,14 @@ FONT_TITLE = ("Segoe UI", 20, "bold")
 def heat_color(fraction):
     """Map 0..1 to a green→amber→red heat gradient (big hogs run hot)."""
     f = max(0.0, min(1.0, fraction))
-    if f < 0.5:                       # green → amber
+    if f < 0.5:                       # cyan → blue
         t = f / 0.5
-        c1, c2 = (0x39, 0xff, 0x14), (0xff, 0xe0, 0x00)
-    else:                             # amber → red
+        # c1, c2 = (0x39, 0xff, 0x14), (0xff, 0xe0, 0x00) for green -> amber
+        c1,c2 = (0, 229, 255), (0, 102, 255)
+    else:                             # blue → white 
         t = (f - 0.5) / 0.5
-        c1, c2 = (0xff, 0xe0, 0x00), (0xff, 0x38, 0x64)
+        # c1, c2 = (0xff, 0xe0, 0x00), (0xff, 0x38, 0x64) for amber -> red
+        c1,c2 = (0,102,255), (255, 255, 255)
     r = round(c1[0] + (c2[0] - c1[0]) * t)
     g = round(c1[1] + (c2[1] - c1[1]) * t)
     b = round(c1[2] + (c2[2] - c1[2]) * t)
@@ -355,7 +372,7 @@ def apply_theme(root):
 class StorageScannerApp:
     def __init__(self, root):
         self.root = root
-        root.title("Storage Scanner")
+        root.title("Neural Storage Matrix")
         root.geometry("960x640")
         apply_theme(root)
         try:
@@ -377,11 +394,25 @@ class StorageScannerApp:
         self.dup_thread = None
         self.dup_cancel_event = threading.Event()
 
+        
+        self.dup_stats = {
+            "files_total": 0,
+            "files_checked": 0,
+            "files_skipped": 0,
+            "bytes_skipped": 0,
+            "partial_hashed": 0,
+            "full_hashed": 0,
+        }
+
+
+        self._radar_angle = 0 #radar circle for progress
+
 
         self._build_header()
         self._build_toolbar()
         self._build_tree()
         self._build_statusbar()
+        self._animate_header()
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -402,7 +433,7 @@ class StorageScannerApp:
         C = COLORS
         width = cv.winfo_width()
         height = int(cv["height"])
-        title = "◈  STORAGE SCANNER"
+        title = "◈  NEURAL STORAGE MATRIX"
         x, y = 18, 30
 
         # Faint scanline grid behind everything — a CRT/terminal texture.
@@ -425,11 +456,46 @@ class StorageScannerApp:
         cv.create_text(x, y, text=title, fill=C["accent"], font=FONT_TITLE, anchor=W)
 
         # Tagline + a glowing baseline rule under the banner.
-        cv.create_text(x + 2, 52, text="// disk usage analyzer",
+        cv.create_text(x + 2, 52, text="        Storage Analyzer",
                        fill=C["muted"], font=FONT, anchor=W)
         if width > 1:
             cv.create_line(0, 62, width, 62, fill="#0f6d7a")
             cv.create_line(0, 63, width, 63, fill="#0a3a42")
+
+        # Futuristic radar / reactor ring on the right side.
+        if width > 180:
+            cx = width - 78
+            cy = 31
+            r1 = 22
+            r2 = 14
+            r3 = 6
+
+            cv.create_oval(cx - r1, cy - r1, cx + r1, cy + r1,
+                           outline="#0f6d7a", width=1)
+            cv.create_oval(cx - r2, cy - r2, cx + r2, cy + r2,
+                           outline=C["accent"], width=1)
+            cv.create_oval(cx - r3, cy - r3, cx + r3, cy + r3,
+                           outline=C["accent2"], width=1)
+
+            cv.create_arc(
+                cx - r1, cy - r1, cx + r1, cy + r1,
+                start=self._radar_angle,
+                extent=80,
+                outline="#ffffff",
+                width=2,
+                style="arc",
+                tags="radar",
+            )
+
+            cv.create_arc(
+                cx - r2, cy - r2, cx + r2, cy + r2,
+                start=-self._radar_angle,
+                extent=110,
+                outline=C["accent"],
+                width=2,
+                style="arc",
+                tags="radar",
+            )
 
     def _build_toolbar(self):
         bar_frame = ttk.Frame(self.root, padding=(8, 8, 8, 4))
@@ -439,10 +505,10 @@ class StorageScannerApp:
 
         self.path_var = StringVar()
         self.path_combo = ttk.Combobox(
-            bar_frame, textvariable=self.path_var, width=50,
+            bar_frame, textvariable=self.path_var,
             values=self._list_drives(),
         )
-        self.path_combo.pack(side=LEFT, padx=6)
+        self.path_combo.pack(side=LEFT, padx=6, fill=X, expand=True)
         self.path_combo.bind("<Return>", lambda e: self.start_scan())
 
         ttk.Button(bar_frame, text="Browse…", command=self.browse).pack(side=LEFT)
@@ -555,6 +621,10 @@ class StorageScannerApp:
         )
         self.progress = ttk.Progressbar(status, mode="indeterminate", length=220)
 
+    def _animate_header(self):
+        self._radar_angle = (self._radar_angle + 4) % 360
+        self._draw_header()
+        self.root.after(50, self._animate_header)
     # -- Drive / folder selection ----------------------------------------- #
 
     @staticmethod
@@ -656,7 +726,7 @@ class StorageScannerApp:
         self.dup_cancel_event.set()
         self.status_var.set("Cancelling …")
 
-    #-- Helper Methods for Progress Bar
+    #-- Helper Methods for Progress Bar ------------------------------------- #
     def _start_indeterminate_progress(self):
         """Show an animated progress bar when total work is unknown."""
         self.progress.config(mode="indeterminate", maximum=100, value=0)
@@ -700,7 +770,14 @@ class StorageScannerApp:
                 tags.append("dir")              # bold, keeps heat color
         tags.append("odd" if index % 2 else "even")
 
-        label = node.name + ("\\" if node.is_dir and not node.name.endswith("\\") else "")
+        if node.error:
+            icon = "⚠"
+        elif node.is_dir:
+            icon = "▣"
+        else:
+            icon = "◦"
+
+        label = f"{icon} {node.name}" + ("\\" if node.is_dir and not node.name.endswith("\\") else "")
         iid = self.tree.insert(
             parent_iid, END, text=label,
             values=(human_size(node.size), percent, items), tags=tuple(tags),
@@ -809,6 +886,17 @@ class StorageScannerApp:
         percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
         items = f"{node.file_count:,}" if node.is_dir else ""
         self.tree.item(iid, values=(human_size(node.size), percent, items))
+
+    # -- Constraints Functions --------------------------------------------- #
+
+    def _should_skip_duplicate_scan(self, path):
+        
+        """Return True if this path should be ignored during duplicate scans."""
+        normalized = os.path.normcase(os.path.normpath(path))
+
+
+        return any(part in normalized for part in DEFAULT_DUPLICATE_EXCLUDES)
+
 
     # -- Delete to Recycle Bin --------------------------------------------- #
 
@@ -1100,22 +1188,6 @@ class StorageScannerApp:
 
   # -- Duplicate file finder --------------------------------------------- #
 
-    def _hash_file(self, path, cancel_event = None, chunk_size=1024 * 1024):
-        """Return a SHA-256 hash for a file, or None if it cannot be read."""
-        h = hashlib.sha256()
-        try:
-            with open(path, "rb") as f:
-                while True:
-                    if cancel_event and cancel_event.is_set():
-                        return None
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    h.update(chunk)
-            return h.hexdigest()
-        except OSError:
-            return None
-
     def _partial_hash_file(self, path, cancel_event=None, chunk_size=1024 * 1024):
         """
         Hash the first and last chunk of a file.
@@ -1202,10 +1274,55 @@ class StorageScannerApp:
             node = stack.pop()
 
             if node.is_dir:
+                if self._should_skip_duplicate_scan(node.path):
+                    skipped_count = 0
+                    skipped_bytes = 0
+
+                    # Count skipped files under this skipped directory.
+                    count_stack = [node]
+                    while count_stack:
+                        skipped_node = count_stack.pop()
+
+                        if skipped_node.is_dir:
+                            count_stack.extend(skipped_node.children)
+                        else:
+                            skipped_count += 1
+                            skipped_bytes += skipped_node.size
+
+                    self.dup_stats["files_skipped"] += skipped_count
+                    self.dup_stats["bytes_skipped"] += skipped_bytes
+
+                    if progress_q:
+                        progress_q.put((
+                            "stats",
+                            dict(self.dup_stats),
+                        ))
+
+                    continue
+
                 stack.extend(node.children)
+
             else:
                 if node.size > 0:
-                    all_files.append(node)
+                    if self._should_skip_duplicate_scan(node.path):
+                        self.dup_stats["files_skipped"] += 1
+                        self.dup_stats["bytes_skipped"] += node.size
+
+                        if progress_q:
+                            progress_q.put((
+                                "stats",
+                                dict(self.dup_stats),
+                            ))
+                    else:
+                        all_files.append(node)
+
+        self.dup_stats["files_checked"] = len(all_files)
+
+        if progress_q:
+            progress_q.put((
+                "stats",
+                dict(self.dup_stats),
+            ))
 
         total_files = max(1, len(all_files))
 
@@ -1288,6 +1405,8 @@ class StorageScannerApp:
                 node, digest = future.result()
                 completed += 1
 
+                self.dup_stats["partial_hashed"] = completed
+
                 if digest:
                     by_partial_hash[(node.size, digest)].append(node)
 
@@ -1345,6 +1464,8 @@ class StorageScannerApp:
                 node, digest = future.result()
                 completed += 1
 
+                self.dup_stats["full_hashed"] = completed
+
                 if digest:
                     by_full_hash[(node.size, digest)].append(node)
 
@@ -1388,6 +1509,15 @@ class StorageScannerApp:
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
 
+        self.dup_stats = {
+            "files_total": self.root_node.file_count if self.root_node else 0,
+            "files_checked": 0,
+            "files_skipped": 0,
+            "bytes_skipped": 0,
+            "partial_hashed": 0,
+            "full_hashed": 0,
+        }
+
         total_files = max(1, self.root_node.file_count)
         self._start_determinate_progress(total_files)
         self.status_var.set("Preparing duplicate scan …")
@@ -1427,8 +1557,19 @@ class StorageScannerApp:
                     _kind, current, total, text = msg
                     self.progress.config(maximum=max(1, total))
                     self._update_determinate_progress(current)
+
                     percent = (current / max(1, total)) * 100
-                    self.status_var.set(f"{text}  ({percent:5.1f}%)")
+                    skipped = self.dup_stats.get("files_skipped", 0)
+                    skipped_bytes = self.dup_stats.get("bytes_skipped", 0)
+
+                    self.status_var.set(
+                        f"{text}  ({percent:5.1f}%)  |  "
+                        f"Skipped: {skipped:,} files / {human_size(skipped_bytes)}"
+                    )
+                
+                elif kind == "stats":
+                    _kind, stats = msg
+                    self.dup_stats = stats
 
                 elif kind == "done":
                     _kind, duplicates = msg
@@ -1480,6 +1621,12 @@ class StorageScannerApp:
             pass
 
         total_wasted = sum(size * (len(nodes) - 1) for size, _digest, nodes in duplicates)
+        stats = getattr(self, "dup_stats", {})
+        files_checked = stats.get("files_checked", 0)
+        files_skipped = stats.get("files_skipped", 0)
+        bytes_skipped = stats.get("bytes_skipped", 0)
+        partial_hashed = stats.get("partial_hashed", 0)
+        full_hashed = stats.get("full_hashed", 0)
 
         ttk.Label(
             win,
@@ -1488,6 +1635,19 @@ class StorageScannerApp:
                 f"Duplicate files under {self.root_node.path}  —  "
                 f"{len(duplicates):,} groups, potential cleanup: {human_size(total_wasted)}"
             ),
+        ).pack(side=TOP, fill=X)
+
+        ttk.Label(
+            win,
+            padding=(10, 0, 10, 8),
+            text=(
+                f"Checked: {files_checked:,} files  |  "
+                f"Skipped system files: {files_skipped:,}  |  "
+                f"Skipped size: {human_size(bytes_skipped)}  |  "
+                f"Partial hashed: {partial_hashed:,}  |  "
+                f"Full hashed: {full_hashed:,}"
+            ),
+            style="Accent.TLabel",
         ).pack(side=TOP, fill=X)
 
         frame = ttk.Frame(win, padding=(10, 0, 10, 10))
