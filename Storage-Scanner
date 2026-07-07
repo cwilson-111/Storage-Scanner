@@ -22,6 +22,7 @@ from history import (
     save_scan_snapshot,
     get_previous_scan_id,
     get_folder_growth,
+    get_growth_summary,
     create_usage_history_chart,
     estimate_days_until_full,
     format_bytes,
@@ -403,6 +404,7 @@ class StorageScannerApp:
 
         init_history_db()
         self.last_scan_id = None
+        self.last_previous_scan_id = None
         self.last_growth_rows = []
 
         
@@ -728,6 +730,7 @@ class StorageScannerApp:
         Runs on the Tkinter UI thread after the background history save finishes.
         """
         self.last_scan_id = current_scan_id
+        self.last_previous_scan_id = previous_scan_id
         self.last_growth_rows = growth_rows
 
         if previous_scan_id:
@@ -811,40 +814,6 @@ class StorageScannerApp:
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
-        # ------------------------------------------------------------
-        # Save scan history snapshot
-        # ------------------------------------------------------------
-        # try:
-        #     folder_sizes, folder_count = self._collect_folder_sizes_for_history(node)
-        #     drive_capacity = self._get_drive_capacity_bytes(node.path)
-
-        #     current_scan_id = save_scan_snapshot(
-        #         scan_path=node.path,
-        #         total_size=node.size,
-        #         drive_capacity=drive_capacity,
-        #         file_count=node.file_count,
-        #         folder_count=folder_count,
-        #         folder_sizes=folder_sizes,
-        #     )
-
-        #     previous_scan_id = get_previous_scan_id(
-        #         scan_path=node.path,
-        #         current_scan_id=current_scan_id,
-        #     )
-
-        #     self.last_scan_id = current_scan_id
-        #     self.last_growth_rows = []
-
-        #     if previous_scan_id:
-        #         self.last_growth_rows = get_folder_growth(
-        #             current_scan_id=current_scan_id,
-        #             previous_scan_id=previous_scan_id,
-        #             limit=50,
-        #         )
-
-        # except Exception as exc:
-        #     self.last_growth_rows = []
-        #     print(f"History snapshot failed: {exc}")
 
         self.root_node = node
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
@@ -1337,12 +1306,39 @@ class StorageScannerApp:
                 tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
             )
 
+    def _format_change(self, value, is_bytes=True):
+        if value is None:
+            return "—"
+        sign = "+" if value > 0 else "-" if value < 0 else ""
+        if is_bytes and isinstance(value, (int, float)) and abs(value) >= 1024:
+            return f"{sign}{human_size(abs(value))}"
+        return f"{sign}{int(value):,}"
+
+    def _format_percent(self, value):
+        if value is None:
+            return "—"
+        return f"{value:+.1f}%"
+
+    def _summarize_folder_change(self, row):
+        if not row:
+            return "—"
+        folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, file_count = row
+        if growth_percent is None:
+            percent_text = "new"
+        else:
+            percent_text = f"{growth_percent:.1f}%"
+        return f"{os.path.basename(folder_path)} — {human_size(growth_bytes)} ({percent_text})"
+
     # -- Show Growth Function ---------------------------------------------- #
     def show_growth_history(self):
         if not self.root_node:
             return
 
         rows = getattr(self, "last_growth_rows", [])
+        summary = get_growth_summary(
+            self.last_scan_id,
+            self.last_previous_scan_id,
+        )
 
         existing = getattr(self, "_growth_win", None)
         if existing is not None and existing.winfo_exists():
@@ -1352,7 +1348,7 @@ class StorageScannerApp:
         self._growth_win = win
         win.configure(bg=COLORS["bg"])
         win.title("Storage Growth History")
-        win.geometry("900x560")
+        win.geometry("980x620")
 
         try:
             win.iconbitmap(resource_path("icon.ico"))
@@ -1379,11 +1375,85 @@ class StorageScannerApp:
             ),
         ).pack(side=TOP, fill=X)
 
-        frame = ttk.Frame(win, padding=(10, 0, 10, 10))
-        frame.pack(fill=BOTH, expand=True)
+        notebook = ttk.Notebook(win)
+        notebook.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
+
+        summary_frame = ttk.Frame(notebook, padding=10)
+        details_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(summary_frame, text="Summary")
+        notebook.add(details_frame, text="Growth Details")
+
+        overview = ttk.LabelFrame(summary_frame, text="Overview", padding=10)
+        overview.pack(fill=X, pady=(0, 10))
+
+        metrics = [
+            ("Current size", human_size(summary["current_size_bytes"]) if summary["current_size_bytes"] is not None else "—"),
+            ("Previous size", human_size(summary["previous_size_bytes"]) if summary["previous_size_bytes"] is not None else "—"),
+            ("Size change", self._format_change(summary["size_change_bytes"])),
+            ("Size change %", self._format_percent(summary["size_change_percent"])),
+            ("Current files", f"{summary['current_file_count']:,}" if summary["current_file_count"] is not None else "—"),
+            ("Previous files", f"{summary['previous_file_count']:,}" if summary["previous_file_count"] is not None else "—"),
+            ("File count change", self._format_change(summary["file_count_change"], is_bytes=False)),
+            ("Tracked folders", f"{summary['tracked_folders']:,}"),
+            ("New folders", f"{summary['new_folders']:,}"),
+            ("Largest growth folder", self._summarize_folder_change(summary["largest_growth_folder"])),
+            ("Largest shrink folder", self._summarize_folder_change(summary["largest_shrink_folder"])),
+        ]
+
+        for index, (label, value) in enumerate(metrics):
+            ttk.Label(overview, text=f"{label}:", font=("Segoe UI", 9, "bold")).grid(
+                row=index // 2, column=(index % 2) * 2, sticky=W, padx=(0, 8), pady=4
+            )
+            ttk.Label(overview, text=value).grid(
+                row=index // 2, column=(index % 2) * 2 + 1, sticky=W, pady=4
+            )
+
+        changes_frame = ttk.LabelFrame(summary_frame, text="Top folder changes", padding=10)
+        changes_frame.pack(fill=BOTH, expand=True)
+
+        change_cols = ("folder", "change", "status")
+        change_tv = ttk.Treeview(changes_frame, columns=change_cols, show="headings", selectmode="browse")
+        change_tv.heading("folder", text="Folder")
+        change_tv.heading("change", text="Change")
+        change_tv.heading("status", text="Status")
+        change_tv.column("folder", width=420, anchor=W, stretch=True)
+        change_tv.column("change", width=140, anchor=E, stretch=False)
+        change_tv.column("status", width=100, anchor=W, stretch=False)
+
+        change_tv.pack(fill=BOTH, expand=True)
+        change_tv.tag_configure("even", background=COLORS["panel"])
+        change_tv.tag_configure("odd", background=COLORS["stripe"])
+        change_tv.tag_configure("growing", foreground=COLORS["accent"])
+        change_tv.tag_configure("shrinking", foreground="#39ff14")
+        change_tv.tag_configure("unchanged", foreground=COLORS["muted"])
+
+        if not rows:
+            change_tv.insert("", END, values=("No previous scan found for this exact path.", "", ""), tags=("even",))
+        else:
+            for index, row in enumerate(rows[:10]):
+                folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, file_count = row
+                if growth_type == "Growing":
+                    status_tag = "growing"
+                elif growth_type == "Shrinking":
+                    status_tag = "shrinking"
+                else:
+                    status_tag = "unchanged"
+                change_tv.insert(
+                    "",
+                    END,
+                    values=(
+                        folder_path,
+                        f"{human_size(growth_bytes)} ({self._format_percent(growth_percent)})",
+                        growth_type,
+                    ),
+                    tags=(status_tag, "odd" if index % 2 else "even"),
+                )
+
+        details_frame_content = ttk.Frame(details_frame, padding=(0, 0, 0, 0))
+        details_frame_content.pack(fill=BOTH, expand=True)
 
         cols = ("folder", "previous", "current", "growth", "percent", "status", "files")
-        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+        tv = ttk.Treeview(details_frame_content, columns=cols, show="headings", selectmode="browse")
 
         tv.heading("folder", text="Folder")
         tv.heading("previous", text="Previous")
@@ -1401,14 +1471,14 @@ class StorageScannerApp:
         tv.column("status", width=90, anchor=W, stretch=False)
         tv.column("files", width=80, anchor=E, stretch=False)
 
-        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+        vsb = ttk.Scrollbar(details_frame_content, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
 
         tv.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
 
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
+        details_frame_content.rowconfigure(0, weight=1)
+        details_frame_content.columnconfigure(0, weight=1)
 
         tv.tag_configure("even", background=COLORS["panel"])
         tv.tag_configure("odd", background=COLORS["stripe"])

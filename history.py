@@ -2,7 +2,10 @@
 import sqlite3
 from datetime import datetime
 
-# import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover - optional runtime dependency
+    plt = None
 
 import os
 
@@ -177,6 +180,89 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     conn.close()
     return results
 
+def get_growth_summary(current_scan_id, previous_scan_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT total_size, file_count, created_at
+        FROM scans
+        WHERE id = ?
+    """, (current_scan_id,))
+    current_row = cur.fetchone()
+
+    cur.execute("""
+        SELECT total_size, file_count, created_at
+        FROM scans
+        WHERE id = ?
+    """, (previous_scan_id,))
+    previous_row = cur.fetchone()
+
+    conn.close()
+
+    if not current_row or not previous_row:
+        return {
+            "current_size_bytes": None,
+            "previous_size_bytes": None,
+            "size_change_bytes": None,
+            "size_change_percent": None,
+            "current_file_count": None,
+            "previous_file_count": None,
+            "file_count_change": None,
+            "file_count_change_percent": None,
+            "tracked_folders": 0,
+            "new_folders": 0,
+            "largest_growth_folder": None,
+            "largest_shrink_folder": None,
+        }
+
+    current_size, current_files, _ = current_row
+    previous_size, previous_files, _ = previous_row
+
+    size_change_bytes = current_size - previous_size
+    size_change_percent = None
+    if previous_size > 0:
+        size_change_percent = (size_change_bytes / previous_size) * 100
+
+    file_count_change = current_files - previous_files
+    file_count_change_percent = None
+    if previous_files > 0:
+        file_count_change_percent = (file_count_change / previous_files) * 100
+
+    growth_rows = get_folder_growth(current_scan_id, previous_scan_id, limit=50)
+    tracked_folders = len(growth_rows)
+    new_folders = sum(1 for row in growth_rows if row[1] == 0 and row[2] > 0)
+
+    largest_growth_folder = None
+    if any(row[3] > 0 for row in growth_rows):
+        largest_growth_folder = max(
+            (row for row in growth_rows if row[3] > 0),
+            key=lambda row: row[3],
+        )
+
+    largest_shrink_folder = None
+    if any(row[3] < 0 for row in growth_rows):
+        largest_shrink_folder = max(
+            (row for row in growth_rows if row[3] < 0),
+            key=lambda row: abs(row[3]),
+        )
+
+    return {
+        "current_size_bytes": current_size,
+        "previous_size_bytes": previous_size,
+        "size_change_bytes": size_change_bytes,
+        "size_change_percent": size_change_percent,
+        "current_file_count": current_files,
+        "previous_file_count": previous_files,
+        "file_count_change": file_count_change,
+        "file_count_change_percent": file_count_change_percent,
+        "tracked_folders": tracked_folders,
+        "new_folders": new_folders,
+        "largest_growth_folder": largest_growth_folder,
+        "largest_shrink_folder": largest_shrink_folder,
+    }
+
+
 def get_scan_history(scan_path, limit=30):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -238,6 +324,10 @@ def create_usage_history_chart(scan_path, output_file="usage_history.png"):
 
     if not history:
         print("No history found.")
+        return None
+
+    if plt is None:
+        print("matplotlib is not installed; chart could not be generated.")
         return None
 
     dates = []
