@@ -15,6 +15,18 @@ import threading
 import queue
 import subprocess
 import hashlib
+import shutil
+
+from history import (
+    init_history_db,
+    save_scan_snapshot,
+    get_previous_scan_id,
+    get_folder_growth,
+    create_usage_history_chart,
+    estimate_days_until_full,
+    format_bytes,
+)
+
 from ctypes import wintypes
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -388,6 +400,11 @@ class StorageScannerApp:
         self._heat_tags = set()  # quantized heat tags configured so far
         self._sort_key = "size"  # "name" | "size" | "items"
         self._sort_reverse = True   # sizes default biggest-first
+
+        init_history_db()
+        self.last_scan_id = None
+        self.last_growth_rows = []
+
         
         #Progress bar for duplicates scan
         self.dup_progress_q = queue.Queue()
@@ -532,6 +549,7 @@ class StorageScannerApp:
         self.tools_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
         self.tools_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
         self.tools_menu.add_command(label="Largest Files", command=self.show_top_files)
+        self.tools_menu.add_command(label="Growth History", command=self.show_growth_history)
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
@@ -641,6 +659,16 @@ class StorageScannerApp:
         if chosen:
             self.path_var.set(os.path.normpath(chosen))
 
+    def _get_drive_capacity_bytes(self, path):
+        """
+        Returns total capacity of the drive containing the scanned path.
+        """
+        try:
+            usage = shutil.disk_usage(path)
+            return usage.total
+        except Exception:
+            return 0
+
     # -- Scan lifecycle ---------------------------------------------------- #
 
     def start_scan(self):
@@ -692,6 +720,80 @@ class StorageScannerApp:
         except queue.Empty:
             pass
         self.root.after(100, self._poll_progress)
+    
+    # -- History helper functions ------------------------------------------ #
+
+    def _finish_history_save(self, current_scan_id, previous_scan_id, growth_rows):
+        """
+        Runs on the Tkinter UI thread after the background history save finishes.
+        """
+        self.last_scan_id = current_scan_id
+        self.last_growth_rows = growth_rows
+
+        if previous_scan_id:
+            self.status_var.set(
+                f"Scan complete. History saved. Growth rows: {len(growth_rows):,}"
+            )
+        else:
+            self.status_var.set(
+                "Scan complete. History saved. Scan the same path again to calculate growth."
+            )
+
+    def _history_save_failed(self, exc):
+        """
+        Runs on the Tkinter UI thread if history saving fails.
+        """
+        self.last_growth_rows = []
+        self.status_var.set(f"Scan complete, but history failed: {exc}")
+        print(f"History snapshot failed: {exc}")
+
+    def _save_history_worker(self, node):
+        """
+        Saves scan history in a background thread so the Tkinter UI does not freeze.
+        """
+        try:
+            folder_sizes, folder_count = self._collect_folder_sizes_for_history(node)
+            drive_capacity = self._get_drive_capacity_bytes(node.path)
+
+            scan_path = os.path.normcase(os.path.normpath(node.path))
+
+            current_scan_id = save_scan_snapshot(
+                scan_path=scan_path,
+                total_size=node.size,
+                drive_capacity=drive_capacity,
+                file_count=node.file_count,
+                folder_count=folder_count,
+                folder_sizes=folder_sizes,
+            )
+
+            previous_scan_id = get_previous_scan_id(
+                scan_path=scan_path,
+                current_scan_id=current_scan_id,
+            )
+
+            growth_rows = []
+
+            if previous_scan_id:
+                growth_rows = get_folder_growth(
+                    current_scan_id=current_scan_id,
+                    previous_scan_id=previous_scan_id,
+                    limit=50,
+                )
+
+            self.root.after(
+                0,
+                lambda: self._finish_history_save(
+                    current_scan_id,
+                    previous_scan_id,
+                    growth_rows,
+                )
+            )
+
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda: self._history_save_failed(exc)
+            )
 
     def _finish_scan(self, node):
         self._stop_progress()
@@ -709,10 +811,59 @@ class StorageScannerApp:
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
+        # ------------------------------------------------------------
+        # Save scan history snapshot
+        # ------------------------------------------------------------
+        # try:
+        #     folder_sizes, folder_count = self._collect_folder_sizes_for_history(node)
+        #     drive_capacity = self._get_drive_capacity_bytes(node.path)
+
+        #     current_scan_id = save_scan_snapshot(
+        #         scan_path=node.path,
+        #         total_size=node.size,
+        #         drive_capacity=drive_capacity,
+        #         file_count=node.file_count,
+        #         folder_count=folder_count,
+        #         folder_sizes=folder_sizes,
+        #     )
+
+        #     previous_scan_id = get_previous_scan_id(
+        #         scan_path=node.path,
+        #         current_scan_id=current_scan_id,
+        #     )
+
+        #     self.last_scan_id = current_scan_id
+        #     self.last_growth_rows = []
+
+        #     if previous_scan_id:
+        #         self.last_growth_rows = get_folder_growth(
+        #             current_scan_id=current_scan_id,
+        #             previous_scan_id=previous_scan_id,
+        #             limit=50,
+        #         )
+
+        # except Exception as exc:
+        #     self.last_growth_rows = []
+        #     print(f"History snapshot failed: {exc}")
+
+        self.root_node = node
+        root_iid = self._insert_node("", node, parent_size=node.size or 1)
+        self.tree.item(root_iid, open=True)
+        self._populate_children(root_iid, node)
+
+        self.tools_btn.config(state="normal")
+        self.top_count_combo.config(state="readonly")
+
         self.status_var.set(
             f"{node.path}  —  {human_size(node.size)} in "
-            f"{node.file_count:,} files"
+            f"{node.file_count:,} files | Saving history..."
         )
+
+        threading.Thread(
+            target=self._save_history_worker,
+            args=(node,),
+            daemon=True,
+        ).start()
 
     def _finish_error(self, msg):
         self._stop_progress()
@@ -1186,7 +1337,142 @@ class StorageScannerApp:
                 tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
             )
 
-  # -- Duplicate file finder --------------------------------------------- #
+    # -- Show Growth Function ---------------------------------------------- #
+    def show_growth_history(self):
+        if not self.root_node:
+            return
+
+        rows = getattr(self, "last_growth_rows", [])
+
+        existing = getattr(self, "_growth_win", None)
+        if existing is not None and existing.winfo_exists():
+            existing.destroy()
+
+        win = Toplevel(self.root)
+        self._growth_win = win
+        win.configure(bg=COLORS["bg"])
+        win.title("Storage Growth History")
+        win.geometry("900x560")
+
+        try:
+            win.iconbitmap(resource_path("icon.ico"))
+        except Exception:
+            pass
+
+        drive_capacity = self._get_drive_capacity_bytes(self.root_node.path)
+        days_until_full = estimate_days_until_full(self.root_node.path, drive_capacity)
+
+        if days_until_full is None:
+            forecast_text = "Forecast: not enough history yet"
+        elif days_until_full == 0:
+            forecast_text = "Forecast: drive is full or over capacity"
+        else:
+            forecast_text = f"Forecast: estimated full in {days_until_full:,} days"
+
+        ttk.Label(
+            win,
+            padding=(10, 8),
+            text=(
+                f"Growth history for {self.root_node.path}  —  "
+                f"Current size: {human_size(self.root_node.size)}  |  "
+                f"{forecast_text}"
+            ),
+        ).pack(side=TOP, fill=X)
+
+        frame = ttk.Frame(win, padding=(10, 0, 10, 10))
+        frame.pack(fill=BOTH, expand=True)
+
+        cols = ("folder", "previous", "current", "growth", "percent", "status", "files")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+
+        tv.heading("folder", text="Folder")
+        tv.heading("previous", text="Previous")
+        tv.heading("current", text="Current")
+        tv.heading("growth", text="Growth")
+        tv.heading("percent", text="% Growth")
+        tv.heading("status", text="Status")
+        tv.heading("files", text="Files")
+
+        tv.column("folder", width=360, anchor=W, stretch=True)
+        tv.column("previous", width=100, anchor=E, stretch=False)
+        tv.column("current", width=100, anchor=E, stretch=False)
+        tv.column("growth", width=100, anchor=E, stretch=False)
+        tv.column("percent", width=90, anchor=E, stretch=False)
+        tv.column("status", width=90, anchor=W, stretch=False)
+        tv.column("files", width=80, anchor=E, stretch=False)
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+        tv.tag_configure("growing", foreground=COLORS["accent"])
+        tv.tag_configure("shrinking", foreground="#39ff14")
+        tv.tag_configure("unchanged", foreground=COLORS["muted"])
+
+        if not rows:
+            tv.insert(
+                "",
+                END,
+                values=(
+                    "No previous scan found for this exact path.",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ),
+                tags=("even",),
+            )
+            return
+
+        for index, row in enumerate(rows):
+            (
+                folder_path,
+                previous_size,
+                current_size,
+                growth_bytes,
+                growth_percent,
+                growth_type,
+                file_count,
+            ) = row
+
+            if growth_percent is None:
+                percent_text = "New"
+            else:
+                percent_text = f"{growth_percent:.1f}%"
+
+            if growth_type == "Growing":
+                status_tag = "growing"
+            elif growth_type == "Shrinking":
+                status_tag = "shrinking"
+            else:
+                status_tag = "unchanged"
+
+            stripe = "odd" if index % 2 else "even"
+
+            tv.insert(
+                "",
+                END,
+                values=(
+                    folder_path,
+                    human_size(previous_size),
+                    human_size(current_size),
+                    human_size(growth_bytes),
+                    percent_text,
+                    growth_type,
+                    f"{file_count:,}",
+                ),
+                tags=(status_tag, stripe),
+            )
+    # -- Duplicate file finder --------------------------------------------- #
 
     def _partial_hash_file(self, path, cancel_event=None, chunk_size=1024 * 1024):
         """
@@ -1849,9 +2135,37 @@ class StorageScannerApp:
         self.dup_cancel_event.set()
         self.root.destroy()
 
+    # -- Helper Function for Database -------------------------------------- #
+    def _collect_folder_sizes_for_history(self, root_node):
+        """
+        Convert the scanned Node tree into folder history records.
+
+        To avoid freezing/slowing large scans, only save folders >= 50 MB,
+        plus the root folder.
+        """
+        folder_sizes = {}
+        folder_count = 0
+
+        min_size = 50 * 1024 * 1024  # 50 MB
+
+        stack = [root_node]
+
+        while stack:
+            node = stack.pop()
+
+            if node.is_dir:
+                folder_count += 1
+
+                if node.size >= min_size or node is root_node:
+                    folder_sizes[node.path] = {
+                        "size": node.size,
+                        "file_count": node.file_count,
+                    }
+
+                stack.extend(node.children)
+
+        return folder_sizes, folder_count
     
-
-
 
 def main():
     root = Tk()

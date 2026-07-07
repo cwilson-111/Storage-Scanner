@@ -10,8 +10,16 @@ build/
 dist/
 *.spec
 
+
+# App-generated database
+storage_history.db
+*.db
+
+
 # OS / editor
 Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+storage_history.db
+*.db
