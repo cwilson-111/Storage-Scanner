@@ -43,7 +43,7 @@ Scanner scans it recursively, then shows every folder and file in a tree
 Requires Python 3.8+ (Tkinter ships with the standard Windows installer).
 
 ```bash
-python treesize.py
+python Storage-Scanner.py
 ```
 
 ## Build the .exe yourself
