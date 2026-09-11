@@ -814,12 +814,6 @@ class StorageScannerApp:
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
-
-        self.root_node = node
-        root_iid = self._insert_node("", node, parent_size=node.size or 1)
-        self.tree.item(root_iid, open=True)
-        self._populate_children(root_iid, node)
-
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 

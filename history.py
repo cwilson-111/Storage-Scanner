@@ -8,14 +8,45 @@ except ImportError:  # pragma: no cover - optional runtime dependency
     plt = None
 
 import os
+from pathlib import Path
 
+APP_NAME = "NeuralStorageMatrix"
 
-DB_NAME = os.path.join(os.path.dirname(__file__), "storage_history.db")
+APP_DATA_DIR = (
+Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+/ APP_NAME
+
+)
+
+APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_NAME = APP_DATA_DIR / "storage_history.db"
+
+print(f"Using database: {DB_NAME}")
 
 def init_history_db():
     
     conn = sqlite3.connect(DB_NAME)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA temp_store = MEMORY")
+
+
     cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS app_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """)
+
+    cur.execute("""
+            INSERT OR IGNORE INTO app_metadata
+            (key, value)
+            VALUES ('schema_version', '1')
+            """)
+
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
@@ -40,6 +71,7 @@ def init_history_db():
             FOREIGN KEY(scan_id) REFERENCES scans(id)
         )
     """)
+
 
     
 
