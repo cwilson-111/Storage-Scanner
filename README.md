@@ -1,4 +1,4 @@
-<img src="docs/icon_preview.png" alt="Storage Scanner icon" width="96" align="left" />
+<img src="docs/Designer.png" alt="Storage Scanner icon" width="96" align="left" />
 
 # Storage Scanner
 
