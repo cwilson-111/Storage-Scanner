@@ -159,6 +159,23 @@ def get_previous_scan_id(scan_path, current_scan_id):
 
     return row[0] if row else None
 
+def get_latest_scan_id(scan_path):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM scans
+        WHERE scan_path = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (scan_path,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    return row[0] if row else None
+
 def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -383,12 +400,14 @@ def create_usage_history_chart(scan_path, output_file="usage_history.png"):
 
 def print_growth_report(current_scan_id, previous_scan_id):
     growth_rows = get_folder_growth(current_scan_id, previous_scan_id)
-    percent_text = f"{growth_percent:.2f}%"
 
     print("\nFolder Growth Report")
     print("-" * 80)
 
     for folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, file_count in growth_rows:
+        percent_text = (
+            f"{growth_percent:.2f}%" if growth_percent is not None else "N/A (new folder)"
+        )
         print(f"{folder_path}")
         print(f"  Previous: {format_bytes(previous_size)}")
         print(f"  Current:  {format_bytes(current_size)}")
