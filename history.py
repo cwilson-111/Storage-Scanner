@@ -7,16 +7,18 @@ try:
 except ImportError:  # pragma: no cover - optional runtime dependency
     plt = None
 
+import sys
 import os
 from pathlib import Path
 
 APP_NAME = "NeuralStorageMatrix"
 
-APP_DATA_DIR = (
-Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-/ APP_NAME
+if sys.platform == "darwin":
+    _APP_DATA_BASE = Path.home() / "Library" / "Application Support"
+else:
+    _APP_DATA_BASE = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
 
-)
+APP_DATA_DIR = _APP_DATA_BASE / APP_NAME
 
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_NAME = APP_DATA_DIR / "storage_history.db"
