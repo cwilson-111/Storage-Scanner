@@ -20,6 +20,7 @@ from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
 from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
 from storage_scanner.ui.audit_window import AuditMixin
+from storage_scanner.ui.budget_window import BudgetMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
@@ -31,7 +32,7 @@ from storage_scanner.ui.treemap_window import TreemapMixin
 
 class StorageScannerApp(
     MainWindowMixin, HistoryMixin, DuplicatesMixin, FileWindowsMixin,
-    SearchMixin, TreemapMixin, CleanupMixin, AuditMixin,
+    SearchMixin, TreemapMixin, CleanupMixin, AuditMixin, BudgetMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root
@@ -86,6 +87,7 @@ class StorageScannerApp(
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         threading.Thread(target=self._check_for_update_worker, daemon=True).start()
+        self.root.after(500, self._check_budgets_on_launch)
 
     @staticmethod
     def _log_tk_callback_exception(exc, val, tb):

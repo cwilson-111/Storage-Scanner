@@ -119,6 +119,11 @@ own elevated-scan flow for folders your account can't fully read (see
 - **Audit Log** — every delete/recycle action the app has ever performed,
   from any window, with date, source, path, size, and result — a durable
   record of what to go look for in the Recycle Bin/Trash if you need it back.
+- **Storage Budgets** — right-click any folder to set a size threshold, and
+  get a dismissible alert when it's exceeded — checked right after you scan
+  it, and again at launch using the last saved scan, so you can see a
+  breach before you've rescanned anything. No background service: alerts
+  only fire when you scan or open the app, never continuously.
 
 ### Automation
 - **CLI mode** — `Storage-Scanner.py --cli <path> [--format json|csv]

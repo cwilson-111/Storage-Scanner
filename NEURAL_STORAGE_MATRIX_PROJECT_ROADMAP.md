@@ -1,5 +1,25 @@
 # Neural Storage Matrix: Current Build and Product Roadmap
 
+## Status update
+
+Phases 1-3 below are complete except where noted (NTFS MFT fast scan, and
+a handful of items explicitly scoped out along the way — ransomware-style
+extension tracking, duplicate-count history, an in-app auto-undo). Phase 4
+is partially done: everything buildable without a purchased certificate is
+in place; actual code-signing is still blocked on you obtaining one.
+
+Two things worth flagging honestly:
+- **Naming is still inconsistent.** The in-app window title is "Neural
+  Storage Matrix" while the repo, README, and executable name are all
+  "Storage Scanner" — the P1 naming-consistency item below was only
+  partially addressed (fixed a couple of leftover "TreeSize" references
+  from an even earlier name), not fully resolved.
+- **CI doesn't gate on tests.** `build.yml` builds and releases without
+  ever running `pytest`/`pyflakes` first — the automated-quality-gates
+  item below (P4/#10) was never wired into the release pipeline itself.
+
+See the phase checklists further down for what's done vs. not, item by item.
+
 ## Executive assessment
 
 The project is already beyond a basic disk-usage viewer. It combines concurrent scanning, sortable storage analysis, duplicate detection, safe deletion, historical snapshots, growth comparison, capacity forecasting, a custom Tkinter interface, standalone Windows packaging, and automated GitHub releases.
@@ -248,38 +268,38 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 
 ## Recommended delivery sequence
 
-### Phase 1: Reliability foundation
+### Phase 1: Reliability foundation — ✅ done
 
-1. Remove duplicate root insertion.
-2. Move the database and logs to `%LOCALAPPDATA%`.
-3. Fix growth-report bugs and missing-data handling.
-4. Refactor the code into modules.
-5. Add unit tests and release smoke tests.
-6. Add structured logging and crash diagnostics.
+1. ✅ Remove duplicate root insertion.
+2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
+3. ✅ Fix growth-report bugs and missing-data handling.
+4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
+5. ✅ Add unit tests (116 and counting) — release smoke tests still not wired into CI (see Status update above).
+6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
-### Phase 2: Competitive core
+### Phase 2: Competitive core — ✅ done except MFT
 
-1. Add treemap visualization.
-2. Add search and advanced filters.
-3. Add allocated-size, hard-link, junction, and cloud-placeholder correctness.
-4. Add MFT fast scan with fallback.
-5. Add snapshot comparison between arbitrary dates.
+1. ✅ Add treemap visualization.
+2. ✅ Add search and advanced filters.
+3. ✅ Add allocated-size, hard-link, junction, and cloud-placeholder correctness.
+4. ⏭️ Add MFT fast scan with fallback — explicitly deferred until after MVP, not started.
+5. ✅ Add snapshot comparison between arbitrary dates.
 
-### Phase 3: Differentiation
+### Phase 3: Differentiation — ✅ done (CLI-only for #5)
 
-1. Build review-first cleanup recommendations.
-2. Add a protected keeper workflow for duplicate groups.
-3. Add anomaly detection and forecast confidence.
-4. Add reversible cleanup plans and audit history.
-5. Add CLI, scheduling, and export features.
+1. ✅ Build review-first cleanup recommendations (Protected / Review / Duplicate candidates, plus an Archive-to-.zip action added afterward).
+2. ✅ Add a protected keeper workflow for duplicate groups (auto keeper pick + reasoning + manual override; the keeper can't be deleted even via select-all).
+3. ✅ Add anomaly detection and forecast confidence (regression-based range + confidence level; spike/drop detection).
+4. ✅ Add reversible cleanup plans and audit history (every delete/recycle/archive logged; no auto-undo — see Status update above for why).
+5. 🚧 Add CLI, scheduling, and export features — CLI mode with JSON/CSV output and exit codes is done; a scheduled-scan helper and GUI export were scoped for this item but not built.
 
-### Phase 4: Distribution and trust
+### Phase 4: Distribution and trust — 🚧 partial, blocked on a certificate
 
-1. Sign the executable and installer.
-2. Produce an installer plus portable ZIP.
-3. Publish SHA-256 checksums and an SBOM.
-4. Create polished onboarding, documentation, screenshots, and benchmark results.
-5. Add an update checker that verifies signatures before installation.
+1. ❌ Sign the executable and installer — needs a purchased code-signing certificate; not something that can be built without one.
+2. 🚧 Produce an installer plus portable ZIP — portable ZIP done; no MSI/installer built.
+3. ✅ Publish SHA-256 checksums and an SBOM.
+4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
+5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
 
 ## Product positioning
 

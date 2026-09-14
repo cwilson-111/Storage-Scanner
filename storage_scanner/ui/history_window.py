@@ -15,6 +15,7 @@ from history import (
     save_scan_snapshot,
 )
 from storage_scanner.anomaly_detection import detect_size_anomalies
+from storage_scanner.budgets import check_budget_for_path
 from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
@@ -23,7 +24,7 @@ from storage_scanner.settings import COLORS, FONT_BOLD
 
 
 class HistoryMixin:
-    def _finish_history_save(self, current_scan_id, previous_scan_id, growth_rows):
+    def _finish_history_save(self, current_scan_id, previous_scan_id, growth_rows, budget_breach):
         """
         Runs on the Tkinter UI thread after the background history save finishes.
         """
@@ -39,6 +40,9 @@ class HistoryMixin:
             self.status_var.set(
                 "Scan complete. History saved. Scan the same path again to calculate growth."
             )
+
+        if budget_breach:
+            self._show_budget_banner([budget_breach])
     def _history_save_failed(self, exc):
         """
         Runs on the Tkinter UI thread if history saving fails.
@@ -78,12 +82,15 @@ class HistoryMixin:
                     limit=50,
                 )
 
+            budget_breach = check_budget_for_path(scan_path, node.size)
+
             self.root.after(
                 0,
                 lambda: self._finish_history_save(
                     current_scan_id,
                     previous_scan_id,
                     growth_rows,
+                    budget_breach,
                 )
             )
 

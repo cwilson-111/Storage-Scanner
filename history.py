@@ -120,6 +120,14 @@ def init_history_db():
         ON audit_log(created_at)
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            threshold_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
 
     conn.commit()
     conn.close()
@@ -452,6 +460,61 @@ def get_audit_log(limit=500):
     conn.close()
 
     return rows
+
+
+def set_budget(path, threshold_bytes):
+    """Create or update the size budget for `path` (upsert, one per path)."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    created_at = datetime.now().isoformat(timespec="seconds")
+
+    cur.execute("""
+        INSERT INTO budgets (path, threshold_bytes, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET threshold_bytes = excluded.threshold_bytes
+    """, (path, threshold_bytes, created_at))
+
+    conn.commit()
+    conn.close()
+
+
+def list_budgets():
+    """Every defined budget: [(id, path, threshold_bytes, created_at), ...]."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT id, path, threshold_bytes, created_at FROM budgets ORDER BY path")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def delete_budget(budget_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_latest_scan_snapshot(scan_path):
+    """(created_at, total_size, file_count, folder_count) for the most
+    recent scan of `scan_path`, or None if it's never been scanned.
+
+    Distinct from get_scan_history() (oldest-first, for charting a whole
+    trend) — this is the single latest data point, for budget checks.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT created_at, total_size, file_count, folder_count
+        FROM scans
+        WHERE scan_path = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (scan_path,))
+    row = cur.fetchone()
+    conn.close()
+    return row
 
 
 def format_bytes(num):

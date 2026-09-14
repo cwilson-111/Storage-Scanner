@@ -13,9 +13,10 @@ import subprocess
 import threading
 from tkinter import (
     BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
-    filedialog, messagebox, ttk,
+    filedialog, messagebox, simpledialog, ttk,
 )
 
+from history import set_budget
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
 from storage_scanner.formatting import bar, human_size
@@ -24,6 +25,7 @@ from storage_scanner.platform_support import (
     FILE_MANAGER_NAME, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
 )
 from storage_scanner.scanner import scan
+from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
 
@@ -89,6 +91,7 @@ class MainWindowMixin:
         history_menu = Menu(self.tools_menu, tearoff=0)
         history_menu.add_command(label="Growth History", command=self.show_growth_history)
         history_menu.add_command(label="Audit Log", command=self.show_audit_log)
+        history_menu.add_command(label="Storage Budgets", command=self.show_budgets)
         self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
 
         self.top_count_var = StringVar(value="25")
@@ -171,6 +174,7 @@ class MainWindowMixin:
         self.menu = Menu(self.root, tearoff=0)
         self.menu.add_command(label=f"Open in {FILE_MANAGER_NAME}", command=self._open_in_explorer)
         self.menu.add_command(label="Copy path", command=self._copy_path)
+        self.menu.add_command(label="Set Budget…", command=self._set_budget_for_selected)
         self.menu.add_separator()
         self.menu.add_command(label=f"Delete (to {TRASH_NAME})",
                               command=self._delete_selected)
@@ -686,5 +690,37 @@ class MainWindowMixin:
         if node:
             self.root.clipboard_clear()
             self.root.clipboard_append(node.path)
+    def _set_budget_for_selected(self):
+        node = self._selected_node()
+        if not node:
+            return
+        if not node.is_dir:
+            messagebox.showinfo("Storage Scanner", "Budgets apply to folders, not individual files.")
+            return
+
+        response = simpledialog.askstring(
+            "Set Budget",
+            f"Alert when this folder's size exceeds a threshold.\n\n"
+            f"{node.path}\nCurrently: {human_size(node.size)}\n\n"
+            f"Enter a threshold (e.g. 50GB, 500MB):",
+            parent=self.root,
+        )
+        if not response or not response.strip():
+            return
+
+        try:
+            threshold_bytes = parse_size(response)
+        except ValueError as exc:
+            messagebox.showerror("Storage Scanner", str(exc))
+            return
+        if not threshold_bytes:
+            messagebox.showerror("Storage Scanner", "Enter a size, e.g. 50GB.")
+            return
+
+        normalized = os.path.normcase(os.path.normpath(node.path))
+        set_budget(normalized, threshold_bytes)
+        self.status_var.set(
+            f"Budget set: {node.path} → alert above {human_size(threshold_bytes)}"
+        )
 
     # -- Top 25 largest files --------------------------------------------- #
