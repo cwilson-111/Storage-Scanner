@@ -7,51 +7,65 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.file_ops import relaunch_elevated_macos, relaunch_elevated_windows
+from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
 
 
 class _FakeCompletedProcess:
-    def __init__(self, returncode):
+    def __init__(self, returncode, stdout="", stderr=""):
         self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
-def test_relaunch_builds_osascript_with_administrator_privileges(monkeypatch):
+def test_elevated_scan_builds_osascript_with_administrator_privileges(monkeypatch):
     captured = {}
 
-    def fake_run(args, capture_output=False):
+    def fake_run(args, capture_output=False, text=False):
         captured["args"] = args
-        return _FakeCompletedProcess(0)
+        return _FakeCompletedProcess(0, stdout='{"ok": true}')
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
 
-    assert relaunch_elevated_macos("/Users/test/Documents") is True
+    ok, output = run_elevated_scan_macos("/Users/test/Documents")
 
+    assert ok is True
+    assert output == '{"ok": true}'
     assert captured["args"][0] == "osascript"
     assert captured["args"][1] == "-e"
     script = captured["args"][2]
     assert "with administrator privileges" in script
     assert sys.executable in script
     assert "/Users/test/Documents" in script
-    assert script.rstrip().endswith('&"') or "&" in script
+    # Runs to completion in the foreground (no `&`/nohup): this is a
+    # headless scan whose stdout `do shell script` needs to hand back, not
+    # a GUI relaunch that has to survive past the auth session tearing down.
+    assert "--priv-scan" in script
+    assert "&" not in script
+    assert "nohup" not in script
 
 
-def test_relaunch_returns_false_when_authorization_is_cancelled(monkeypatch):
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeCompletedProcess(1))
-    assert relaunch_elevated_macos() is False
+def test_elevated_scan_returns_false_when_authorization_is_cancelled(monkeypatch):
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess(1, stderr="128:User canceled."),
+    )
+    ok, output = run_elevated_scan_macos("/Users/test")
+    assert ok is False
+    assert "canceled" in output.lower()
 
 
-def test_relaunch_uses_bare_executable_when_frozen(monkeypatch):
+def test_elevated_scan_uses_bare_executable_when_frozen(monkeypatch):
     captured = {}
 
-    def fake_run(args, capture_output=False):
+    def fake_run(args, capture_output=False, text=False):
         captured["args"] = args
-        return _FakeCompletedProcess(0)
+        return _FakeCompletedProcess(0, stdout="{}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
-    relaunch_elevated_macos()
+    run_elevated_scan_macos("/Users/test")
 
     script = captured["args"][2]
     # Frozen (PyInstaller) builds relaunch the bundled executable itself,
@@ -60,18 +74,18 @@ def test_relaunch_uses_bare_executable_when_frozen(monkeypatch):
     assert script.count(sys.executable) == 1
 
 
-def test_relaunch_handles_paths_with_spaces_and_quotes(monkeypatch):
+def test_elevated_scan_handles_paths_with_spaces_and_quotes(monkeypatch):
     captured = {}
 
-    def fake_run(args, capture_output=False):
+    def fake_run(args, capture_output=False, text=False):
         captured["args"] = args
-        return _FakeCompletedProcess(0)
+        return _FakeCompletedProcess(0, stdout="{}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
 
     tricky_path = '/Users/test/My "Big" Folder'
-    relaunch_elevated_macos(tricky_path)
+    run_elevated_scan_macos(tricky_path)
 
     # Must not raise, and must produce a script osascript can still parse
     # (embedded double quotes escaped for the outer AppleScript string).

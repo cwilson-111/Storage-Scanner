@@ -10,13 +10,17 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import (
-    BOTH, BOTTOM, E, END, LEFT, RIGHT, TOP, Toplevel, W, X, messagebox, ttk,
+    BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, Toplevel, W, X,
+    messagebox, ttk,
 )
 
-from storage_scanner.file_ops import recycle
+from storage_scanner.cleanup_recommendations import keeper_reason, pick_keeper
+from storage_scanner.audit import recycle_and_log
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
-from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
+from storage_scanner.platform_support import (
+    FILE_MANAGER_NAME, IS_MACOS, TRASH_NAME, resource_path,
+)
 from storage_scanner.settings import COLORS, DEFAULT_DUPLICATE_EXCLUDES
 
 
@@ -145,7 +149,11 @@ class DuplicatesMixin:
 
             else:
                 if node.size > 0:
-                    if self._should_skip_duplicate_scan(node.path):
+                    # Cloud placeholders (OneDrive Files On-Demand, etc.)
+                    # report their full logical size but aren't actually on
+                    # local disk — hashing one would force Windows to
+                    # download it just to compare it. Skip them entirely.
+                    if self._should_skip_duplicate_scan(node.path) or node.is_cloud_placeholder:
                         self.dup_stats["files_skipped"] += 1
                         self.dup_stats["bytes_skipped"] += node.size
 
@@ -491,18 +499,20 @@ class DuplicatesMixin:
         frame = ttk.Frame(win, padding=(10, 0, 10, 10))
         frame.pack(fill=BOTH, expand=True)
 
-        cols = ("group", "size", "copies", "path")
+        cols = ("group", "role", "size", "copies", "path")
         tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
 
         tv.heading("group", text="Group")
+        tv.heading("role", text="Role")
         tv.heading("size", text="Size")
         tv.heading("copies", text="Copies")
         tv.heading("path", text="Path")
 
-        tv.column("group", width=70, anchor=E, stretch=False)
-        tv.column("size", width=110, anchor=E, stretch=False)
-        tv.column("copies", width=70, anchor=E, stretch=False)
-        tv.column("path", width=700, anchor=W, stretch=True)
+        tv.column("group", width=60, anchor=E, stretch=False)
+        tv.column("role", width=80, anchor=W, stretch=False)
+        tv.column("size", width=100, anchor=E, stretch=False)
+        tv.column("copies", width=60, anchor=E, stretch=False)
+        tv.column("path", width=620, anchor=W, stretch=True)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
@@ -518,30 +528,108 @@ class DuplicatesMixin:
         tv.tag_configure("keep", foreground=COLORS["accent2"])
         tv.tag_configure("dupe", foreground=COLORS["fg"])
 
+        # Per-group state, so the keeper can be re-picked interactively (via
+        # right-click) and always excluded from deletion — this is what
+        # actually guarantees at least one copy survives per group, not just
+        # a warning label asking the user to be careful.
         iid_to_node = {}
+        iid_to_group = {}
+        group_nodes = {}       # group_num -> [nodes...]
+        group_keeper_iid = {}  # group_num -> iid currently marked "keep"
+
+        details_var = StringVar(value="Select a row to see why it was flagged.")
+
+        def _row_values(group_num, node, size, total_copies, role):
+            copy_index = group_nodes[group_num].index(node) + 1
+            return (group_num, role, human_size(size), f"{copy_index}/{total_copies}", node.path)
 
         row_index = 0
         for group_num, (size, _digest, nodes) in enumerate(duplicates, start=1):
-            # Sort shortest path first; usually the "original" is easier to inspect.
             nodes = sorted(nodes, key=lambda n: n.path.lower())
+            group_nodes[group_num] = nodes
+            keeper = pick_keeper(nodes)
 
-            for copy_index, node in enumerate(nodes, start=1):
-                tag_type = "keep" if copy_index == 1 else "dupe"
+            for node in nodes:
+                is_keeper = node is keeper
+                tag_type = "keep" if is_keeper else "dupe"
                 stripe = "odd" if row_index % 2 else "even"
 
                 iid = tv.insert(
-                    "",
-                    END,
-                    values=(
-                        group_num,
-                        human_size(size),
-                        f"{copy_index}/{len(nodes)}",
-                        node.path,
+                    "", END,
+                    values=_row_values(
+                        group_num, node, size, len(nodes),
+                        "Keeper" if is_keeper else "Duplicate",
                     ),
                     tags=(tag_type, stripe),
                 )
                 iid_to_node[iid] = node
+                iid_to_group[iid] = group_num
+                if is_keeper:
+                    group_keeper_iid[group_num] = iid
                 row_index += 1
+
+        def make_keeper(iid):
+            group_num = iid_to_group.get(iid)
+            node = iid_to_node.get(iid)
+            if group_num is None or node is None:
+                return
+            old_keeper_iid = group_keeper_iid.get(group_num)
+            if old_keeper_iid == iid:
+                return
+
+            if old_keeper_iid and tv.exists(old_keeper_iid):
+                tv.item(old_keeper_iid, tags=(
+                    "dupe", tv.item(old_keeper_iid, "tags")[1],
+                ))
+                tv.set(old_keeper_iid, "role", "Duplicate")
+
+            tv.item(iid, tags=("keep", tv.item(iid, "tags")[1]))
+            tv.set(iid, "role", "Keeper")
+            group_keeper_iid[group_num] = iid
+            details_var.set(
+                f"Manually set as keeper for group {group_num}. "
+                f"The previous keeper is now a regular duplicate."
+            )
+
+        def show_row_reason(iid):
+            group_num = iid_to_group.get(iid)
+            node = iid_to_node.get(iid)
+            if group_num is None or node is None:
+                return
+            nodes = group_nodes[group_num]
+            keeper_iid = group_keeper_iid.get(group_num)
+            keeper = iid_to_node.get(keeper_iid, node)
+            if iid == keeper_iid:
+                details_var.set(f"Kept: {keeper_reason(keeper, nodes)}")
+            else:
+                details_var.set(f"Duplicate of the keeper ({keeper.path}).")
+
+        tv.bind("<<TreeviewSelect>>", lambda _e: show_row_reason(tv.focus()))
+
+        # Right-click: let the user override which copy in a group is kept,
+        # instead of only ever trusting the automatic heuristic.
+        row_menu = Menu(win, tearoff=0)
+
+        def show_row_menu(event):
+            iid = tv.identify_row(event.y)
+            if not iid:
+                return
+            tv.selection_set(iid)
+            tv.focus(iid)
+            row_menu.delete(0, END)
+            if group_keeper_iid.get(iid_to_group.get(iid)) != iid:
+                row_menu.add_command(
+                    label="Make this the keeper", command=lambda: make_keeper(iid),
+                )
+            else:
+                row_menu.add_command(label="This copy is already the keeper", state="disabled")
+            row_menu.tk_popup(event.x_root, event.y_root)
+
+        tv.bind("<Button-2>" if IS_MACOS else "<Button-3>", show_row_menu)
+
+        ttk.Label(
+            win, textvariable=details_var, style="Accent.TLabel", padding=(10, 4),
+        ).pack(side=BOTTOM, fill=X)
 
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
         button_bar.pack(side=BOTTOM, fill=X)
@@ -561,16 +649,32 @@ class DuplicatesMixin:
 
         def delete_selected_duplicates():
             selected = list(tv.selection())
-            nodes = [iid_to_node[iid] for iid in selected if iid in iid_to_node]
+            keeper_iids = set(group_keeper_iid.values())
+            # The keeper in each group is never a valid deletion target,
+            # even if selected (e.g. via select-all) — this is what actually
+            # guarantees at least one copy survives per group.
+            targets = [
+                iid for iid in selected
+                if iid in iid_to_node and iid not in keeper_iids
+            ]
+            skipped_keepers = len(selected) - len(targets)
 
-            if not nodes:
+            if not targets:
+                messagebox.showinfo(
+                    "Storage Scanner",
+                    "Select at least one duplicate copy that isn't a group's keeper.",
+                    parent=win,
+                )
                 return
 
+            note = (
+                f" ({skipped_keepers} selected keeper file(s) were skipped — "
+                "keepers are protected and can't be deleted here.)"
+                if skipped_keepers else ""
+            )
             if not messagebox.askyesno(
                 "Delete selected duplicates",
-                f"Send {len(nodes)} selected file(s) to the {TRASH_NAME}?\n\n"
-                "Warning: this does not automatically protect one copy per group. "
-                "Only delete files you intentionally selected.",
+                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}",
                 icon="warning",
                 parent=win,
             ):
@@ -579,14 +683,15 @@ class DuplicatesMixin:
             deleted_count = 0
             failed = []
 
-            for iid in selected:
+            for iid in targets:
                 node = iid_to_node.get(iid)
                 if not node:
                     continue
 
-                if recycle(node.path):
+                if recycle_and_log(node, source="Duplicate Files"):
                     deleted_count += 1
                     iid_to_node.pop(iid, None)
+                    iid_to_group.pop(iid, None)
                     tv.delete(iid)
                     self._remove_node_from_scan_tree(node)
                 else:

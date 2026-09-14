@@ -7,6 +7,7 @@ try:
 except ImportError:  # pragma: no cover - optional runtime dependency
     plt = None
 
+import logging
 import sys
 import os
 from pathlib import Path
@@ -23,7 +24,15 @@ APP_DATA_DIR = _APP_DATA_BASE / APP_NAME
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_NAME = APP_DATA_DIR / "storage_history.db"
 
-print(f"Using database: {DB_NAME}")
+# A bare `print` here used to go to stdout unconditionally — harmless for a
+# normal GUI launch, but it corrupts the `--priv-scan` helper's JSON output,
+# which `do shell script` captures as its literal return value (see
+# storage_scanner/file_ops.py's run_elevated_scan_macos). Logging instead
+# keeps stdout clean for whichever process actually needs it. Using the
+# stdlib logging module directly (not storage_scanner.logging_setup.logger)
+# avoids a circular import: logging_setup itself imports APP_DATA_DIR from
+# this module — both name the same "storage_scanner" logger either way.
+logging.getLogger("storage_scanner").debug("Using database: %s", DB_NAME)
 
 def init_history_db():
     
@@ -78,6 +87,20 @@ def init_history_db():
     
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            action TEXT NOT NULL,
+            path TEXT NOT NULL,
+            is_dir INTEGER NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            success INTEGER NOT NULL,
+            error_message TEXT
+        )
+    """)
+
+    cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_scans_path
         ON scans(scan_path)
     """)
@@ -90,6 +113,11 @@ def init_history_db():
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_folder_path
         ON folder_snapshots(folder_path)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_audit_created_at
+        ON audit_log(created_at)
     """)
 
 
@@ -177,6 +205,30 @@ def get_latest_scan_id(scan_path):
     conn.close()
 
     return row[0] if row else None
+
+def list_scans_for_path(scan_path, limit=200):
+    """All saved scans of `scan_path`, most recent first.
+
+    Feeds the snapshot-comparison picker: `get_folder_growth` and
+    `get_growth_summary` already accept any two scan ids (not just
+    "latest"/"previous"), so the UI just needs a list to choose from.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, created_at, total_size, file_count
+        FROM scans
+        WHERE scan_path = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (scan_path, limit))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
 
 def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     conn = sqlite3.connect(DB_NAME)
@@ -331,37 +383,52 @@ def get_scan_history(scan_path, limit=30):
 
     return rows
 
-def estimate_days_until_full(scan_path, drive_capacity_bytes):
-    history = get_scan_history(scan_path)
 
-    if len(history) < 2:
-        return None
+def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_message=None):
+    """Record one deletion/recycle action to the audit ledger.
 
-    first_date = datetime.fromisoformat(history[0][0])
-    first_size = history[0][1]
+    This is the durable record of "what did this app remove, when, and
+    from where" — every deletion path in the app (main tree, Search &
+    Filter, Duplicate Files, Cleanup Recommendations) writes here via
+    storage_scanner.audit.recycle_and_log, regardless of which window
+    triggered it.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
 
-    last_date = datetime.fromisoformat(history[-1][0])
-    last_size = history[-1][1]
+    created_at = datetime.now().isoformat(timespec="seconds")
 
-    days_elapsed = (last_date - first_date).days
+    cur.execute("""
+        INSERT INTO audit_log
+        (created_at, source, action, path, is_dir, size_bytes, success, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (created_at, source, action, path, int(bool(is_dir)), int(size_bytes),
+          int(bool(success)), error_message))
 
-    if days_elapsed <= 0:
-        return None
+    entry_id = cur.lastrowid
+    conn.commit()
+    conn.close()
 
-    growth_bytes = last_size - first_size
-    daily_growth = growth_bytes / days_elapsed
+    return entry_id
 
-    if daily_growth <= 0:
-        return None
 
-    remaining_bytes = drive_capacity_bytes - last_size
+def get_audit_log(limit=500):
+    """Every recorded audit entry, most recent first."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
 
-    if remaining_bytes <= 0:
-        return 0
+    cur.execute("""
+        SELECT created_at, source, action, path, is_dir, size_bytes, success, error_message
+        FROM audit_log
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (limit,))
 
-    days_until_full = remaining_bytes / daily_growth
+    rows = cur.fetchall()
+    conn.close()
 
-    return round(days_until_full)
+    return rows
+
 
 def format_bytes(num):
     for unit in ["B", "KB", "MB", "GB", "TB"]:

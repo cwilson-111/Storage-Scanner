@@ -4,15 +4,18 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
 import os
-from tkinter import BOTH, E, END, TOP, Toplevel, W, X, ttk
+from tkinter import BOTH, E, END, LEFT, RIGHT, StringVar, TOP, Toplevel, W, X, ttk
 
 from history import (
-    estimate_days_until_full,
     get_folder_growth,
     get_growth_summary,
     get_previous_scan_id,
+    get_scan_history,
+    list_scans_for_path,
     save_scan_snapshot,
 )
+from storage_scanner.anomaly_detection import detect_size_anomalies
+from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
@@ -105,6 +108,79 @@ class HistoryMixin:
         if value is None:
             return "—"
         return f"{value:+.1f}%"
+    def _format_forecast(self, forecast):
+        """Render a Forecast namedtuple as one line — a range and an
+        explicit confidence level, never a single number presented as
+        certain (per the roadmap's own caution about forecasting)."""
+        if forecast.status == "insufficient_data":
+            return (
+                f"Forecast: not enough history yet "
+                f"({forecast.data_points}/3 scans needed)"
+            )
+        if forecast.status == "not_growing":
+            return "Forecast: not growing — no fill date to estimate"
+        if forecast.days_estimate == 0:
+            return "Forecast: drive is already full or over capacity"
+
+        spread = forecast.days_pessimistic
+        if spread is None or forecast.days_optimistic == spread:
+            range_text = f"~{forecast.days_estimate:,} days"
+        else:
+            lo, hi = sorted([forecast.days_optimistic, spread])
+            range_text = f"~{lo:,}–{hi:,} days"
+
+        return (
+            f"Forecast: full in {range_text} "
+            f"({forecast.confidence} confidence, {forecast.data_points} scans "
+            f"over {forecast.span_days:,.0f} days, R²={forecast.r_squared:.2f})"
+        )
+    def _build_anomalies_tab(self, frame, anomalies, history_count):
+        """Populate the Anomalies tab: scan-to-scan size changes that were
+        statistical outliers for this path's own history (see
+        storage_scanner.anomaly_detection) — a lead worth checking, not a
+        diagnosis."""
+        if history_count < 4:
+            ttk.Label(
+                frame,
+                text=(
+                    f"Not enough scan history yet to detect anomalies "
+                    f"({history_count}/4 scans needed)."
+                ),
+            ).pack(side=TOP, anchor=W)
+            return
+
+        cols = ("date", "kind", "change")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+        tv.heading("date", text="Date")
+        tv.heading("kind", text="Type")
+        tv.heading("change", text="What happened")
+        tv.column("date", width=140, anchor=W, stretch=False)
+        tv.column("kind", width=80, anchor=W, stretch=False)
+        tv.column("change", width=560, anchor=W, stretch=True)
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+        tv.tag_configure("spike", foreground=COLORS["accent"])
+        tv.tag_configure("drop", foreground="#39ff14")
+
+        if not anomalies:
+            tv.insert("", END, values=("—", "—", "No anomalies detected in this path's history."))
+            return
+
+        for index, anomaly in enumerate(anomalies):
+            date_text = anomaly.created_at.split("T")[0]
+            tv.insert(
+                "", END,
+                values=(date_text, anomaly.kind.capitalize(), anomaly.message),
+                tags=(anomaly.kind, "odd" if index % 2 else "even"),
+            )
     def _summarize_folder_change(self, row):
         if not row:
             return "—"
@@ -116,15 +192,28 @@ class HistoryMixin:
         return f"{os.path.basename(folder_path)} — {human_size(growth_bytes)} ({percent_text})"
 
     # -- Show Growth Function ---------------------------------------------- #
-    def show_growth_history(self):
+    def show_growth_history(self, compare_a_id=None, compare_b_id=None):
+        """Show the Growth History window, comparing two arbitrary snapshots.
+
+        Defaults to the most recent scan vs. the one before it (the normal
+        post-scan case); the picker at the top of the window lets the user
+        instead pick any two saved snapshots of this path and re-render.
+        """
         if not self.root_node:
             return
 
-        rows = getattr(self, "last_growth_rows", [])
-        summary = get_growth_summary(
-            self.last_scan_id,
-            self.last_previous_scan_id,
-        )
+        scan_path = os.path.normcase(os.path.normpath(self.root_node.path))
+        scan_choices = list_scans_for_path(scan_path)  # [(id, created_at, size, files), ...]
+
+        newer_id = compare_a_id if compare_a_id is not None else self.last_scan_id
+        older_id = compare_b_id if compare_b_id is not None else self.last_previous_scan_id
+
+        if compare_a_id is not None or compare_b_id is not None:
+            summary = get_growth_summary(newer_id, older_id)
+            rows = get_folder_growth(newer_id, older_id, limit=50) if older_id else []
+        else:
+            rows = getattr(self, "last_growth_rows", [])
+            summary = get_growth_summary(newer_id, older_id)
 
         existing = getattr(self, "_growth_win", None)
         if existing is not None and existing.winfo_exists():
@@ -142,14 +231,9 @@ class HistoryMixin:
             logger.debug("Growth History window iconbitmap failed", exc_info=True)
 
         drive_capacity = self._get_drive_capacity_bytes(self.root_node.path)
-        days_until_full = estimate_days_until_full(self.root_node.path, drive_capacity)
-
-        if days_until_full is None:
-            forecast_text = "Forecast: not enough history yet"
-        elif days_until_full == 0:
-            forecast_text = "Forecast: drive is full or over capacity"
-        else:
-            forecast_text = f"Forecast: estimated full in {days_until_full:,} days"
+        full_history = get_scan_history(scan_path, limit=200)
+        forecast = forecast_days_until_full(full_history, drive_capacity)
+        forecast_text = self._format_forecast(forecast)
 
         ttk.Label(
             win,
@@ -161,13 +245,22 @@ class HistoryMixin:
             ),
         ).pack(side=TOP, fill=X)
 
+        self._build_snapshot_picker(win, scan_path, scan_choices, newer_id, older_id)
+
         notebook = ttk.Notebook(win)
         notebook.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
 
         summary_frame = ttk.Frame(notebook, padding=10)
         details_frame = ttk.Frame(notebook, padding=10)
+        anomalies_frame = ttk.Frame(notebook, padding=10)
         notebook.add(summary_frame, text="Summary")
         notebook.add(details_frame, text="Growth Details")
+        anomaly_list = detect_size_anomalies(full_history)
+        notebook.add(
+            anomalies_frame,
+            text=f"Anomalies ({len(anomaly_list)})" if anomaly_list else "Anomalies",
+        )
+        self._build_anomalies_tab(anomalies_frame, anomaly_list, len(full_history))
 
         overview = ttk.LabelFrame(summary_frame, text="Overview", padding=10)
         overview.pack(fill=X, pady=(0, 10))
@@ -328,6 +421,50 @@ class HistoryMixin:
                 ),
                 tags=(status_tag, stripe),
             )
+    def _build_snapshot_picker(self, win, scan_path, scan_choices, newer_id, older_id):
+        """Let the user pick any two saved snapshots of this path to compare,
+        instead of only ever seeing the two most recent (roadmap: 'compare
+        any two snapshots, not only the latest two')."""
+        picker = ttk.LabelFrame(win, text="Compare snapshots", padding=(10, 6))
+        picker.pack(side=TOP, fill=X, padx=10, pady=(0, 6))
+
+        if len(scan_choices) < 2:
+            ttk.Label(
+                picker,
+                text="Scan this path again at a later date to unlock snapshot comparison.",
+            ).pack(side=LEFT)
+            return
+
+        label_by_id = {
+            scan_id: f"{created_at.replace('T', ' ')}  —  "
+                     f"{human_size(total_size)}, {file_count:,} files"
+            for scan_id, created_at, total_size, file_count in scan_choices
+        }
+        id_by_label = {label: scan_id for scan_id, label in label_by_id.items()}
+        labels = list(id_by_label.keys())  # already newest-first from list_scans_for_path
+
+        ttk.Label(picker, text="Compare to:").pack(side=LEFT)
+        newer_var = StringVar(value=label_by_id.get(newer_id, labels[0]))
+        newer_combo = ttk.Combobox(
+            picker, textvariable=newer_var, values=labels, state="readonly", width=42,
+        )
+        newer_combo.pack(side=LEFT, padx=(4, 12))
+
+        ttk.Label(picker, text="Baseline:").pack(side=LEFT)
+        older_var = StringVar(value=label_by_id.get(older_id, labels[min(1, len(labels) - 1)]))
+        older_combo = ttk.Combobox(
+            picker, textvariable=older_var, values=labels, state="readonly", width=42,
+        )
+        older_combo.pack(side=LEFT, padx=(4, 12))
+
+        def do_compare():
+            self.show_growth_history(
+                compare_a_id=id_by_label[newer_var.get()],
+                compare_b_id=id_by_label[older_var.get()],
+            )
+
+        ttk.Button(picker, text="Compare", command=do_compare).pack(side=RIGHT)
+
     # -- Duplicate file finder --------------------------------------------- #
     def _collect_folder_sizes_for_history(self, root_node):
         """

@@ -73,32 +73,59 @@ def recycle(path):
     return _recycle_windows(path)
 
 
-def relaunch_elevated_macos(initial_path=None):
-    """Relaunch this app as root via the native macOS admin-password prompt.
+def open_trash():
+    """Open the platform Recycle Bin / Trash in the file manager, so a user
+    reading the audit log can go find/restore something themselves. Pure
+    stdlib: Windows' Recycle Bin is a virtual shell folder, not a real
+    filesystem path `os.startfile` can open directly.
+    """
+    try:
+        if IS_MACOS:
+            subprocess.run(["open", os.path.expanduser("~/.Trash")], check=True)
+        else:
+            subprocess.run(["explorer.exe", "shell:RecycleBinFolder"], check=True)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
 
-    Uses `osascript ... with administrator privileges`, which shows the
-    standard system authorization dialog — no bundled helper tool or extra
-    dependency required. The new process is started detached (backgrounded
-    inside the privileged shell command) so this call returns as soon as
-    the user approves or cancels the prompt.
 
-    Returns True if the elevated process was launched (the caller should
-    exit so only one instance is scanning), False if the user cancelled the
-    prompt or authorization otherwise failed.
+def run_elevated_scan_macos(path):
+    """Scan `path` with root filesystem access via the admin-password prompt.
+
+    Relaunching the *whole* GUI as root doesn't work on macOS: `do shell
+    script ... with administrator privileges` runs the child through the
+    Security framework's authorization trampoline, which detaches it from
+    the caller's window-server connection as part of its privilege
+    separation — a Tk window it tries to open there just never appears (an
+    earlier attempt at this only got as far as discovering the process also
+    got SIGHUP-killed once the auth session tore down; even after fixing
+    that with `nohup`, the window still couldn't show, because losing the
+    window-server connection is the deeper, unfixable-that-way problem).
+
+    So only a *headless* scan (`--priv-scan`) ever runs as root: it walks
+    the tree with elevated access and prints the resulting tree as JSON,
+    which `do shell script` hands back as its own return value — no window
+    needed. The still-running, still-visible GUI process (as the normal
+    user) reads that JSON back and displays it like any other scan result.
+
+    Returns (True, json_text) on success, (False, error_message) if
+    authorization was cancelled/failed or the scan itself errored.
     """
     if getattr(sys, "frozen", False):
-        args = [sys.executable]
+        args = [sys.executable, "--priv-scan", path]
     else:
-        args = [sys.executable, os.path.abspath(sys.argv[0])]
-    if initial_path:
-        args.append(initial_path)
+        args = [sys.executable, os.path.abspath(sys.argv[0]), "--priv-scan", path]
 
-    shell_cmd = " ".join(shlex.quote(a) for a in args) + " > /dev/null 2>&1 &"
-    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    quoted = " ".join(shlex.quote(a) for a in args)
+    escaped = quoted.replace("\\", "\\\\").replace('"', '\\"')
     apple_script = f'do shell script "{escaped}" with administrator privileges'
 
-    result = subprocess.run(["osascript", "-e", apple_script], capture_output=True)
-    return result.returncode == 0
+    result = subprocess.run(
+        ["osascript", "-e", apple_script], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return False, (result.stderr or "Authorization was cancelled or failed.").strip()
+    return True, result.stdout
 
 
 def relaunch_elevated_windows(initial_path=None):

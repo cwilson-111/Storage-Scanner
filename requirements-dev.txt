@@ -1,6 +1,12 @@
-# Build-time only. TreeSize itself has no third-party runtime dependencies.
+# Build-time only. Storage Scanner itself has no third-party runtime
+# dependencies (matplotlib is optional, used only for growth-history charts).
 pyinstaller>=6.0
 
 # Only needed to regenerate the app icon via make_icon.py (icon.ico is
 # already committed, so this is not required just to build the .exe).
 pillow>=10.0
+
+# Needed to run the test suite (pytest tests/) and lint for undefined
+# names/unused imports (python -m pyflakes storage_scanner/ tests/).
+pytest>=8.0
+pyflakes>=3.0

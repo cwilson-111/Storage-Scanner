@@ -1,12 +1,66 @@
 """The core concurrent directory-scanning engine."""
 
+import ctypes
 import os
 import queue
 import stat
+import sys
 import threading
 
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import Node
+
+_IS_WINDOWS = sys.platform == "win32"
+
+# OneDrive Files On-Demand (and similar cloud-sync clients) mark an
+# online-only placeholder with these attribute bits; the file's normal name
+# and full logical size are still visible, but almost nothing is allocated
+# on local disk until it's opened. FILE_ATTRIBUTE_OFFLINE covers older
+# HSM/cloud-sync tools that predate Files On-Demand.
+_FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
+_FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
+_FILE_ATTRIBUTE_OFFLINE = 0x00001000
+_CLOUD_PLACEHOLDER_ATTRS = (
+    _FILE_ATTRIBUTE_RECALL_ON_OPEN
+    | _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+    | _FILE_ATTRIBUTE_OFFLINE
+)
+
+_INVALID_FILE_SIZE = 0xFFFFFFFF
+
+
+def _windows_alloc_size(path, fallback):
+    """Actual on-disk bytes for `path`, accounting for NTFS compression and
+    sparse files — logical `st_size` alone overstates disk usage for both.
+
+    Uses GetCompressedFileSizeW (stdlib ctypes, no extra dependency). Falls
+    back to `fallback` (the logical size) if the call fails for any reason
+    (permissions, exotic filesystem, etc.) — better an approximate number
+    than a crashed scan.
+    """
+    try:
+        low = ctypes.windll.kernel32.GetCompressedFileSizeW(path, None)
+        if low == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
+            return fallback
+        # High 32 bits aren't retrievable without a second out-param this
+        # call doesn't use; files large enough for that to matter are rare
+        # enough here that the logical size fallback is an acceptable trade.
+        return low
+    except OSError:
+        return fallback
+
+
+def _measure_alloc_size(path, st_info):
+    """Actual on-disk bytes for a file, cross-platform.
+
+    POSIX systems already report this directly via `st_blocks` (512-byte
+    units) — that alone correctly reflects sparse files. Windows has no
+    such field, so it needs its own API call.
+    """
+    if _IS_WINDOWS:
+        return _windows_alloc_size(path, st_info.st_size)
+    st_blocks = getattr(st_info, "st_blocks", None)
+    return st_blocks * 512 if st_blocks is not None else st_info.st_size
 
 
 def _worker_count():
@@ -42,7 +96,13 @@ def scan(path, progress_q, cancel_event, workers=None):
 
     if not root.is_dir:
         try:
-            root.size = os.path.getsize(path)
+            st_info = os.stat(path)
+            root.size = st_info.st_size
+            root.alloc_size = _measure_alloc_size(path, st_info)
+            root.mtime = st_info.st_mtime
+            root.atime = st_info.st_atime
+            attrs = getattr(st_info, "st_file_attributes", 0)
+            root.is_cloud_placeholder = bool(attrs & _CLOUD_PLACEHOLDER_ATTRS)
             root.file_count = 1
         except OSError:
             root.error = True
@@ -83,18 +143,24 @@ def scan(path, progress_q, cancel_event, workers=None):
             # traversed: their target may already be scanned elsewhere (or
             # loop back into this tree), which would double-count size or
             # recurse forever. They're recorded as a leaf instead.
-            is_reparse = bool(
-                st_info is not None
-                and getattr(st_info, "st_file_attributes", 0)
-                & stat.FILE_ATTRIBUTE_REPARSE_POINT
-            )
+            attrs = getattr(st_info, "st_file_attributes", 0) if st_info is not None else 0
+            is_reparse = bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            is_placeholder = bool(attrs & _CLOUD_PLACEHOLDER_ATTRS)
             try:
                 is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse
             except OSError:
                 is_dir = False
 
             child = Node(entry.path, entry.name, is_dir)
-            child.is_link = is_reparse
+            # A cloud placeholder file can also carry the reparse-point bit
+            # (OneDrive Files On-Demand uses IO_REPARSE_TAG_CLOUD) — treat it
+            # as a placeholder, not a symlink/junction, so it renders and
+            # sorts like the real file it represents rather than a link.
+            child.is_link = is_reparse and not is_placeholder
+            child.is_cloud_placeholder = is_placeholder
+            if st_info is not None:
+                child.mtime = st_info.st_mtime
+                child.atime = st_info.st_atime
             node.children.append(child)  # only this worker touches node.children
 
             if is_dir:
@@ -104,6 +170,7 @@ def scan(path, progress_q, cancel_event, workers=None):
                     child.error = True
                 else:
                     size = st_info.st_size
+                    alloc_size = _measure_alloc_size(entry.path, st_info)
                     ino = getattr(st_info, "st_ino", 0)
                     nlink = getattr(st_info, "st_nlink", 1)
                     if ino and nlink > 1:
@@ -112,9 +179,11 @@ def scan(path, progress_q, cancel_event, workers=None):
                             if key in seen_inodes:
                                 child.hardlink_dup = True
                                 size = 0
+                                alloc_size = 0
                             else:
                                 seen_inodes.add(key)
                     child.size = size
+                    child.alloc_size = alloc_size
                 child.file_count = 1
                 local_files += 1
 
@@ -160,6 +229,7 @@ def _rollup(root):
         if processed:
             for child in node.children:
                 node.size += child.size
+                node.alloc_size += child.alloc_size
                 node.file_count += child.file_count
         else:
             stack.append((node, True))

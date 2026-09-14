@@ -1,9 +1,10 @@
 """The Storage Scanner Tkinter application.
 
-StorageScannerApp itself is composed from four mixins, each living in its
+StorageScannerApp itself is composed from eight mixins, each living in its
 own file under storage_scanner/ui/ — split out so the toolbar/tree, history
-saving, duplicate detection, and the largest-files/file-types windows can
-each be read, changed, and tested without wading through the others.
+saving, duplicate detection, search/filter, the treemap, cleanup
+recommendations, the audit log, and the largest-files/file-types windows
+can each be read, changed, and tested without wading through the others.
 """
 
 import os
@@ -16,13 +17,20 @@ from history import init_history_db
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
+from storage_scanner.ui.audit_window import AuditMixin
+from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
 from storage_scanner.ui.history_window import HistoryMixin
 from storage_scanner.ui.main_window import MainWindowMixin
+from storage_scanner.ui.search_window import SearchMixin
+from storage_scanner.ui.treemap_window import TreemapMixin
 
 
-class StorageScannerApp(MainWindowMixin, HistoryMixin, DuplicatesMixin, FileWindowsMixin):
+class StorageScannerApp(
+    MainWindowMixin, HistoryMixin, DuplicatesMixin, FileWindowsMixin,
+    SearchMixin, TreemapMixin, CleanupMixin, AuditMixin,
+):
     def __init__(self, root, initial_path=None):
         self.root = root
         self._initial_path = initial_path
@@ -91,8 +99,24 @@ class StorageScannerApp(MainWindowMixin, HistoryMixin, DuplicatesMixin, FileWind
 
 
 def main():
-    # An elevated relaunch passes the folder that was on screen so the new,
-    # privileged instance reopens in the same place instead of resetting.
+    # A headless privileged-scan request (see storage_scanner/file_ops.py's
+    # run_elevated_scan_macos): runs the scan as root and exits, never
+    # touching Tk, so it never needs a window-server connection it can't get.
+    if len(sys.argv) >= 3 and sys.argv[1] == "--priv-scan":
+        from storage_scanner.priv_scan_cli import run_priv_scan
+        run_priv_scan(sys.argv[2])
+        return
+
+    # Documented headless CLI mode: `Storage-Scanner.py --cli <path>
+    # [--format json|csv] [--output FILE]` — for scripts, cron, Task
+    # Scheduler, or any other automation. See storage_scanner/cli.py.
+    if len(sys.argv) >= 2 and sys.argv[1] == "--cli":
+        from storage_scanner.cli import run_cli
+        sys.exit(run_cli(sys.argv[2:]))
+
+    # A Windows elevated relaunch passes the folder that was on screen so
+    # the new, privileged instance reopens in the same place instead of
+    # resetting.
     initial_path = sys.argv[1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else None
     root = Tk()
     StorageScannerApp(root, initial_path=initial_path)  # applies the dark cyber theme

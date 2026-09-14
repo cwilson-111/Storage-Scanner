@@ -5,6 +5,7 @@ DuplicatesMixin, HistoryMixin, and FileWindowsMixin — split out so each
 window/feature area can be read and tested on its own.
 """
 
+import json
 import os
 import queue
 import shutil
@@ -15,13 +16,15 @@ from tkinter import (
     filedialog, messagebox, ttk,
 )
 
-from storage_scanner.file_ops import recycle, relaunch_elevated_macos, relaunch_elevated_windows
+from storage_scanner.audit import recycle_and_log
+from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
 from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
 )
 from storage_scanner.scanner import scan
+from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, FONT, FONT_MONO_BOLD, FONT_TITLE, heat_color
 
 
@@ -126,9 +129,10 @@ class MainWindowMixin:
         self.cancel_btn.pack(side=LEFT)
 
         if (IS_MACOS or IS_WINDOWS) and not IS_ROOT:
-            ttk.Button(
+            self.elevate_btn = ttk.Button(
                 bar_frame, text="🔒 Run as Admin", command=self._request_elevation,
-            ).pack(side=LEFT, padx=(6, 0))
+            )
+            self.elevate_btn.pack(side=LEFT, padx=(6, 0))
 
         # Adding a tools menu dropdown
         self.tools_btn = ttk.Button(
@@ -140,10 +144,14 @@ class MainWindowMixin:
         self.tools_btn.pack(side=LEFT, padx=6)
 
         self.tools_menu = Menu(self.root, tearoff=0)
+        self.tools_menu.add_command(label="Treemap", command=self.show_treemap)
+        self.tools_menu.add_command(label="Search & Filter", command=self.show_search_window)
         self.tools_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
+        self.tools_menu.add_command(label="Cleanup Recommendations", command=self.show_cleanup_recommendations)
         self.tools_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
         self.tools_menu.add_command(label="Largest Files", command=self.show_top_files)
         self.tools_menu.add_command(label="Growth History", command=self.show_growth_history)
+        self.tools_menu.add_command(label="Audit Log", command=self.show_audit_log)
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
@@ -167,15 +175,18 @@ class MainWindowMixin:
         container = ttk.Frame(self.root, padding=(8, 4))
         container.pack(side=TOP, fill=BOTH, expand=True)
 
-        columns = ("size", "percent", "items")
+        columns = ("size", "alloc", "percent", "items")
         self.tree = ttk.Treeview(
             container, columns=columns, show="tree headings", selectmode="browse"
         )
         # Clickable headings sort that level (and every expanded level). The
-        # percent column sorts by size — within a level they're equivalent.
+        # percent/alloc columns sort by (logical) size — within a level
+        # they track together closely enough to share one sort.
         self.tree.heading("#0", text="Name",
                           command=lambda: self._sort_by("name"))
         self.tree.heading("size", text="Size",
+                          command=lambda: self._sort_by("size"))
+        self.tree.heading("alloc", text="On Disk",
                           command=lambda: self._sort_by("size"))
         self.tree.heading("percent", text="% of Parent",
                           command=lambda: self._sort_by("size"))
@@ -185,6 +196,7 @@ class MainWindowMixin:
 
         self.tree.column("#0", width=440, anchor=W, stretch=True)
         self.tree.column("size", width=110, anchor=E, stretch=False)
+        self.tree.column("alloc", width=110, anchor=E, stretch=False)
         self.tree.column("percent", width=200, anchor=W, stretch=False)
         self.tree.column("items", width=90, anchor=E, stretch=False)
 
@@ -207,6 +219,8 @@ class MainWindowMixin:
                                 font=FONT_MONO_BOLD)
         self.tree.tag_configure("placeholder", foreground=COLORS["muted"])
         self.tree.tag_configure("link", foreground=COLORS["accent2"],
+                                font=FONT_MONO_BOLD)
+        self.tree.tag_configure("cloud", foreground=COLORS["muted"],
                                 font=FONT_MONO_BOLD)
         self.tree.tag_configure("even", background=COLORS["panel"])
         self.tree.tag_configure("odd", background=COLORS["stripe"])
@@ -268,37 +282,49 @@ class MainWindowMixin:
         if chosen:
             self.path_var.set(os.path.normpath(chosen))
     def _request_elevation(self):
+        current = self.path_var.get().strip().strip('"')
+
         if IS_MACOS:
-            prompt_hint = "You'll be asked for your Mac password."
-            recycle_note = (
-                "Deletions still go through Finder's Trash, not raw root "
-                "access, so they stay just as safe as before."
-            )
-            integrity_note = (
-                "macOS still protects some system-integrity files even from "
-                "root, so a small number of paths may remain unreadable "
-                "regardless."
-            )
-        else:
-            prompt_hint = "Windows will show a User Account Control (UAC) prompt."
-            recycle_note = (
-                "Deletions still go through the Recycle Bin, not raw "
-                "unrestricted access, so they stay just as safe as before."
-            )
-            integrity_note = (
-                "Windows still protects some system files even for "
-                "administrators, so a small number of paths may remain "
-                "unreadable regardless."
-            )
+            # Relaunching the whole GUI as root can't show a window on
+            # macOS (see run_elevated_scan_macos's docstring), so only the
+            # scan itself runs elevated — this window stays open throughout.
+            target = current if os.path.isdir(current) else None
+            if not target:
+                messagebox.showerror(
+                    "Storage Scanner", "Choose a valid folder to scan first."
+                )
+                return
+            if not messagebox.askyesno(
+                "Scan with Elevated Permissions",
+                "This re-scans the selected folder with root filesystem "
+                "access so folders your account can't open get counted too, "
+                "instead of under-counting their size.\n\n"
+                "You'll be asked for your Mac password. A few notes:\n"
+                "• This window stays open — only the scan itself runs "
+                "elevated, nothing else changes or restarts.\n"
+                "• Deletions still go through Finder's Trash, not raw root "
+                "access, so they stay just as safe as before.\n"
+                "• macOS still protects some system-integrity files even "
+                "from root, so a small number of paths may remain "
+                "unreadable regardless.\n\n"
+                "Continue?",
+                icon="warning",
+            ):
+                return
+            self._start_elevated_scan_macos(target)
+            return
 
         if not messagebox.askyesno(
             "Restart with Elevated Permissions",
             "This restarts Storage Scanner as an administrator so it can read "
             "folders your account doesn't have permission to open, which "
             "avoids under-counted sizes from skipped files.\n\n"
-            f"{prompt_hint} A few notes:\n"
-            f"• {recycle_note}\n"
-            f"• {integrity_note}\n"
+            "Windows will show a User Account Control (UAC) prompt. A few notes:\n"
+            "• Deletions still go through the Recycle Bin, not raw "
+            "unrestricted access, so they stay just as safe as before.\n"
+            "• Windows still protects some system files even for "
+            "administrators, so a small number of paths may remain "
+            "unreadable regardless.\n"
             "• The current (non-elevated) window will close once the "
             "elevated one starts.\n\n"
             "Continue?",
@@ -306,13 +332,8 @@ class MainWindowMixin:
         ):
             return
 
-        current = self.path_var.get().strip().strip('"')
         initial = current if os.path.isdir(current) else None
-        started = (
-            relaunch_elevated_macos(initial) if IS_MACOS
-            else relaunch_elevated_windows(initial)
-        )
-        if started:
+        if relaunch_elevated_windows(initial):
             self.root.destroy()
         else:
             messagebox.showerror(
@@ -365,6 +386,47 @@ class MainWindowMixin:
         except Exception as exc:  # noqa: BLE001 - report any scan failure to UI
             logger.exception("Scan of %r failed", target)
             self.progress_q.put(("error", str(exc)))
+
+    def _start_elevated_scan_macos(self, target):
+        if self.scan_thread and self.scan_thread.is_alive():
+            messagebox.showerror("Storage Scanner", "A scan is already running.")
+            return
+
+        self.cancel_event.clear()
+        self.tree.delete(*self.tree.get_children())
+        self.node_by_iid.clear()
+        self.root_node = None
+
+        self.scan_btn.config(state="disabled")
+        self.elevate_btn.config(state="disabled")
+        self.tools_btn.config(state="disabled")
+        self.top_count_combo.config(state="disabled")
+        self._start_indeterminate_progress()
+        self.status_var.set(
+            f"Requesting elevated access for {target} … "
+            "(enter your Mac password in the prompt)"
+        )
+
+        self.scan_thread = threading.Thread(
+            target=self._elevated_scan_worker_macos, args=(target,), daemon=True
+        )
+        self.scan_thread.start()
+        self.root.after(100, self._poll_progress)
+
+    def _elevated_scan_worker_macos(self, target):
+        ok, output = run_elevated_scan_macos(target)
+        if not ok:
+            self.progress_q.put(("error", output))
+            return
+        try:
+            node = dict_to_node(json.loads(output))
+        except (ValueError, KeyError) as exc:
+            logger.exception("Elevated scan of %r produced unparseable output", target)
+            self.progress_q.put(
+                ("error", f"Elevated scan produced invalid output: {exc}")
+            )
+            return
+        self.progress_q.put(("done", node))
     def _poll_progress(self):
         try:
             while True:
@@ -386,6 +448,8 @@ class MainWindowMixin:
         self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
+        if hasattr(self, "elevate_btn"):
+            self.elevate_btn.config(state="normal")
 
         if self.cancel_event.is_set():
             self.status_var.set("Scan cancelled.")
@@ -415,6 +479,8 @@ class MainWindowMixin:
         self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
+        if hasattr(self, "elevate_btn"):
+            self.elevate_btn.config(state="normal")
         self.status_var.set("Scan failed.")
         messagebox.showerror("Storage Scanner", f"Scan failed:\n{msg}")
     def cancel_scan(self):
@@ -455,6 +521,8 @@ class MainWindowMixin:
         items = f"{node.file_count:,}" if node.is_dir else ""
         if node.error:
             tags = ["error"]
+        elif node.is_cloud_placeholder:
+            tags = ["cloud"]
         elif node.is_link:
             tags = ["link"]
         else:
@@ -465,6 +533,8 @@ class MainWindowMixin:
 
         if node.error:
             icon = "⚠"
+        elif node.is_cloud_placeholder:
+            icon = "☁"
         elif node.is_link:
             icon = "↪"
         elif node.is_dir:
@@ -472,10 +542,18 @@ class MainWindowMixin:
         else:
             icon = "◦"
 
+        # A cloud placeholder's `size` is its full logical size (what it'll
+        # be once downloaded); `alloc_size` is what's actually using local
+        # disk right now — worth showing side by side rather than picking one.
+        alloc_text = human_size(node.alloc_size)
+        if node.is_cloud_placeholder:
+            alloc_text += " (online-only)"
+
         label = f"{icon} {node.name}" + ("\\" if node.is_dir and not node.name.endswith("\\") else "")
         iid = self.tree.insert(
             parent_iid, END, text=label,
-            values=(human_size(node.size), percent, items), tags=tuple(tags),
+            values=(human_size(node.size), alloc_text, percent, items),
+            tags=tuple(tags),
         )
         self.node_by_iid[iid] = node
 
@@ -515,7 +593,7 @@ class MainWindowMixin:
 
     # -- Column sorting ---------------------------------------------------- #
 
-    _HEADINGS = {"#0": "Name", "size": "Size",
+    _HEADINGS = {"#0": "Name", "size": "Size", "alloc": "On Disk",
                  "percent": "% of Parent", "items": "Files"}
     def _sort_by(self, key):
         """Handle a heading click: toggle direction if it's the active key,
@@ -530,7 +608,7 @@ class MainWindowMixin:
     def _update_heading_arrows(self):
         arrow = " ▼" if self._sort_reverse else " ▲"
         # The percent column is driven by the size sort, so it shares the mark.
-        active_cols = {"size": ("size", "percent"),
+        active_cols = {"size": ("size", "alloc", "percent"),
                        "name": ("#0",), "items": ("items",)}[self._sort_key]
         for col, base in self._HEADINGS.items():
             text = base + (arrow if col in active_cols else "")
@@ -593,7 +671,7 @@ class MainWindowMixin:
         ):
             return
 
-        if not recycle(node.path):
+        if not recycle_and_log(node, source="Main tree"):
             messagebox.showerror(
                 "Storage Scanner",
                 f"Could not delete:\n{node.path}\n\n"
