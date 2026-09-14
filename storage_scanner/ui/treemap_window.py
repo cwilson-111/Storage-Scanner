@@ -14,7 +14,7 @@ from tkinter import BOTH, Canvas, LEFT, TOP, Toplevel, X, ttk
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
-from storage_scanner.settings import COLORS, heat_color
+from storage_scanner.settings import COLORS, FONT, contrast_text_color, heat_color
 from storage_scanner.treemap import compute_layout
 
 _MIN_LABEL_W = 42
@@ -65,7 +65,7 @@ class TreemapMixin:
                 text += f"\n{node.file_count:,} files"
             text_id = canvas.create_text(
                 event.x + 14, event.y + 14, anchor="nw", text=text,
-                fill=COLORS["bg"], font=("Segoe UI", 9),
+                fill="#ffffff", font=FONT,
             )
             bbox = canvas.bbox(text_id)
             bg_id = None
@@ -102,7 +102,7 @@ class TreemapMixin:
             if not children:
                 canvas.create_text(
                     w / 2, h / 2, text="(empty)",
-                    fill=COLORS["muted"], font=("Segoe UI", 11),
+                    fill=COLORS["muted"], font=FONT,
                 )
             else:
                 layout = compute_layout([(c, c.size) for c in children], 0, 0, w, h)
@@ -112,7 +112,7 @@ class TreemapMixin:
                     fraction = child.size / max_size
                     fill = heat_color(fraction)
                     rect_id = canvas.create_rectangle(
-                        rx, ry, rx + rw, ry + rh, fill=fill, outline=COLORS["bg"],
+                        rx, ry, rx + rw, ry + rh, fill=fill, outline=COLORS["panel"], width=2,
                     )
                     canvas.tag_bind(rect_id, "<Button-1>", lambda e, n=child: on_click(n))
                     canvas.tag_bind(rect_id, "<Double-1>", lambda e, n=child: on_double(n))
@@ -121,15 +121,15 @@ class TreemapMixin:
 
                     if rw >= _MIN_LABEL_W and rh >= _MIN_LABEL_H:
                         label = child.name if len(child.name) <= 22 else child.name[:19] + "…"
-                        text_color = "#05070c" if fraction > 0.5 else COLORS["fg"]
+                        text_color = contrast_text_color(fill)
                         canvas.create_text(
                             rx + 4, ry + 3, anchor="nw", text=label,
-                            fill=text_color, font=("Segoe UI", 9),
+                            fill=text_color, font=FONT,
                         )
                         if rh >= _MIN_LABEL_H * 2:
                             canvas.create_text(
                                 rx + 4, ry + 17, anchor="nw", text=human_size(child.size),
-                                fill=text_color, font=("Segoe UI", 8),
+                                fill=text_color, font=FONT,
                             )
 
             info_label.config(

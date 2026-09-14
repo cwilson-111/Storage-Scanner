@@ -124,6 +124,30 @@ def init_history_db():
     conn.commit()
     conn.close()
 
+
+def get_app_metadata(key, default=None):
+    """Read one value from the app_metadata key/value table (e.g. the
+    schema version, or the update-checker's last-checked timestamp)."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM app_metadata WHERE key = ?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+
+def set_app_metadata(key, value):
+    """Set (or update) one value in the app_metadata key/value table."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO app_metadata (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
+
+
 def save_scan_snapshot(scan_path, total_size, drive_capacity, file_count, folder_count, folder_sizes):
     """
     Saves one scan result into SQLite.

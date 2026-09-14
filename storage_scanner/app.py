@@ -11,12 +11,14 @@ import os
 import queue
 import sys
 import threading
-from tkinter import Tk
+import webbrowser
+from tkinter import TOP, X, ttk, Tk
 
 from history import init_history_db
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
+from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
 from storage_scanner.ui.audit_window import AuditMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
@@ -77,20 +79,47 @@ class StorageScannerApp(
         }
 
 
-        self._radar_angle = 0 #radar circle for progress
-
-
-        self._build_header()
         self._build_toolbar()
         self._build_tree()
         self._build_statusbar()
-        self._animate_header()
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        threading.Thread(target=self._check_for_update_worker, daemon=True).start()
 
     @staticmethod
     def _log_tk_callback_exception(exc, val, tb):
         logger.error("Unhandled exception in Tk callback", exc_info=(exc, val, tb))
+
+    def _check_for_update_worker(self):
+        newer_tag = check_for_update()
+        if newer_tag:
+            self.root.after(0, lambda: self._show_update_banner(newer_tag))
+
+    def _show_update_banner(self, newer_tag):
+        if getattr(self, "_update_banner", None) is not None:
+            return  # already showing one
+
+        banner = ttk.Frame(self.root, padding=(10, 6))
+        self._update_banner = banner
+
+        def open_release_page():
+            webbrowser.open(RELEASES_PAGE_URL)
+
+        def dismiss():
+            banner.destroy()
+            self._update_banner = None
+
+        ttk.Label(
+            banner, style="Accent.TLabel",
+            text=f"⬆ A newer version ({newer_tag}) is available.",
+        ).pack(side="left")
+        ttk.Button(banner, text="View Release", command=open_release_page).pack(
+            side="left", padx=(10, 0)
+        )
+        ttk.Button(banner, text="✕", width=3, command=dismiss).pack(side="right")
+
+        banner.pack(side=TOP, fill=X, before=self.toolbar_frame)
 
     def _on_close(self):
         self.cancel_event.set()

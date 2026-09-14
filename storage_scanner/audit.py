@@ -18,16 +18,20 @@ from storage_scanner.file_ops import recycle
 from storage_scanner.logging_setup import logger
 
 
-def recycle_and_log(node, source):
+def recycle_and_log(node, source, action="recycle"):
     """Send `node` (a Node) to the Recycle Bin/Trash and record the outcome
     in the audit ledger. Drop-in replacement for calling file_ops.recycle()
     directly — same True/False return, plus a durable log entry either way.
+
+    `action` defaults to "recycle" but callers that remove the original as
+    part of a larger operation (e.g. archive.py, after compressing it) can
+    pass their own label so the audit log reflects what actually happened.
     """
     success = recycle(node.path)
     try:
         record_audit_entry(
             source=source,
-            action="recycle",
+            action=action,
             path=node.path,
             is_dir=node.is_dir,
             size_bytes=node.size,

@@ -19,7 +19,7 @@ from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, FONT_BOLD
 
 
 class HistoryMixin:
@@ -167,8 +167,13 @@ class HistoryMixin:
 
         tv.tag_configure("even", background=COLORS["panel"])
         tv.tag_configure("odd", background=COLORS["stripe"])
-        tv.tag_configure("spike", foreground=COLORS["accent"])
-        tv.tag_configure("drop", foreground="#39ff14")
+        # Both anomaly kinds are worth a second look — a mass-deletion-shaped
+        # drop isn't "good news" just because it's a decrease, so this uses
+        # the same warning/critical severity colors the heat scale uses,
+        # not the "shrinking = good" convention below (which is about a
+        # plain summary of direction, not a flagged statistical outlier).
+        tv.tag_configure("spike", foreground=COLORS["error"])
+        tv.tag_configure("drop", foreground=COLORS["warning"])
 
         if not anomalies:
             tv.insert("", END, values=("—", "—", "No anomalies detected in this path's history."))
@@ -280,7 +285,7 @@ class HistoryMixin:
         ]
 
         for index, (label, value) in enumerate(metrics):
-            ttk.Label(overview, text=f"{label}:", font=("Segoe UI", 9, "bold")).grid(
+            ttk.Label(overview, text=f"{label}:", font=FONT_BOLD).grid(
                 row=index // 2, column=(index % 2) * 2, sticky=W, padx=(0, 8), pady=4
             )
             ttk.Label(overview, text=value).grid(
@@ -302,8 +307,8 @@ class HistoryMixin:
         change_tv.pack(fill=BOTH, expand=True)
         change_tv.tag_configure("even", background=COLORS["panel"])
         change_tv.tag_configure("odd", background=COLORS["stripe"])
-        change_tv.tag_configure("growing", foreground=COLORS["accent"])
-        change_tv.tag_configure("shrinking", foreground="#39ff14")
+        change_tv.tag_configure("growing", foreground=COLORS["warning"])
+        change_tv.tag_configure("shrinking", foreground=COLORS["good"])
         change_tv.tag_configure("unchanged", foreground=COLORS["muted"])
 
         if not rows:
@@ -361,8 +366,8 @@ class HistoryMixin:
 
         tv.tag_configure("even", background=COLORS["panel"])
         tv.tag_configure("odd", background=COLORS["stripe"])
-        tv.tag_configure("growing", foreground=COLORS["accent"])
-        tv.tag_configure("shrinking", foreground="#39ff14")
+        tv.tag_configure("growing", foreground=COLORS["warning"])
+        tv.tag_configure("shrinking", foreground=COLORS["good"])
         tv.tag_configure("unchanged", foreground=COLORS["muted"])
 
         if not rows:

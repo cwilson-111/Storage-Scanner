@@ -10,6 +10,7 @@ import queue
 import threading
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, StringVar, TOP, Toplevel, X, messagebox, ttk
 
+from storage_scanner.archive import archive_file, likely_compresses_well
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE, CATEGORY_PROTECTED, CATEGORY_REVIEW,
     build_duplicate_recommendations, find_protected_and_review_candidates,
@@ -78,8 +79,10 @@ class CleanupMixin:
 
         tv.tag_configure("even", background=COLORS["panel"])
         tv.tag_configure("odd", background=COLORS["stripe"])
+        # Inactive/off-limits -> muted; worth a look -> warning; a
+        # confident, low-risk action once identified -> accent.
         tv.tag_configure("protected", foreground=COLORS["muted"])
-        tv.tag_configure("review", foreground=COLORS["accent2"])
+        tv.tag_configure("review", foreground=COLORS["warning"])
         tv.tag_configure("duplicate", foreground=COLORS["accent"])
 
         iid_to_rec = {}
@@ -208,6 +211,72 @@ class CleanupMixin:
                     parent=win,
                 )
 
+        def archive_selected():
+            selected = list(tv.selection())
+            # Archive only applies to Review candidates — duplicates already
+            # have a clearer "delete the copy, keep the keeper" story, and
+            # Protected rows are never a valid target for anything here.
+            targets = [
+                (iid, iid_to_rec[iid]) for iid in selected
+                if iid in iid_to_rec and iid_to_rec[iid].category == CATEGORY_REVIEW
+            ]
+            skipped = len(selected) - len(targets)
+            if not targets:
+                messagebox.showinfo(
+                    "Cleanup Recommendations",
+                    "Select at least one Review candidate to archive "
+                    "(Archive only applies to that category).",
+                    parent=win,
+                )
+                return
+
+            poor = [rec.node.name for _iid, rec in targets if not likely_compresses_well(rec.node.path)]
+            warning = ""
+            if poor:
+                sample = ", ".join(poor[:5])
+                more = f" and {len(poor) - 5} more" if len(poor) > 5 else ""
+                warning = (
+                    f"\n\nNote: {len(poor)} of these ({sample}{more}) are already-compressed "
+                    f"formats and likely won't shrink much."
+                )
+            note = f" ({skipped} non-Review-candidate row(s) skipped.)" if skipped else ""
+
+            if not messagebox.askyesno(
+                "Archive selected files",
+                f"Compress {len(targets)} selected file(s) to .zip and remove the "
+                f"originals (via {TRASH_NAME}, fully reversible)?{note}{warning}",
+                icon="warning",
+                parent=win,
+            ):
+                return
+
+            archived = 0
+            partial = 0
+            failed = []
+            for iid, rec in targets:
+                result = archive_file(rec.node, source="Cleanup Recommendations")
+                if not result.success:
+                    failed.append(f"{rec.node.path}: {result.error}")
+                    continue
+                archived += 1
+                if result.original_removed:
+                    self._remove_search_result_from_tree(rec.node)
+                else:
+                    partial += 1
+                iid_to_rec.pop(iid, None)
+                tv.delete(iid)
+
+            status_bits = [f"Archived {archived:,} file(s) (rescan to see the .zip files)."]
+            if partial:
+                status_bits.append(f"{partial} kept both copies (original couldn't be removed).")
+            self.status_var.set(" ".join(status_bits))
+            if failed:
+                messagebox.showerror(
+                    "Storage Scanner",
+                    "Some files could not be archived:\n\n" + "\n".join(failed[:10]),
+                    parent=win,
+                )
+
         ttk.Label(
             button_bar,
             text="Protected items can never be deleted from this window.",
@@ -217,5 +286,8 @@ class CleanupMixin:
             button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
         ).pack(side=RIGHT, padx=(6, 0))
         ttk.Button(button_bar, text="Delete Selected", command=delete_selected).pack(side=RIGHT)
+        ttk.Button(button_bar, text="Archive Selected", command=archive_selected).pack(
+            side=RIGHT, padx=(0, 6)
+        )
 
         tv.bind("<Double-1>", lambda _e: reveal_selected())

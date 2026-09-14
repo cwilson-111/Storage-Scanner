@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import threading
 from tkinter import (
-    BOTH, BOTTOM, Canvas, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
+    BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
     filedialog, messagebox, ttk,
 )
 
@@ -25,90 +25,14 @@ from storage_scanner.platform_support import (
 )
 from storage_scanner.scanner import scan
 from storage_scanner.serialization import dict_to_node
-from storage_scanner.settings import COLORS, FONT, FONT_MONO_BOLD, FONT_TITLE, heat_color
+from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
 
 
 class MainWindowMixin:
-    def _build_header(self):
-        """A neon banner. tkinter has no blur, so the glow is faked by drawing
-        the title several times in dim cyan at small offsets (a halo) with the
-        bright text on top — a classic neon-sign trick."""
-        self.header = Canvas(self.root, height=64, bg=COLORS["bg"],
-                             highlightthickness=0, bd=0)
-        self.header.pack(side=TOP, fill=X)
-        self.header.bind("<Configure>", self._draw_header)
-    def _draw_header(self, _event=None):
-        cv = self.header
-        cv.delete("all")
-        C = COLORS
-        width = cv.winfo_width()
-        height = int(cv["height"])
-        title = "◈  NEURAL STORAGE MATRIX"
-        x, y = 18, 30
-
-        # Faint scanline grid behind everything — a CRT/terminal texture.
-        step = 8
-        if width > 1:
-            for gx in range(0, width, step):
-                cv.create_line(gx, 0, gx, height, fill="#0e1626")
-            for gy in range(0, height, step):
-                cv.create_line(0, gy, width, gy, fill="#0e1626")
-
-        # Halo: far/dim ring, then near/brighter ring, then the crisp core.
-        far = [(-2, -2), (2, -2), (-2, 2), (2, 2), (-3, 0), (3, 0), (0, -3), (0, 3)]
-        near = [(-1, -1), (1, -1), (-1, 1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)]
-        for dx, dy in far:
-            cv.create_text(x + dx, y + dy, text=title, fill="#0a3a42",
-                           font=FONT_TITLE, anchor=W)
-        for dx, dy in near:
-            cv.create_text(x + dx, y + dy, text=title, fill="#0f6d7a",
-                           font=FONT_TITLE, anchor=W)
-        cv.create_text(x, y, text=title, fill=C["accent"], font=FONT_TITLE, anchor=W)
-
-        # Tagline + a glowing baseline rule under the banner.
-        cv.create_text(x + 2, 52, text="        Storage Analyzer",
-                       fill=C["muted"], font=FONT, anchor=W)
-        if width > 1:
-            cv.create_line(0, 62, width, 62, fill="#0f6d7a")
-            cv.create_line(0, 63, width, 63, fill="#0a3a42")
-
-        # Futuristic radar / reactor ring on the right side.
-        if width > 180:
-            cx = width - 78
-            cy = 31
-            r1 = 22
-            r2 = 14
-            r3 = 6
-
-            cv.create_oval(cx - r1, cy - r1, cx + r1, cy + r1,
-                           outline="#0f6d7a", width=1)
-            cv.create_oval(cx - r2, cy - r2, cx + r2, cy + r2,
-                           outline=C["accent"], width=1)
-            cv.create_oval(cx - r3, cy - r3, cx + r3, cy + r3,
-                           outline=C["accent2"], width=1)
-
-            cv.create_arc(
-                cx - r1, cy - r1, cx + r1, cy + r1,
-                start=self._radar_angle,
-                extent=80,
-                outline="#ffffff",
-                width=2,
-                style="arc",
-                tags="radar",
-            )
-
-            cv.create_arc(
-                cx - r2, cy - r2, cx + r2, cy + r2,
-                start=-self._radar_angle,
-                extent=110,
-                outline=C["accent"],
-                width=2,
-                style="arc",
-                tags="radar",
-            )
     def _build_toolbar(self):
-        bar_frame = ttk.Frame(self.root, padding=(8, 8, 8, 4))
+        bar_frame = ttk.Frame(self.root, padding=(10, 10, 10, 6))
         bar_frame.pack(side=TOP, fill=X)
+        self.toolbar_frame = bar_frame
 
         ttk.Label(bar_frame, text="▸ LOCATION", style="Accent.TLabel").pack(side=LEFT)
 
@@ -121,7 +45,9 @@ class MainWindowMixin:
         self.path_combo.bind("<Return>", lambda e: self.start_scan())
 
         ttk.Button(bar_frame, text="Browse…", command=self.browse).pack(side=LEFT)
-        self.scan_btn = ttk.Button(bar_frame, text="Scan", command=self.start_scan)
+        self.scan_btn = ttk.Button(
+            bar_frame, text="Scan", command=self.start_scan, style="Primary.TButton",
+        )
         self.scan_btn.pack(side=LEFT, padx=6)
         self.cancel_btn = ttk.Button(
             bar_frame, text="Cancel", command=self.cancel_scan, state="disabled"
@@ -143,15 +69,27 @@ class MainWindowMixin:
         )
         self.tools_btn.pack(side=LEFT, padx=6)
 
+        # Grouped into submenus that follow the order you'd actually use them
+        # in — explore what's there, clean some of it up, then check history/
+        # trust — rather than one flat, ever-growing list of unrelated tools.
         self.tools_menu = Menu(self.root, tearoff=0)
-        self.tools_menu.add_command(label="Treemap", command=self.show_treemap)
-        self.tools_menu.add_command(label="Search & Filter", command=self.show_search_window)
-        self.tools_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
-        self.tools_menu.add_command(label="Cleanup Recommendations", command=self.show_cleanup_recommendations)
-        self.tools_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
-        self.tools_menu.add_command(label="Largest Files", command=self.show_top_files)
-        self.tools_menu.add_command(label="Growth History", command=self.show_growth_history)
-        self.tools_menu.add_command(label="Audit Log", command=self.show_audit_log)
+
+        explore_menu = Menu(self.tools_menu, tearoff=0)
+        explore_menu.add_command(label="Treemap", command=self.show_treemap)
+        explore_menu.add_command(label="Search & Filter", command=self.show_search_window)
+        explore_menu.add_command(label="Largest Files", command=self.show_top_files)
+        explore_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
+        self.tools_menu.add_cascade(label="Explore", menu=explore_menu)
+
+        cleanup_menu = Menu(self.tools_menu, tearoff=0)
+        cleanup_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
+        cleanup_menu.add_command(label="Cleanup Recommendations", command=self.show_cleanup_recommendations)
+        self.tools_menu.add_cascade(label="Clean Up", menu=cleanup_menu)
+
+        history_menu = Menu(self.tools_menu, tearoff=0)
+        history_menu.add_command(label="Growth History", command=self.show_growth_history)
+        history_menu.add_command(label="Audit Log", command=self.show_audit_log)
+        self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
@@ -249,10 +187,6 @@ class MainWindowMixin:
             side=LEFT, fill=X, expand=True
         )
         self.progress = ttk.Progressbar(status, mode="indeterminate", length=220)
-    def _animate_header(self):
-        self._radar_angle = (self._radar_angle + 4) % 360
-        self._draw_header()
-        self.root.after(50, self._animate_header)
     # -- Drive / folder selection ----------------------------------------- #
     @staticmethod
     def _list_drives():
@@ -538,9 +472,9 @@ class MainWindowMixin:
         elif node.is_link:
             icon = "↪"
         elif node.is_dir:
-            icon = "▣"
+            icon = "📁"
         else:
-            icon = "◦"
+            icon = "📄"
 
         # A cloud placeholder's `size` is its full logical size (what it'll
         # be once downloaded); `alloc_size` is what's actually using local
