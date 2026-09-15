@@ -1,0 +1,95 @@
+"""Headless entry point for `--mft-scan <drive> --subtree <path>
+--output <file>` (Windows elevated Turbo Scan helper).
+
+Windows' ShellExecuteExW "runas" elevation has no equivalent to macOS's
+`do shell script ... with administrator privileges`, which conveniently
+hands the elevated child's stdout back as its own return value (see
+storage_scanner/priv_scan_cli.py and file_ops.run_elevated_scan_macos) --
+the OS elevation broker calls CreateProcess for the new process, not us,
+so there's no pipe we can attach as its stdout. Instead this helper writes
+its JSON result to the `--output` file the caller told it to use and
+exits; the caller (storage_scanner.file_ops.run_elevated_scan_windows)
+reads that file back once the elevated process exits.
+
+Distinct from priv_scan_cli.py's `--priv-scan` and cli.py's `--cli`: this
+is Windows-only, Turbo-Scan-specific, and never meant to be run directly
+by a user.
+"""
+
+import argparse
+import json
+import sys
+import threading
+
+from storage_scanner.mft_parser import parse_base_record
+from storage_scanner.mft_scan import build_tree
+from storage_scanner.mft_volume import open_record_source
+from storage_scanner.serialization import node_to_dict
+from storage_scanner.turbo_scan import find_subtree_node
+
+EXIT_OK = 0
+EXIT_SCAN_ERROR = 1
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(prog="Storage-Scanner.py --mft-scan")
+    parser.add_argument("drive", help='Volume root to read, e.g. "C:\\\\"')
+    parser.add_argument(
+        "--subtree", required=True,
+        help="Path within the volume whose Node to write out",
+    )
+    parser.add_argument(
+        "--output", required=True, metavar="FILE",
+        help="Write the resulting Node as JSON to FILE",
+    )
+    return parser
+
+
+def _read_all_records(record_source, cancel_event):
+    records = []
+    for record_number in range(record_source.record_count):
+        if cancel_event.is_set():
+            break
+        parsed = parse_base_record(record_number, record_source)
+        if parsed is not None:
+            records.append(parsed)
+    return records
+
+
+def run_mft_scan(argv):
+    """Parse arguments and run one Turbo Scan. Returns a process exit code.
+
+    Every failure -- an unopenable volume, a record with no root, a
+    subtree path that isn't in the tree, a JSON/file-write error -- prints
+    to stderr and returns EXIT_SCAN_ERROR. The elevated process is meant
+    to fail closed: a caller that sees a non-zero exit or a missing output
+    file treats it identically, as one more reason to fall back to the
+    Compatible engine, never something that should crash or hang.
+    """
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)  # exits(2) itself on --help / bad usage
+
+    try:
+        cancel_event = threading.Event()  # no external cancellation in this
+                                           # process -- the caller cancels
+                                           # by terminating it outright
+        record_source = open_record_source(args.drive)
+        try:
+            records = _read_all_records(record_source, cancel_event)
+        finally:
+            record_source.close()
+
+        root_node, _orphan_count = build_tree(records, root_path=args.drive)
+        if root_node is None:
+            raise RuntimeError(
+                f"Turbo Scan could not locate a root directory record on {args.drive!r}"
+            )
+        subtree_node = find_subtree_node(root_node, args.subtree)
+
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(node_to_dict(subtree_node), f)
+    except Exception as exc:  # noqa: BLE001 - report any failure to the caller
+        print(f"Turbo Scan failed: {exc}", file=sys.stderr)
+        return EXIT_SCAN_ERROR
+
+    return EXIT_OK

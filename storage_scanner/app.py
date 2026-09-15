@@ -145,6 +145,16 @@ def main():
         from storage_scanner.cli import run_cli
         sys.exit(run_cli(sys.argv[2:]))
 
+    # A headless elevated Turbo Scan request (see storage_scanner/
+    # file_ops.py's run_elevated_scan_windows): reads the NTFS MFT as
+    # admin and writes the result to --output, never touching Tk. Windows'
+    # elevation broker can't hand this process's stdout back to the
+    # unprivileged caller the way macOS's --priv-scan can, hence a file
+    # instead of stdout — see storage_scanner/mft_scan_cli.py.
+    if len(sys.argv) >= 2 and sys.argv[1] == "--mft-scan":
+        from storage_scanner.mft_scan_cli import run_mft_scan
+        sys.exit(run_mft_scan(sys.argv[2:]))
+
     # A Windows elevated relaunch passes the folder that was on screen so
     # the new, privileged instance reopens in the same place instead of
     # resetting.

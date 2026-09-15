@@ -1,0 +1,410 @@
+"""Tests for storage_scanner.mft_parser against hand-built MFT record bytes.
+
+Every record here is assembled by hand (not via mft_parser's own private
+structures) so these tests are a genuine black-box check of the on-disk
+byte format the parser has to handle -- no admin rights or real NTFS
+volume needed, per the Turbo Scan plan's testing strategy.
+"""
+
+import struct
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from storage_scanner import mft_parser
+from storage_scanner.mft_parser import parse_base_record, _pack_frn
+
+RECORD_SIZE = 1024
+SECTOR_SIZE = 512
+USA_OFFSET = 48
+USA_SIZE = RECORD_SIZE // SECTOR_SIZE + 1  # 3: one USN + one original per sector
+FIRST_ATTR_OFFSET = ((USA_OFFSET + USA_SIZE * 2) + 7) // 8 * 8  # 8-byte aligned
+
+_NAMESPACE_WIN32 = 1
+_NAMESPACE_DOS = 2
+
+
+class FakeRecordSource:
+    """In-memory stand-in for the real volume reader: record number -> bytes."""
+
+    def __init__(self, records_by_number):
+        self._records = records_by_number
+
+    def record_at(self, record_number):
+        return self._records[record_number]
+
+
+def _build_resident_attr(attr_type, value, attribute_id):
+    header_len = 16 + 8  # common header + resident-variant header
+    value_offset = header_len
+    unpadded = value_offset + len(value)
+    total_len = (unpadded + 7) // 8 * 8
+    common = struct.pack("<IIBBHHH", attr_type, total_len, 0, 0, 0, 0, attribute_id)
+    resident = struct.pack("<IHBB", len(value), value_offset, 0, 0)
+    body = bytearray(common + resident + value)
+    body.extend(b"\x00" * (total_len - len(body)))
+    return bytes(body)
+
+
+def _build_nonresident_attr(
+    attr_type, *, allocated_size, real_size, initialized_size,
+    attribute_id, compression_unit=0,
+):
+    common_len = 16
+    nrh_len = 48
+    extra = 8 if compression_unit else 0
+    data_runs_offset = common_len + nrh_len + extra
+    data_runs = b"\x00"  # a real run-list terminator; contents unused (out of scope)
+    unpadded = data_runs_offset + len(data_runs)
+    total_len = (unpadded + 7) // 8 * 8
+    common = struct.pack("<IIBBHHH", attr_type, total_len, 1, 0, 0, 0, attribute_id)
+    nrh = struct.pack(
+        "<QQHHIQQQ", 0, 0, data_runs_offset, compression_unit, 0,
+        allocated_size, real_size, initialized_size,
+    )
+    body = bytearray(common + nrh)
+    if compression_unit:
+        body.extend(struct.pack("<Q", allocated_size))  # placeholder CompressedSize
+    body.extend(data_runs)
+    body.extend(b"\x00" * (total_len - len(body)))
+    return bytes(body)
+
+
+def _std_info_value(mtime_filetime=0, atime_filetime=0, file_attributes=0):
+    return struct.pack("<QQQQI", 0, mtime_filetime, 0, atime_filetime, file_attributes)
+
+
+def _file_name_value(parent_frn, name, namespace=_NAMESPACE_WIN32):
+    fixed = struct.pack("<QQQQQQQII", parent_frn, 0, 0, 0, 0, 0, 0, 0, 0)
+    name_bytes = name.encode("utf-16-le")
+    return fixed + bytes([len(name), namespace]) + name_bytes
+
+
+def _attribute_list_value(entries):
+    """`entries` is a list of (attr_type, attribute_id, base_frn)."""
+    out = bytearray()
+    for attr_type, attribute_id, base_frn in entries:
+        entry_len = 26  # no name; the fixed head(8) + tail(18) size
+        head = struct.pack("<IHBB", attr_type, entry_len, 0, 0)
+        tail = struct.pack("<QQH", 0, base_frn, attribute_id)
+        out += head + tail
+    return bytes(out)
+
+
+def _stamp_fixups(record, usn=b"\x01\x00"):
+    """Simulate real NTFS on-disk storage: relocate each sector-end's real
+    bytes into the USA and overwrite them with a shared USN -- the exact
+    inverse of what mft_parser._apply_fixups reverses."""
+    record = bytearray(record)
+    record[USA_OFFSET:USA_OFFSET + 2] = usn
+    for i in range(1, USA_SIZE):
+        sector_end = i * SECTOR_SIZE - 2
+        original = bytes(record[sector_end:sector_end + 2])
+        record[USA_OFFSET + 2 * i:USA_OFFSET + 2 * i + 2] = original
+        record[sector_end:sector_end + 2] = usn
+    return bytes(record)
+
+
+def _assemble_record(
+    record_number, attrs, *,
+    in_use=True, is_directory=False, base_frn=0, sequence_number=1,
+    hard_link_count=1, signature=b"FILE", corrupt_usa=False,
+    record_size=RECORD_SIZE,
+):
+    """Frame a complete on-disk-shaped record around pre-built, already-
+    ordered attribute bytes (`attrs`, sans the 0xFFFFFFFF end marker)."""
+    attrs = bytes(attrs) + struct.pack("<I", mft_parser._ATTR_END_MARKER)
+
+    bytes_in_use = FIRST_ATTR_OFFSET + len(attrs)
+    if bytes_in_use > record_size:
+        raise ValueError("record_size too small for these attributes in this test")
+
+    flags = 0
+    if in_use:
+        flags |= mft_parser._RECORD_FLAG_IN_USE
+    if is_directory:
+        flags |= mft_parser._RECORD_FLAG_IS_DIRECTORY
+
+    header = struct.pack(
+        "<4sHHQHHHHIIQHHI",
+        signature, USA_OFFSET, USA_SIZE, 0, sequence_number,
+        hard_link_count, FIRST_ATTR_OFFSET, flags,
+        bytes_in_use, record_size, base_frn, 0, 0, record_number,
+    )
+
+    buf = bytearray(record_size)
+    buf[0:len(header)] = header
+    buf[FIRST_ATTR_OFFSET:FIRST_ATTR_OFFSET + len(attrs)] = attrs
+
+    stamped = bytearray(_stamp_fixups(bytes(buf)))
+    if corrupt_usa:
+        broken_off = 1 * SECTOR_SIZE - 2
+        stamped[broken_off:broken_off + 2] = b"\xEE\xEE"
+    return bytes(stamped)
+
+
+def build_record(
+    record_number, *,
+    std_info_value=b"", file_names=(), data_attr=None, attribute_list_value=None,
+    **assemble_kwargs,
+):
+    """Build one on-disk-shaped MFT record in the common
+    $ATTRIBUTE_LIST/$STANDARD_INFORMATION/$FILE_NAME.../$DATA order.
+
+    `file_names` is a list of (value_bytes, attribute_id) pairs. `data_attr`
+    and `attribute_list_value`'s raw $DATA/$ATTRIBUTE_LIST attribute bytes
+    are built by the caller via the helpers above (so the attribute_id and
+    resident/non-resident shape are explicit and unambiguous). For a test
+    that needs a non-standard attribute order, call _assemble_record directly.
+    """
+    attrs = bytearray()
+    if attribute_list_value is not None:
+        attrs += _build_resident_attr(mft_parser._ATTR_ATTRIBUTE_LIST, attribute_list_value, 0)
+    if std_info_value is not None:
+        attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, std_info_value, 0)
+    for value, attribute_id in file_names:
+        attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, value, attribute_id)
+    if data_attr is not None:
+        attrs += data_attr
+    return _assemble_record(record_number, attrs, **assemble_kwargs)
+
+
+def _single_record_source(record_number, record_bytes):
+    return FakeRecordSource({record_number: record_bytes})
+
+
+def test_minimal_resident_record_parses():
+    record = build_record(
+        5,
+        std_info_value=_std_info_value(file_attributes=0x20),
+        file_names=[(_file_name_value(100, "hello.txt"), 1)],
+        data_attr=_build_resident_attr(mft_parser._ATTR_DATA, b"hi", 2),
+    )
+    parsed = parse_base_record(5, _single_record_source(5, record))
+
+    assert parsed is not None
+    assert not parsed.is_directory
+    assert parsed.logical_size == 2
+    assert parsed.alloc_size == 2
+    assert len(parsed.names) == 1
+    assert parsed.names[0].parent_frn == 100
+    assert parsed.names[0].name == "hello.txt"
+    assert parsed.frn == _pack_frn(1, 5)
+
+
+def test_directory_flag_and_empty_data():
+    record = build_record(
+        7, is_directory=True,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "SubDir"), 1)],
+    )
+    parsed = parse_base_record(7, _single_record_source(7, record))
+
+    assert parsed is not None
+    assert parsed.is_directory
+    assert parsed.logical_size == 0
+    assert parsed.alloc_size == 0
+
+
+def test_nonresident_data_uses_header_fields_not_content():
+    data_attr = _build_nonresident_attr(
+        mft_parser._ATTR_DATA, allocated_size=65536, real_size=50000,
+        initialized_size=50000, attribute_id=2,
+    )
+    record = build_record(
+        9,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "big.bin"), 1)],
+        data_attr=data_attr,
+    )
+    parsed = parse_base_record(9, _single_record_source(9, record))
+
+    assert parsed is not None
+    assert parsed.logical_size == 50000
+    assert parsed.alloc_size == 65536
+
+
+def test_compressed_nonresident_attribute_does_not_misalign_the_next_one():
+    # The compressed $DATA's extra CompressedSize field only exists between
+    # this attribute's header and its data runs -- if the walker ever
+    # hardcoded the non-resident header size instead of trusting each
+    # attribute's own `length` field, whatever comes right after it would
+    # be read from the wrong offset and either fail to parse or come back
+    # with garbage. Deliberately non-standard order: the compressed
+    # attribute comes FIRST, so std_info/$FILE_NAME parsing right after it
+    # is the thing actually being verified here.
+    compressed_data = _build_nonresident_attr(
+        mft_parser._ATTR_DATA, allocated_size=4096, real_size=9000,
+        initialized_size=9000, attribute_id=2, compression_unit=4,
+    )
+    attrs = (
+        compressed_data
+        + _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, _std_info_value(file_attributes=0x21), 0)
+        + _build_resident_attr(mft_parser._ATTR_FILE_NAME, _file_name_value(1, "compressed.bin"), 1)
+    )
+    record = _assemble_record(11, attrs)
+    parsed = parse_base_record(11, _single_record_source(11, record))
+
+    assert parsed is not None
+    assert parsed.names[0].name == "compressed.bin"
+    assert parsed.file_attributes == 0x21
+    assert parsed.logical_size == 9000
+    assert parsed.alloc_size == 4096
+
+
+def test_same_parent_win32_and_dos_names_collapse_to_one():
+    record = build_record(
+        13,
+        std_info_value=_std_info_value(),
+        file_names=[
+            (_file_name_value(50, "LONGFILENAME.TXT", _NAMESPACE_WIN32), 1),
+            (_file_name_value(50, "LONGFI~1.TXT", _NAMESPACE_DOS), 2),
+        ],
+    )
+    parsed = parse_base_record(13, _single_record_source(13, record))
+
+    assert parsed is not None
+    assert len(parsed.names) == 1
+    assert parsed.names[0].name == "LONGFILENAME.TXT"
+    assert parsed.names[0].namespace == _NAMESPACE_WIN32
+
+
+def test_different_parent_names_are_both_kept_as_hard_links():
+    record = build_record(
+        17,
+        std_info_value=_std_info_value(),
+        file_names=[
+            (_file_name_value(10, "a_link.txt"), 1),
+            (_file_name_value(20, "b_link.txt"), 2),
+        ],
+    )
+    parsed = parse_base_record(17, _single_record_source(17, record))
+
+    assert parsed is not None
+    assert len(parsed.names) == 2
+    parents = {n.parent_frn for n in parsed.names}
+    assert parents == {10, 20}
+
+
+def test_baad_signature_is_skipped():
+    record = build_record(
+        19, signature=b"BAAD",
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert parse_base_record(19, _single_record_source(19, record)) is None
+
+
+def test_unused_record_is_skipped():
+    record = build_record(
+        21, in_use=False,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert parse_base_record(21, _single_record_source(21, record)) is None
+
+
+def test_extension_record_is_never_its_own_tree_node():
+    record = build_record(
+        23, base_frn=_pack_frn(1, 5),  # claims to belong to base record 5
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert parse_base_record(23, _single_record_source(23, record)) is None
+
+
+def test_corrupt_usa_check_is_skipped():
+    record = build_record(
+        29, corrupt_usa=True,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert parse_base_record(29, _single_record_source(29, record)) is None
+
+
+def test_missing_standard_information_is_skipped():
+    record = build_record(
+        31, std_info_value=None,
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert parse_base_record(31, _single_record_source(31, record)) is None
+
+
+def test_no_file_name_at_all_is_skipped():
+    record = build_record(33, std_info_value=_std_info_value(), file_names=[])
+    assert parse_base_record(33, _single_record_source(33, record)) is None
+
+
+def test_attribute_list_merges_a_file_name_from_an_extension_record():
+    base_record_number = 40
+    ext_record_number = 41
+    ext_sequence = 3
+    ext_frn = _pack_frn(ext_sequence, ext_record_number)
+
+    base_record = build_record(
+        base_record_number,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(100, "primary.txt"), 1)],
+        data_attr=_build_resident_attr(mft_parser._ATTR_DATA, b"abc", 3),
+        attribute_list_value=_attribute_list_value([
+            (mft_parser._ATTR_FILE_NAME, 2, ext_frn),
+        ]),
+    )
+    ext_record = build_record(
+        ext_record_number,
+        base_frn=_pack_frn(1, base_record_number),
+        sequence_number=ext_sequence,
+        std_info_value=None,
+        file_names=[(_file_name_value(200, "extra_link.txt"), 2)],
+    )
+
+    source = FakeRecordSource({base_record_number: base_record, ext_record_number: ext_record})
+    parsed = parse_base_record(base_record_number, source)
+
+    assert parsed is not None
+    names = {n.parent_frn: n.name for n in parsed.names}
+    assert names == {100: "primary.txt", 200: "extra_link.txt"}
+    assert parsed.logical_size == 3  # the base record's own $DATA, unaffected
+
+
+def test_attribute_list_entry_for_a_missing_extension_record_is_ignored():
+    base_record_number = 50
+    missing_ext_frn = _pack_frn(1, 999)  # no record 999 exists in the source
+
+    base_record = build_record(
+        base_record_number,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(100, "primary.txt"), 1)],
+        attribute_list_value=_attribute_list_value([
+            (mft_parser._ATTR_FILE_NAME, 2, missing_ext_frn),
+        ]),
+    )
+    source = FakeRecordSource({base_record_number: base_record})
+    parsed = parse_base_record(base_record_number, source)
+
+    assert parsed is not None
+    assert len(parsed.names) == 1
+    assert parsed.names[0].name == "primary.txt"
+
+
+def test_mtime_atime_and_reparse_and_cloud_placeholder_flags():
+    filetime_2020_01_01 = 132223104000000000  # arbitrary real-looking FILETIME
+    reparse_and_offline = 0x400 | 0x00001000  # FILE_ATTRIBUTE_REPARSE_POINT | OFFLINE
+    record = build_record(
+        60,
+        std_info_value=_std_info_value(
+            mtime_filetime=filetime_2020_01_01,
+            atime_filetime=filetime_2020_01_01,
+            file_attributes=reparse_and_offline,
+        ),
+        file_names=[(_file_name_value(1, "placeholder.bin"), 1)],
+    )
+    parsed = parse_base_record(60, _single_record_source(60, record))
+
+    assert parsed is not None
+    assert parsed.is_reparse_point
+    assert parsed.is_cloud_placeholder
+    assert parsed.mtime > 0
+    assert parsed.atime > 0

@@ -1,12 +1,15 @@
 """Recycle Bin / Trash deletion and elevated-relaunch support."""
 
 import ctypes
+import json
 import os
 import shlex
 import subprocess
 import sys
+import tempfile
 from ctypes import wintypes
 
+from storage_scanner.drive_info import get_volume_root
 from storage_scanner.platform_support import IS_MACOS
 
 
@@ -15,6 +18,34 @@ _FOF_SILENT = 0x0004
 _FOF_NOCONFIRMATION = 0x0010
 _FOF_ALLOWUNDO = 0x0040          # the bit that routes deletes to the Recycle Bin
 _FOF_NOERRORUI = 0x0400
+
+_SEE_MASK_NOCLOSEPROCESS = 0x00000040
+_SW_HIDE = 0
+_WAIT_POLL_MS = 200
+_WAIT_INFINITE = 0xFFFFFFFF
+_WAIT_OBJECT_0 = 0x00000000
+_WAIT_FAILED = 0xFFFFFFFF
+
+
+class _SHELLEXECUTEINFOW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("fMask", ctypes.c_ulong),
+        ("hwnd", wintypes.HWND),
+        ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR),
+        ("lpParameters", wintypes.LPCWSTR),
+        ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", wintypes.HINSTANCE),
+        ("lpIDList", wintypes.LPVOID),
+        ("lpClass", wintypes.LPCWSTR),
+        ("hkeyClass", wintypes.HKEY),
+        ("dwHotKey", wintypes.DWORD),
+        ("hIconOrMonitor", wintypes.HANDLE),   # a union in the real struct;
+                                                # neither member is used here
+        ("hProcess", wintypes.HANDLE),
+    ]
 
 
 class _SHFILEOPSTRUCTW(ctypes.Structure):
@@ -161,3 +192,97 @@ def relaunch_elevated_windows(initial_path=None):
     # small values below that are error codes (e.g. the user declining UAC).
     result = shell32.ShellExecuteW(None, "runas", target, params, None, 1)
     return int(result) > 32
+
+
+def run_elevated_scan_windows(path, cancel_event):
+    """Scan `path` with Turbo Scan's raw-volume access via a headless
+    elevated helper process (`--mft-scan`, see
+    storage_scanner/mft_scan_cli.py), while this (unprivileged) process
+    keeps running.
+
+    relaunch_elevated_windows's ShellExecuteW "runas" verb has no way to
+    hand this process the elevated child's stdout -- the OS elevation
+    broker calls CreateProcess for the new process, not us, so there's no
+    pipe to attach, unlike macOS's `do shell script` (see
+    run_elevated_scan_macos). Instead the helper writes its JSON result to
+    a temp file this function creates and reads back once the process
+    exits, using ShellExecuteExW's SEE_MASK_NOCLOSEPROCESS to get a real
+    process handle to wait on.
+
+    Polls with WaitForSingleObject in a short timeout loop rather than
+    blocking outright, so `cancel_event` can be honored: if it's set
+    mid-wait, the elevated process is terminated outright -- safe, since
+    Turbo Scan only ever performs read-only volume reads. (The existing
+    macOS elevated path has no cancellation support at all; this is
+    already strictly better, even best-effort.)
+
+    Returns (True, parsed_dict) on success, (False, error_message) on any
+    failure: elevation declined, the helper exiting non-zero, a missing or
+    unparseable output file, or cancellation.
+    """
+    volume_root = get_volume_root(path)
+
+    fd, output_path = tempfile.mkstemp(prefix="mft_scan_", suffix=".json")
+    os.close(fd)  # only the path is wanted -- the elevated child opens it itself
+
+    try:
+        if getattr(sys, "frozen", False):
+            target = sys.executable
+            args = ["--mft-scan", volume_root, "--subtree", path, "--output", output_path]
+        else:
+            target = sys.executable
+            args = [
+                os.path.abspath(sys.argv[0]), "--mft-scan", volume_root,
+                "--subtree", path, "--output", output_path,
+            ]
+        params = subprocess.list2cmdline(args)
+
+        info = _SHELLEXECUTEINFOW()
+        info.cbSize = ctypes.sizeof(_SHELLEXECUTEINFOW)
+        info.fMask = _SEE_MASK_NOCLOSEPROCESS
+        info.hwnd = None
+        info.lpVerb = "runas"
+        info.lpFile = target
+        info.lpParameters = params
+        info.lpDirectory = None
+        info.nShow = _SW_HIDE
+        info.hProcess = None
+
+        shell32 = ctypes.windll.shell32
+        succeeded = shell32.ShellExecuteExW(ctypes.byref(info))
+        if not succeeded or not info.hProcess:
+            return False, "Authorization was cancelled or failed."
+
+        h_process = info.hProcess
+        kernel32 = ctypes.windll.kernel32
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        try:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    kernel32.TerminateProcess(h_process, 1)
+                    kernel32.WaitForSingleObject(h_process, _WAIT_INFINITE)
+                    return False, "Cancelled."
+                wait_result = kernel32.WaitForSingleObject(h_process, _WAIT_POLL_MS)
+                if wait_result == _WAIT_OBJECT_0:
+                    break
+                if wait_result == _WAIT_FAILED:
+                    return False, "Waiting for the Turbo Scan helper process failed."
+
+            exit_code = wintypes.DWORD(0)
+            kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
+        finally:
+            kernel32.CloseHandle(h_process)
+
+        if exit_code.value != 0:
+            return False, f"Turbo Scan helper exited with code {exit_code.value}."
+
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                return True, json.load(f)
+        except (OSError, ValueError) as exc:
+            return False, f"Could not read Turbo Scan result: {exc}"
+    finally:
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
