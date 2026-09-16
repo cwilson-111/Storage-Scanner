@@ -103,12 +103,15 @@ def _run_turbo_in_process(path, progress_q, cancel_event):
     finally:
         record_source.close()
 
-    root_node, orphan_count = mft_scan.build_tree(records, root_path=volume_root)
+    root_node, orphan_count, frn_by_node_id = mft_scan.build_tree(records, root_path=volume_root)
     if root_node is None:
         raise RuntimeError("Turbo Scan could not locate a root directory record")
     if orphan_count:
         logger.warning("Turbo Scan of %r had %d unreachable record(s)", path, orphan_count)
-    return find_subtree_node(root_node, path)
+    subtree_node = find_subtree_node(root_node, path)
+    # Hard-link dedup is deliberately scoped to just this subtree, not the
+    # whole volume -- see mft_scan.finalize_subtree's docstring for why.
+    return mft_scan.finalize_subtree(subtree_node, frn_by_node_id)
 
 
 def _run_turbo_via_elevated_helper(path, cancel_event):

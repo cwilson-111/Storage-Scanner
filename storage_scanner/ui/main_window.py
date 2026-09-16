@@ -12,19 +12,20 @@ import shutil
 import subprocess
 import threading
 from tkinter import (
-    BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
+    BooleanVar, BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
     filedialog, messagebox, simpledialog, ttk,
 )
 
-from history import set_budget
+from history import get_app_metadata, set_app_metadata, set_budget
+from storage_scanner import turbo_scan
 from storage_scanner.audit import recycle_and_log
+from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
 from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
 )
-from storage_scanner.scanner import scan
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
@@ -93,6 +94,22 @@ class MainWindowMixin:
         history_menu.add_command(label="Audit Log", command=self.show_audit_log)
         history_menu.add_command(label="Storage Budgets", command=self.show_budgets)
         self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
+
+        # Turbo Scan (NTFS MFT fast path) is Windows-only and off by
+        # default — persisted the same way as the schema_version key, via
+        # history.py's app_metadata table (there's no other settings
+        # storage in this app to reuse).
+        if IS_WINDOWS:
+            self.turbo_scan_var = BooleanVar(
+                value=get_app_metadata("turbo_scan_enabled", "0") == "1"
+            )
+            settings_menu = Menu(self.tools_menu, tearoff=0)
+            settings_menu.add_checkbutton(
+                label="Turbo Scan (Experimental) — NTFS MFT fast path",
+                variable=self.turbo_scan_var,
+                command=self._on_toggle_turbo_scan,
+            )
+            self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
@@ -291,6 +308,45 @@ class MainWindowMixin:
             return 0
 
     # -- Scan lifecycle ---------------------------------------------------- #
+    def _on_toggle_turbo_scan(self):
+        set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
+
+    def _resolve_turbo_scan_consent(self, target):
+        """Whether Turbo Scan should be attempted for this specific scan.
+
+        False if the toggle is off, or the drive isn't a local fixed NTFS
+        volume (scan_with_best_engine would fall back on its own either
+        way, but this skips popping a prompt for a scan that was never
+        going to use Turbo Scan). If already elevated, there's no new UAC
+        prompt about to happen, so nothing needs consenting to. Otherwise
+        asks fresh every time (matches the macOS elevation prompt's own
+        not-cached precedent in _request_elevation) — declining falls back
+        to the Compatible engine for just this scan, the toggle stays on.
+        """
+        if not IS_WINDOWS or not self.turbo_scan_var.get():
+            return False
+        if IS_ROOT:
+            return True
+        if not is_ntfs_fixed_drive(target):
+            return True
+        return messagebox.askyesno(
+            "Turbo Scan (Experimental)",
+            "Turbo Scan reads the NTFS Master File Table directly instead "
+            "of walking folders one at a time, which can be dramatically "
+            "faster on large drives.\n\n"
+            "This needs a one-time administrator prompt (UAC) for this "
+            "scan. A few notes:\n"
+            "• This window stays open throughout — unlike \"Run as "
+            "Admin\", nothing restarts.\n"
+            "• It only reads the volume; nothing is ever written or "
+            "modified.\n"
+            "• If anything about it fails, this scan automatically falls "
+            "back to the regular scan — you'll still get a result either "
+            "way.\n\n"
+            "Continue with Turbo Scan?",
+            icon="question",
+        )
+
     def start_scan(self):
         if self.scan_thread and self.scan_thread.is_alive():
             return
@@ -298,6 +354,8 @@ class MainWindowMixin:
         if not target or not os.path.exists(target):
             messagebox.showerror("Storage Scanner", f"Path does not exist:\n{target}")
             return
+
+        turbo_enabled = self._resolve_turbo_scan_consent(target)
 
         # Reset state.
         self.cancel_event.clear()
@@ -313,14 +371,16 @@ class MainWindowMixin:
         self.status_var.set(f"Scanning {target} …")
 
         self.scan_thread = threading.Thread(
-            target=self._scan_worker, args=(target,), daemon=True
+            target=self._scan_worker, args=(target, turbo_enabled), daemon=True
         )
         self.scan_thread.start()
         self.root.after(100, self._poll_progress)
-    def _scan_worker(self, target):
+    def _scan_worker(self, target, turbo_enabled=False):
         try:
-            node = scan(target, self.progress_q, self.cancel_event)
-            self.progress_q.put(("done", node))
+            node, report = turbo_scan.scan_with_best_engine(
+                target, self.progress_q, self.cancel_event, turbo_enabled=turbo_enabled,
+            )
+            self.progress_q.put(("done", (node, report)))
         except Exception as exc:  # noqa: BLE001 - report any scan failure to UI
             logger.exception("Scan of %r failed", target)
             self.progress_q.put(("error", str(exc)))
@@ -364,7 +424,7 @@ class MainWindowMixin:
                 ("error", f"Elevated scan produced invalid output: {exc}")
             )
             return
-        self.progress_q.put(("done", node))
+        self.progress_q.put(("done", (node, None)))
     def _poll_progress(self):
         try:
             while True:
@@ -372,7 +432,8 @@ class MainWindowMixin:
                 if kind == "progress":
                     self.status_var.set(f"Scanning … {payload:,} files counted")
                 elif kind == "done":
-                    self._finish_scan(payload)
+                    node, report = payload
+                    self._finish_scan(node, report)
                     return
                 elif kind == "error":
                     self._finish_error(payload)
@@ -382,7 +443,7 @@ class MainWindowMixin:
         self.root.after(100, self._poll_progress)
     
     # -- History helper functions ------------------------------------------ #
-    def _finish_scan(self, node):
+    def _finish_scan(self, node, report=None):
         self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
@@ -400,11 +461,21 @@ class MainWindowMixin:
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
-        self.tools_btn.config(state="normal")
-        self.top_count_combo.config(state="readonly")
+        engine_prefix = ""
+        if report is not None and report.engine == turbo_scan.ENGINE_TURBO:
+            throughput = report.file_count / report.elapsed_seconds if report.elapsed_seconds > 0 else 0
+            engine_prefix = (
+                f"⚡ Turbo Scan (NTFS MFT) · {report.file_count:,} files in "
+                f"{report.elapsed_seconds:.1f}s ({throughput:,.0f} files/sec)  —  "
+            )
+
+        if report is not None and report.fallback_reason:
+            self._show_turbo_fallback_banner(report.fallback_reason)
+        else:
+            self._dismiss_turbo_fallback_banner()
 
         self.status_var.set(
-            f"{node.path}  —  {human_size(node.size)} in "
+            f"{engine_prefix}{node.path}  —  {human_size(node.size)} in "
             f"{node.file_count:,} files | Saving history..."
         )
 
@@ -421,6 +492,35 @@ class MainWindowMixin:
             self.elevate_btn.config(state="normal")
         self.status_var.set("Scan failed.")
         messagebox.showerror("Storage Scanner", f"Scan failed:\n{msg}")
+
+    def _show_turbo_fallback_banner(self, reason):
+        """Dismissible banner explaining a scan silently used the
+        Compatible engine after Turbo Scan failed -- same pattern as
+        app.py's _show_update_banner. Never hidden: a fallback should
+        always be visible, not silently swallowed (see storage_scanner.
+        turbo_scan.scan_with_best_engine's docstring)."""
+        self._dismiss_turbo_fallback_banner()
+
+        banner = ttk.Frame(self.root, padding=(10, 6))
+        self._turbo_fallback_banner = banner
+
+        def dismiss():
+            self._dismiss_turbo_fallback_banner()
+
+        ttk.Label(
+            banner, style="Accent.TLabel",
+            text=f"⚠ Turbo Scan wasn't available for this scan — used the regular scan instead ({reason}).",
+        ).pack(side=LEFT)
+        ttk.Button(banner, text="✕", width=3, command=dismiss).pack(side=RIGHT)
+
+        banner.pack(side=TOP, fill=X, before=self.toolbar_frame)
+
+    def _dismiss_turbo_fallback_banner(self):
+        banner = getattr(self, "_turbo_fallback_banner", None)
+        if banner is not None:
+            banner.destroy()
+            self._turbo_fallback_banner = None
+
     def cancel_scan(self):
         self.cancel_event.set()
         self.dup_cancel_event.set()

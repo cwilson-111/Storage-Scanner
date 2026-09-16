@@ -50,16 +50,17 @@ def _build_resident_attr(attr_type, value, attribute_id):
 
 def _build_nonresident_attr(
     attr_type, *, allocated_size, real_size, initialized_size,
-    attribute_id, compression_unit=0,
+    attribute_id, compression_unit=0, data_runs=b"\x00", name_length=0,
 ):
     common_len = 16
     nrh_len = 48
     extra = 8 if compression_unit else 0
     data_runs_offset = common_len + nrh_len + extra
-    data_runs = b"\x00"  # a real run-list terminator; contents unused (out of scope)
     unpadded = data_runs_offset + len(data_runs)
     total_len = (unpadded + 7) // 8 * 8
-    common = struct.pack("<IIBBHHH", attr_type, total_len, 1, 0, 0, 0, attribute_id)
+    common = struct.pack(
+        "<IIBBHHH", attr_type, total_len, 1, name_length, 0, 0, attribute_id
+    )
     nrh = struct.pack(
         "<QQHHIQQQ", 0, 0, data_runs_offset, compression_unit, 0,
         allocated_size, real_size, initialized_size,
@@ -408,3 +409,122 @@ def test_mtime_atime_and_reparse_and_cloud_placeholder_flags():
     assert parsed.is_cloud_placeholder
     assert parsed.mtime > 0
     assert parsed.atime > 0
+
+
+# -- decode_data_runs -------------------------------------------------------- #
+# This is the fix for a real bug the Turbo Scan validation gate caught on a
+# real (fragmented) $MFT: mft_volume.py previously assumed the $MFT was one
+# contiguous span, silently dropping most of a real volume's records. These
+# runs are built by hand against the documented NTFS data-run byte format
+# (header nibble = length-field size / LCN-offset-field size, then an
+# unsigned length, then a signed little-endian LCN delta relative to the
+# previous run), not derived from the decoder itself.
+
+def test_decode_single_run():
+    # header 0x21: length field 1 byte, LCN-offset field 2 bytes.
+    runs = b"\x21" + bytes([10]) + (1000).to_bytes(2, "little", signed=True) + b"\x00"
+    assert mft_parser.decode_data_runs(runs) == [(10, 1000)]
+
+
+def test_decode_two_runs_with_relative_lcn_deltas():
+    # Each run's LCN is relative to the previous one, not absolute.
+    runs = (
+        b"\x11" + bytes([5]) + (100).to_bytes(1, "little", signed=True)
+        + b"\x11" + bytes([8]) + (50).to_bytes(1, "little", signed=True)
+        + b"\x00"
+    )
+    assert mft_parser.decode_data_runs(runs) == [(5, 100), (8, 150)]
+
+
+def test_decode_negative_lcn_delta_moves_backward():
+    runs = (
+        b"\x21" + bytes([5]) + (1000).to_bytes(2, "little", signed=True)
+        + b"\x21" + bytes([3]) + (-200).to_bytes(2, "little", signed=True)
+        + b"\x00"
+    )
+    assert mft_parser.decode_data_runs(runs) == [(5, 1000), (3, 800)]
+
+
+def test_decode_sparse_run_is_omitted_but_does_not_shift_later_lcns():
+    # header 0x01: length field 1 byte, LCN-offset field 0 bytes (sparse --
+    # no physical allocation, no LCN delta present at all).
+    runs = (
+        b"\x01" + bytes([20])
+        + b"\x21" + bytes([5]) + (300).to_bytes(2, "little", signed=True)
+        + b"\x00"
+    )
+    assert mft_parser.decode_data_runs(runs) == [(5, 300)]
+
+
+def test_decode_empty_or_immediately_terminated_runs():
+    assert mft_parser.decode_data_runs(b"") == []
+    assert mft_parser.decode_data_runs(b"\x00") == []
+
+
+def test_decode_multi_byte_length_field():
+    # header 0x13: length field 3 bytes (a run large enough to need it),
+    # LCN-offset field 1 byte.
+    runs = b"\x13" + (100000).to_bytes(3, "little", signed=False) + bytes([5]) + b"\x00"
+    assert mft_parser.decode_data_runs(runs) == [(100000, 5)]
+
+
+# -- get_nonresident_data_runs_bytes ----------------------------------------- #
+
+def _record_with_data_attr(record_number, data_attr):
+    return build_record(
+        record_number,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+        data_attr=data_attr,
+    )
+
+
+def test_get_data_runs_round_trips_through_decode():
+    expected_runs = [(10, 1000), (5, 1500)]
+    runs_bytes = (
+        b"\x21" + bytes([10]) + (1000).to_bytes(2, "little", signed=True)
+        + b"\x21" + bytes([5]) + (500).to_bytes(2, "little", signed=True)
+        + b"\x00"
+    )
+    data_attr = _build_nonresident_attr(
+        mft_parser._ATTR_DATA, allocated_size=0, real_size=0, initialized_size=0,
+        attribute_id=2, data_runs=runs_bytes,
+    )
+    record = _record_with_data_attr(70, data_attr)
+
+    found = mft_parser.get_nonresident_data_runs_bytes(record)
+
+    assert found is not None
+    assert mft_parser.decode_data_runs(found) == expected_runs
+
+
+def test_get_data_runs_returns_none_for_resident_data():
+    data_attr = _build_resident_attr(mft_parser._ATTR_DATA, b"tiny", 2)
+    record = _record_with_data_attr(71, data_attr)
+    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+
+
+def test_get_data_runs_returns_none_for_a_named_stream():
+    data_attr = _build_nonresident_attr(
+        mft_parser._ATTR_DATA, allocated_size=0, real_size=0, initialized_size=0,
+        attribute_id=2, name_length=1,  # a named alternate data stream
+    )
+    record = _record_with_data_attr(72, data_attr)
+    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+
+
+def test_get_data_runs_returns_none_when_no_data_attribute_exists():
+    record = build_record(
+        73, std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+
+
+def test_get_data_runs_returns_none_for_a_corrupt_record():
+    record = build_record(
+        74, signature=b"BAAD",
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(1, "x"), 1)],
+    )
+    assert mft_parser.get_nonresident_data_runs_bytes(record) is None

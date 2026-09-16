@@ -135,6 +135,8 @@ class _RawAttribute:
     allocated_size: int = 0
     real_size: int = 0
     initialized_size: int = 0
+    data_runs: bytes = b""  # non-resident only; still encoded, never
+                             # decoded here -- see decode_data_runs
 
 
 @dataclass
@@ -241,16 +243,28 @@ def _iter_attributes(fixed, header):
         if non_resident:
             nrh_off = offset + _ATTR_COMMON_SIZE
             if nrh_off + _ATTR_NONRESIDENT_SIZE <= end:
-                (_starting_vcn, _last_vcn, _data_runs_offset,
+                (_starting_vcn, _last_vcn, data_runs_offset,
                  _compression_unit, _reserved, allocated_size, real_size,
                  initialized_size) = struct.unpack_from(
                     _ATTR_NONRESIDENT_FORMAT, fixed, nrh_off
                 )
+                # The run-list bytes are never decoded here (see module
+                # docstring) -- only sliced out, using the attribute's own
+                # documented data_runs_offset field (not assumed from the
+                # non-resident header's fixed size) so an unusual/padded
+                # layout can't silently mis-slice them.
+                data_runs = b""
+                if data_runs_offset:
+                    runs_start = offset + data_runs_offset
+                    runs_end = offset + length
+                    if offset < runs_start <= runs_end <= end:
+                        data_runs = bytes(fixed[runs_start:runs_end])
                 yield _RawAttribute(
                     attr_type=attr_type, attribute_id=attribute_id,
                     non_resident=True, is_named=is_named,
                     allocated_size=allocated_size,
                     real_size=real_size, initialized_size=initialized_size,
+                    data_runs=data_runs,
                 )
         else:
             rh_off = offset + _ATTR_COMMON_SIZE
@@ -437,3 +451,69 @@ def parse_base_record(record_number, record_source):
         alloc_size=alloc_size,
         names=names,
     )
+
+
+def get_nonresident_data_runs_bytes(record_bytes, attr_type=_ATTR_DATA):
+    """Locate one raw MFT record's first non-resident, unnamed attribute
+    of `attr_type` and return its still-encoded data-run bytes, or None if
+    there's no such attribute (missing, resident, or named).
+
+    This is the one place run-list bytes are exposed at all -- everything
+    else in this module (parse_base_record included) only ever reads a
+    non-resident attribute's AllocatedSize/RealSize/InitializedSize header
+    fields, never its runs, because sizing never needs them. The sole
+    consumer of this function is storage_scanner.mft_volume, which needs
+    the $MFT's own record #0 $DATA runs to find every physical extent of a
+    (possibly fragmented) $MFT -- decoding those bytes into (length, LCN)
+    pairs happens there via decode_data_runs, not here.
+    """
+    header, fixed = _read_header_and_fixup(record_bytes)
+    if header is None:
+        return None
+    for attr in _iter_attributes(fixed, header):
+        if attr.attr_type == attr_type and not attr.is_named and attr.non_resident:
+            return attr.data_runs or None
+    return None
+
+
+def decode_data_runs(runs_bytes):
+    """Decode an NTFS non-resident attribute's data-run list into a list
+    of (length_in_clusters, lcn) tuples describing each physical extent,
+    in order. A sparse run (no physical allocation) is omitted rather than
+    yielded with a placeholder LCN -- callers that need to preserve gaps
+    for VCN accounting would have to special-case this, but the one
+    current caller (locating $MFT extents) only cares about real,
+    allocated extents.
+
+    Each run is: a header byte (low nibble = length-field byte count, high
+    nibble = LCN-offset-field byte count), then the length (unsigned,
+    little-endian), then -- unless the LCN-offset size is 0, meaning a
+    sparse run -- a *signed* little-endian LCN delta relative to the
+    previous run's LCN (the first run's delta is relative to 0). The list
+    ends at a single 0x00 header byte.
+    """
+    runs = []
+    offset = 0
+    current_lcn = 0
+    while offset < len(runs_bytes):
+        header = runs_bytes[offset]
+        if header == 0:
+            break
+        length_size = header & 0x0F
+        offset_size = (header >> 4) & 0x0F
+        offset += 1
+
+        length = int.from_bytes(runs_bytes[offset:offset + length_size], "little", signed=False)
+        offset += length_size
+
+        if offset_size == 0:
+            continue  # sparse run -- no physical allocation, LCN unchanged
+
+        lcn_delta = int.from_bytes(
+            runs_bytes[offset:offset + offset_size], "little", signed=True
+        )
+        offset += offset_size
+        current_lcn += lcn_delta
+        runs.append((length, current_lcn))
+
+    return runs

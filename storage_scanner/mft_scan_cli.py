@@ -22,7 +22,7 @@ import sys
 import threading
 
 from storage_scanner.mft_parser import parse_base_record
-from storage_scanner.mft_scan import build_tree
+from storage_scanner.mft_scan import build_tree, finalize_subtree
 from storage_scanner.mft_volume import open_record_source
 from storage_scanner.serialization import node_to_dict
 from storage_scanner.turbo_scan import find_subtree_node
@@ -79,12 +79,15 @@ def run_mft_scan(argv):
         finally:
             record_source.close()
 
-        root_node, _orphan_count = build_tree(records, root_path=args.drive)
+        root_node, _orphan_count, frn_by_node_id = build_tree(records, root_path=args.drive)
         if root_node is None:
             raise RuntimeError(
                 f"Turbo Scan could not locate a root directory record on {args.drive!r}"
             )
         subtree_node = find_subtree_node(root_node, args.subtree)
+        # Hard-link dedup is deliberately scoped to just this subtree, not
+        # the whole volume -- see mft_scan.finalize_subtree's docstring.
+        finalize_subtree(subtree_node, frn_by_node_id)
 
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(node_to_dict(subtree_node), f)

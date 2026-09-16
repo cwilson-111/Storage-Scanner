@@ -49,7 +49,7 @@ def test_successful_scan_writes_json_output_and_closes_the_source(monkeypatch, t
 
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
     monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
-    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0))
+    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
     monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
 
     output_path = tmp_path / "out.json"
@@ -85,7 +85,7 @@ def test_missing_root_record_is_a_scan_error(monkeypatch, tmp_path, capsys):
     fake_source = _FakeRecordSource(record_count=1)
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
     monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
-    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (None, 0))
+    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (None, 0, {}))
 
     output_path = tmp_path / "out.json"
     exit_code = mft_scan_cli.run_mft_scan(_base_argv(output_path))
@@ -100,7 +100,7 @@ def test_subtree_not_found_is_a_scan_error(monkeypatch, tmp_path):
     fake_node = _make_node()
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
     monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
-    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0))
+    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
 
     def missing(root, path):
         raise RuntimeError(f"Turbo Scan could not locate {path!r} in the volume tree")
@@ -119,7 +119,7 @@ def test_unwritable_output_path_is_a_scan_error(monkeypatch, tmp_path):
     fake_node = _make_node()
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
     monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
-    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0))
+    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
     monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
 
     unwritable_dir = tmp_path / "does_not_exist"

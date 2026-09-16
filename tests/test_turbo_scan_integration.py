@@ -64,6 +64,76 @@ def _file_name_value(parent_frn, name):
     return fixed + bytes([len(name), 1]) + name_bytes  # namespace 1 = Win32
 
 
+def _minimal_unsigned_bytes(value):
+    n = 1
+    while True:
+        try:
+            return value.to_bytes(n, "little", signed=False)
+        except OverflowError:
+            n += 1
+
+
+def _minimal_signed_bytes(value):
+    n = 1
+    while True:
+        try:
+            return value.to_bytes(n, "little", signed=True)
+        except OverflowError:
+            n += 1
+
+
+def _encode_runs(extents):
+    """`extents` is a list of (length_clusters, absolute_lcn) tuples."""
+    out = bytearray()
+    previous_lcn = 0
+    for length, lcn in extents:
+        delta = lcn - previous_lcn
+        previous_lcn = lcn
+        length_bytes = _minimal_unsigned_bytes(length)
+        delta_bytes = _minimal_signed_bytes(delta)
+        out.append((len(delta_bytes) << 4) | len(length_bytes))
+        out.extend(length_bytes)
+        out.extend(delta_bytes)
+    out.append(0)
+    return bytes(out)
+
+
+def _nonresident_data_attr(runs_bytes, attribute_id=2):
+    common_len = 16
+    nrh_len = 48
+    data_runs_offset = common_len + nrh_len
+    unpadded = data_runs_offset + len(runs_bytes)
+    total_len = (unpadded + 7) // 8 * 8
+    common = struct.pack("<IIBBHHH", _ATTR_DATA, total_len, 1, 0, 0, 0, attribute_id)
+    nrh = struct.pack("<QQHHIQQQ", 0, 0, data_runs_offset, 0, 0, 0, 0, 0)
+    body = bytearray(common + nrh)
+    body.extend(runs_bytes)
+    body.extend(b"\x00" * (total_len - len(body)))
+    return bytes(body)
+
+
+def _build_mft_record0(extents):
+    """The real $MFT record #0 -- RecordSource now bootstraps the $MFT's
+    actual (possibly multi-extent) physical layout from this record's own
+    $DATA data runs, rather than assuming one contiguous span (that
+    assumption was a real bug -- see mft_volume.py's module docstring).
+    No $STANDARD_INFORMATION/$FILE_NAME needed: resolving extents only
+    ever calls mft_parser.get_nonresident_data_runs_bytes."""
+    data_attr = _nonresident_data_attr(_encode_runs(extents))
+    attrs = data_attr + struct.pack("<I", _ATTR_END_MARKER)
+    bytes_in_use = _FIRST_ATTR_OFFSET + len(attrs)
+    header = struct.pack(
+        "<4sHHQHHHHIIQHHI",
+        b"FILE", _USA_OFFSET, _USA_SIZE, 0, 1, 1,
+        _FIRST_ATTR_OFFSET, _RECORD_FLAG_IN_USE, bytes_in_use, _RECORD_SIZE,
+        0, 0, 0, 0,
+    )
+    buf = bytearray(_RECORD_SIZE)
+    buf[0:len(header)] = header
+    buf[_FIRST_ATTR_OFFSET:_FIRST_ATTR_OFFSET + len(attrs)] = attrs
+    return _stamp_fixups(bytes(buf))
+
+
 def _stamp_fixups(record):
     record = bytearray(record)
     usn = b"\x01\x00"
@@ -76,12 +146,18 @@ def _stamp_fixups(record):
     return bytes(record)
 
 
-def _build_record(record_number, *, is_directory, sequence_number, file_name, data=None):
+def _build_record(record_number, *, is_directory, sequence_number, file_name=None, file_names=None, data=None):
+    """`file_name` is a convenience for the common single-name case;
+    `file_names` (a list) supports a genuinely hard-linked record with
+    more than one $FILE_NAME attribute, one per parent directory."""
+    if file_names is None:
+        file_names = [file_name]
     attrs = bytearray()
     attrs += _resident_attr(_ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
-    attrs += _resident_attr(_ATTR_FILE_NAME, file_name, 1)
+    for i, name_value in enumerate(file_names):
+        attrs += _resident_attr(_ATTR_FILE_NAME, name_value, 1 + i)
     if data is not None:
-        attrs += _resident_attr(_ATTR_DATA, data, 2)
+        attrs += _resident_attr(_ATTR_DATA, data, 1 + len(file_names))
     attrs += struct.pack("<I", _ATTR_END_MARKER)
 
     flags = _RECORD_FLAG_IN_USE | (_RECORD_FLAG_IS_DIRECTORY if is_directory else 0)
@@ -109,20 +185,68 @@ def _unused_record(record_number):
     return _stamp_fixups(bytes(buf))
 
 
+_MFT_START_LCN = _MFT_BYTE_OFFSET // _BYTES_PER_CLUSTER
+_RECORDS_PER_CLUSTER = _BYTES_PER_CLUSTER // _RECORD_SIZE  # 4
+
+
 def _build_fake_volume():
-    """Records 0-4: unused placeholders. 5: root. 6: hello.txt (under
-    root). 7: Sub (directory, under root). 8: inside.txt (under Sub)."""
+    """Record 0: the real $MFT record (its data runs describe one extent,
+    at _MFT_START_LCN, covering every other record below). 1-4: unused
+    placeholders. 5: root. 6: hello.txt (under root). 7: Sub (directory,
+    under root). 8: inside.txt (under Sub). 9-11: implicit zero padding
+    out to a whole number of clusters (harmlessly parsed as unused slots,
+    same as any real MFT's free space)."""
     root_frn = _pack_frn(1, 5)
     sub_frn = _pack_frn(1, 7)
 
-    records = [_unused_record(n) for n in range(5)]
+    total_records = 9  # 0..8
+    length_clusters = -(-total_records // _RECORDS_PER_CLUSTER)  # ceil division
+    record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
+
+    records = [record0] + [_unused_record(n) for n in range(1, 5)]
     records.append(_build_record(5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")))
     records.append(_build_record(6, is_directory=False, sequence_number=1, file_name=_file_name_value(root_frn, "hello.txt"), data=b"hi!"))
     records.append(_build_record(7, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, "Sub")))
     records.append(_build_record(8, is_directory=False, sequence_number=1, file_name=_file_name_value(sub_frn, "inside.txt"), data=b"xyz12"))
 
     mft_bytes = b"".join(records)
-    return (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes, len(records)
+    mft_bytes = mft_bytes.ljust(length_clusters * _RECORDS_PER_CLUSTER * _RECORD_SIZE, b"\x00")
+    volume = (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
+    return volume
+
+
+def _build_fake_volume_with_cross_subtree_hardlink():
+    """Record 0: real $MFT record (one extent). 1-4: unused. 5: root.
+    6: Sub (directory, under root). 7: the SAME real file hard-linked
+    twice -- once directly under root as "in_root.bin", once under Sub as
+    "in_sub.bin". This is the exact real-world pattern that caused the
+    validation-gate-caught bug (a system file hard-linked between
+    C:\\Windows\\Fonts and C:\\Windows\\WinSxS): a scan of just "C:\\Sub"
+    must bill "in_sub.bin" in full, never zeroed just because its OTHER
+    occurrence lies outside the requested subtree."""
+    root_frn = _pack_frn(1, 5)
+    sub_frn = _pack_frn(1, 6)
+
+    total_records = 8  # 0..7
+    length_clusters = -(-total_records // _RECORDS_PER_CLUSTER)  # ceil division
+    record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
+
+    records = [record0] + [_unused_record(n) for n in range(1, 5)]
+    records.append(_build_record(5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")))
+    records.append(_build_record(6, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, "Sub")))
+    records.append(_build_record(
+        7, is_directory=False, sequence_number=1,
+        file_names=[
+            _file_name_value(root_frn, "in_root.bin"),
+            _file_name_value(sub_frn, "in_sub.bin"),
+        ],
+        data=b"hello world",
+    ))
+
+    mft_bytes = b"".join(records)
+    mft_bytes = mft_bytes.ljust(length_clusters * _RECORDS_PER_CLUSTER * _RECORD_SIZE, b"\x00")
+    volume = (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
+    return volume
 
 
 class _FakeCreateFileW:
@@ -137,9 +261,8 @@ class _FakeCreateFileW:
 
 
 class _FakeKernel32:
-    def __init__(self, volume_bytes, record_count):
+    def __init__(self, volume_bytes):
         self.volume_bytes = volume_bytes
-        self.record_count = record_count
         self._file_pointer = 0
         self.CreateFileW = _FakeCreateFileW()
 
@@ -155,8 +278,8 @@ class _FakeKernel32:
         info.BytesPerSector = _SECTOR_SIZE
         info.BytesPerCluster = _BYTES_PER_CLUSTER
         info.BytesPerFileRecordSegment = _RECORD_SIZE
-        info.MftValidDataLength = self.record_count * _RECORD_SIZE
-        info.MftStartLcn = _MFT_BYTE_OFFSET // _BYTES_PER_CLUSTER
+        info.MftValidDataLength = 0  # unused -- record_count now comes from decoded extents
+        info.MftStartLcn = _MFT_START_LCN
         return 1
 
     def SetFilePointerEx(self, handle, distance, new_position_ref, method):
@@ -179,8 +302,8 @@ class _FakeWinDLL:
 
 
 def test_full_pipeline_scans_a_subfolder_through_the_real_engine(monkeypatch):
-    volume_bytes, record_count = _build_fake_volume()
-    kernel32 = _FakeKernel32(volume_bytes, record_count)
+    volume_bytes = _build_fake_volume()
+    kernel32 = _FakeKernel32(volume_bytes)
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
     monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
     monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
@@ -203,8 +326,8 @@ def test_full_pipeline_scans_a_subfolder_through_the_real_engine(monkeypatch):
 
 
 def test_full_pipeline_scans_the_whole_volume(monkeypatch):
-    volume_bytes, record_count = _build_fake_volume()
-    kernel32 = _FakeKernel32(volume_bytes, record_count)
+    volume_bytes = _build_fake_volume()
+    kernel32 = _FakeKernel32(volume_bytes)
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
     monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
     monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
@@ -221,3 +344,33 @@ def test_full_pipeline_scans_the_whole_volume(monkeypatch):
 
     child_names = {c.name for c in node.children}
     assert child_names == {"hello.txt", "Sub"}
+
+
+def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_full(monkeypatch):
+    # The exact real-world bug the validation gate caught: without the
+    # fix, scanning just "C:\Sub" would zero out "in_sub.bin" because the
+    # SAME file's other occurrence ("in_root.bin", outside this subtree
+    # entirely) got picked as the whole volume's "primary" instead.
+    volume_bytes = _build_fake_volume_with_cross_subtree_hardlink()
+    kernel32 = _FakeKernel32(volume_bytes)
+    monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
+    monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
+
+    progress_q, cancel_event = queue.Queue(), threading.Event()
+    node, report = turbo_scan.scan_with_best_engine(
+        "C:\\Sub", progress_q, cancel_event, turbo_enabled=True,
+    )
+
+    assert report.engine == turbo_scan.ENGINE_TURBO
+    assert node.name == "Sub"
+
+    child_names = {c.name for c in node.children}
+    assert child_names == {"in_sub.bin"}
+
+    in_sub = node.children[0]
+    assert in_sub.hardlink_dup is False
+    assert in_sub.size == len(b"hello world")
+    assert node.size == len(b"hello world")
+    assert node.file_count == 1

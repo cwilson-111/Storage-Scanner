@@ -28,6 +28,45 @@ _CLOUD_PLACEHOLDER_ATTRS = (
 
 _INVALID_FILE_SIZE = 0xFFFFFFFF
 
+# GetCompressedFileSizeW-per-volume cluster size, cached so an entire scan
+# costs one extra GetDiskFreeSpaceW call per drive, not one per file.
+_cluster_size_cache = {}
+_cluster_size_cache_lock = threading.Lock()
+
+
+def _volume_root(path):
+    drive, _tail = os.path.splitdrive(os.path.abspath(path))
+    return drive + "\\" if drive else None
+
+
+def _get_cluster_size(path):
+    """Bytes per allocation unit (cluster) for the volume containing
+    `path`, or None if it can't be determined (in which case the caller
+    should skip rounding rather than guess)."""
+    volume_root = _volume_root(path)
+    if not volume_root:
+        return None
+    with _cluster_size_cache_lock:
+        if volume_root in _cluster_size_cache:
+            return _cluster_size_cache[volume_root]
+    size = None
+    try:
+        sectors_per_cluster = ctypes.c_ulong(0)
+        bytes_per_sector = ctypes.c_ulong(0)
+        free_clusters = ctypes.c_ulong(0)
+        total_clusters = ctypes.c_ulong(0)
+        succeeded = ctypes.windll.kernel32.GetDiskFreeSpaceW(
+            volume_root, ctypes.byref(sectors_per_cluster), ctypes.byref(bytes_per_sector),
+            ctypes.byref(free_clusters), ctypes.byref(total_clusters),
+        )
+        if succeeded:
+            size = sectors_per_cluster.value * bytes_per_sector.value
+    except OSError:
+        size = None
+    with _cluster_size_cache_lock:
+        _cluster_size_cache[volume_root] = size
+    return size
+
 
 def _windows_alloc_size(path, fallback):
     """Actual on-disk bytes for `path`, accounting for NTFS compression and
@@ -45,6 +84,23 @@ def _windows_alloc_size(path, fallback):
         # High 32 bits aren't retrievable without a second out-param this
         # call doesn't use; files large enough for that to matter are rare
         # enough here that the logical size fallback is an acceptable trade.
+
+        # GetCompressedFileSizeW only returns something smaller than the
+        # logical size for a genuinely compressed or sparse file -- for an
+        # ordinary file it just echoes the logical size back, uncorrected
+        # for the fact that NTFS can only ever allocate whole clusters.
+        # Round up to the volume's real cluster size to match true
+        # physical disk usage (and what Explorer's own "Size on disk"
+        # property shows) -- confirmed against Turbo Scan's own
+        # allocation accounting, which reads it directly from the MFT.
+        # (A handful of very small files stored resident, inline in their
+        # MFT record with no separate cluster allocation at all, will
+        # still get rounded up here since there's no cheap way for this
+        # API-based path to know a file is resident -- a known, minor,
+        # accepted imprecision, not worth a costlier check to eliminate.)
+        cluster_size = _get_cluster_size(path)
+        if cluster_size:
+            low = -(-low // cluster_size) * cluster_size
         return low
     except OSError:
         return fallback
