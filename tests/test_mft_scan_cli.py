@@ -1,10 +1,11 @@
 """Tests for storage_scanner.mft_scan_cli's orchestration (arg parsing,
-the record-read loop, writing JSON output, exit codes) with
-open_record_source/parse_base_record/build_tree/find_subtree_node mocked
-out -- those are each already covered by their own dedicated test files
-(test_mft_volume.py, test_mft_parser.py, test_mft_scan.py,
-test_turbo_scan.py). The real end-to-end scan needs a real elevated
-Windows session, same as the rest of Turbo Scan's raw-volume-reading path.
+writing JSON output, exit codes) with open_record_source/
+get_records_using_cache/build_tree/find_subtree_node mocked out -- those
+are each already covered by their own dedicated test files
+(test_mft_volume.py, test_mft_parser.py, test_turbo_cache.py,
+test_usn_journal.py, test_mft_scan.py, test_turbo_scan.py). The real
+end-to-end scan needs a real elevated Windows session, same as the rest of
+Turbo Scan's raw-volume-reading path.
 """
 
 import json
@@ -48,7 +49,7 @@ def test_successful_scan_writes_json_output_and_closes_the_source(monkeypatch, t
     fake_node = _make_node()
 
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
     monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
 
@@ -68,10 +69,10 @@ def test_source_is_closed_even_if_parsing_raises(monkeypatch, tmp_path):
     fake_source = _FakeRecordSource(record_count=3)
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
 
-    def boom(n, source):
+    def boom(*a, **k):
         raise RuntimeError("simulated read failure")
 
-    monkeypatch.setattr(mft_scan_cli, "parse_base_record", boom)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", boom)
 
     output_path = tmp_path / "out.json"
     exit_code = mft_scan_cli.run_mft_scan(_base_argv(output_path))
@@ -84,7 +85,7 @@ def test_source_is_closed_even_if_parsing_raises(monkeypatch, tmp_path):
 def test_missing_root_record_is_a_scan_error(monkeypatch, tmp_path, capsys):
     fake_source = _FakeRecordSource(record_count=1)
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (None, 0, {}))
 
     output_path = tmp_path / "out.json"
@@ -99,7 +100,7 @@ def test_subtree_not_found_is_a_scan_error(monkeypatch, tmp_path):
     fake_source = _FakeRecordSource(record_count=1)
     fake_node = _make_node()
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
 
     def missing(root, path):
@@ -118,7 +119,7 @@ def test_unwritable_output_path_is_a_scan_error(monkeypatch, tmp_path):
     fake_source = _FakeRecordSource(record_count=1)
     fake_node = _make_node()
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "parse_base_record", lambda n, source: None)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
     monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
 

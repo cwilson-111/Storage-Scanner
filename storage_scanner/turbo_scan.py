@@ -9,6 +9,18 @@ elevation prompt, a raw-volume read error, a single unparseable MFT
 record, a missing subtree path, anything at all -- is just another Turbo
 failure to scan_with_best_engine()'s broad except: it always falls back to
 the Compatible engine rather than crash or hang.
+
+get_records_using_cache() is the shared entry point both
+_run_turbo_in_process (here) and mft_scan_cli.run_mft_scan (the headless
+elevated-helper subprocess) call to get the whole volume's flat
+ParsedRecord list -- from a cached, incrementally-refreshed copy
+(storage_scanner.turbo_cache + storage_scanner.usn_journal) when one is
+available and valid, or a full MFT read+parse otherwise, in which case the
+result is cached for next time. Caching is a pure optimization: any
+failure anywhere in that path (a locked/corrupt cache DB, no USN journal
+support, a wrapped/recreated journal) just falls back to the plain full
+scan this module always did before caching existed -- never raises out of
+get_records_using_cache, and never changes what records a scan returns.
 """
 
 import os
@@ -16,7 +28,7 @@ import time
 from dataclasses import dataclass
 
 from history import get_app_metadata
-from storage_scanner import mft_parser, mft_scan, mft_volume, scanner
+from storage_scanner import mft_parser, mft_scan, mft_volume, scanner, turbo_cache, usn_journal
 from storage_scanner.drive_info import get_volume_root, is_ntfs_fixed_drive
 from storage_scanner.file_ops import run_elevated_scan_windows
 from storage_scanner.logging_setup import logger
@@ -25,6 +37,14 @@ from storage_scanner.serialization import dict_to_node
 
 ENGINE_TURBO = "turbo"
 ENGINE_COMPATIBLE = "compatible"
+
+# Every NTFS volume's root directory is always MFT record #5 -- matches
+# mft_scan._ROOT_RECORD_NUMBER, duplicated here rather than imported per
+# this codebase's existing convention (mft_parser.py/mft_scan.py each keep
+# their own copy of this same mask rather than cross-import a private
+# constant for something this fundamental).
+_ROOT_RECORD_NUMBER = 5
+_FRN_RECORD_NUMBER_MASK = 0x0000FFFFFFFFFFFF
 
 
 @dataclass
@@ -85,21 +105,135 @@ def find_subtree_node(root_node, target_path):
     return node
 
 
+def get_records_using_cache(record_source, volume_root, progress_q, cancel_event):
+    """The whole volume's flat ParsedRecord list -- from a cached,
+    incrementally-refreshed copy when one exists and is still valid for
+    this volume, or a full MFT read+parse otherwise (which then populates
+    the cache for next time). `progress_q` may be None (the headless
+    mft_scan_cli.py elevated-helper path has no progress reporting).
+
+    Never raises: any cache/journal-layer problem (no cache yet, a locked
+    or corrupt cache DB, no USN journal on this volume, a journal ID
+    mismatch or wrapped journal since the cache was built) falls straight
+    through to a full scan -- caching is a pure optimization layered on
+    top of the exact full-read behavior this module always had, not a
+    prerequisite for a scan to succeed.
+    """
+    volume_serial = record_source.volume_serial
+    cached = None
+    try:
+        # init_cache_db() is a cheap, idempotent CREATE TABLE IF NOT EXISTS
+        # -- called here rather than once at app startup because this same
+        # function is also the entry point for mft_scan_cli.py's headless
+        # elevated-helper subprocess, which never runs app.py's own
+        # startup (see history.init_history_db()'s call site there) at all.
+        turbo_cache.init_cache_db()
+        cached = turbo_cache.get_cached_volume(volume_serial)
+    except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
+        logger.warning(
+            "Turbo Scan cache is unavailable for %r; scanning without it",
+            volume_root, exc_info=True,
+        )
+
+    if cached is not None and cached["record_size"] == record_source.record_size:
+        try:
+            records = _try_incremental_refresh(record_source, cached, cancel_event)
+        except usn_journal.UsnJournalError as exc:
+            logger.info(
+                "Turbo Scan cache for %r could not be refreshed incrementally, "
+                "falling back to a full scan: %s", volume_root, exc,
+            )
+            try:
+                turbo_cache.invalidate_volume(volume_serial)
+            except Exception:  # noqa: BLE001 - best-effort cleanup only
+                logger.warning(
+                    "Could not invalidate Turbo Scan cache for %r", volume_root, exc_info=True,
+                )
+        else:
+            if records is not None:
+                return records
+
+    return _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, cancel_event)
+
+
+def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, cancel_event):
+    records = []
+    for record_number in range(record_source.record_count):
+        if cancel_event.is_set():
+            break
+        parsed = mft_parser.parse_base_record(record_number, record_source)
+        if parsed is not None:
+            records.append(parsed)
+            if progress_q is not None and len(records) % 5000 == 0:
+                progress_q.put(("progress", len(records)))
+
+    if cancel_event.is_set():
+        return records
+
+    root_frn = next(
+        (r.frn for r in records if (r.frn & _FRN_RECORD_NUMBER_MASK) == _ROOT_RECORD_NUMBER),
+        None,
+    )
+    if root_frn is not None:
+        try:
+            turbo_cache.save_full_scan(
+                volume_serial, volume_root, root_frn, record_source.record_size, records,
+            )
+            # Captured only now, after the scan (and the cache write of its
+            # results) has fully finished -- capturing it any earlier would
+            # risk losing changes made while the scan itself was still
+            # running.
+            state = usn_journal.ensure_journal(record_source.raw_handle)
+            turbo_cache.save_journal_cursor(volume_serial, state.journal_id, state.next_usn)
+        except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
+            logger.warning(
+                "Could not cache this Turbo Scan of %r; the next scan of this "
+                "volume will do a full rebuild again", volume_root, exc_info=True,
+            )
+    return records
+
+
+def _try_incremental_refresh(record_source, cached, cancel_event):
+    """Returns a refreshed records list, or None if there's no usable
+    cursor to refresh from (the caller then does a full scan). Raises
+    usn_journal.UsnJournalError for every other reason a refresh can't
+    proceed -- the caller invalidates the cache and falls back to a full
+    scan in that case too, just with a logged reason."""
+    if cached["next_usn"] is None:
+        return None  # cached records exist, but no journal cursor was ever established
+
+    handle = record_source.raw_handle
+    state = usn_journal.query_journal(handle)  # raises UsnJournalError if no journal exists
+    if state.journal_id != cached["usn_journal_id"]:
+        raise usn_journal.UsnJournalError("USN journal ID changed since this volume was cached")
+    if cached["next_usn"] < state.lowest_valid_usn:
+        raise usn_journal.UsnJournalError("USN journal has wrapped past this volume's saved cursor")
+
+    dirty, new_next_usn = usn_journal.read_journal_changes(
+        handle, state.journal_id, cached["next_usn"],
+    )
+
+    upserts, deletes = [], []
+    for dirty_record in dirty:
+        if cancel_event.is_set():
+            return None
+        parsed = mft_parser.parse_base_record(dirty_record.record_number, record_source)
+        if parsed is None:
+            deletes.append(dirty_record.record_number)
+        else:
+            upserts.append(parsed)
+
+    turbo_cache.apply_incremental_changes(cached["volume_serial"], upserts, deletes, new_next_usn)
+    return turbo_cache.load_all_records(cached["volume_serial"])
+
+
 def _run_turbo_in_process(path, progress_q, cancel_event):
     """Already elevated: read the volume and build the tree in this same
     process, skipping the subprocess bridge entirely."""
     volume_root = get_volume_root(path)
     record_source = mft_volume.open_record_source(volume_root)
     try:
-        records = []
-        for record_number in range(record_source.record_count):
-            if cancel_event.is_set():
-                break
-            parsed = mft_parser.parse_base_record(record_number, record_source)
-            if parsed is not None:
-                records.append(parsed)
-                if len(records) % 5000 == 0:
-                    progress_q.put(("progress", len(records)))
+        records = get_records_using_cache(record_source, volume_root, progress_q, cancel_event)
     finally:
         record_source.close()
 

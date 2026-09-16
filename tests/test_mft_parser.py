@@ -390,6 +390,108 @@ def test_attribute_list_entry_for_a_missing_extension_record_is_ignored():
     assert parsed.names[0].name == "primary.txt"
 
 
+class FakeRecordSourceWithClusters(FakeRecordSource):
+    """Extends FakeRecordSource with read_clusters, for the non-resident
+    $ATTRIBUTE_LIST tests below -- a fixed-size in-memory 'volume' addressed
+    by LCN, independent of the MFT-records-by-number dict above (the same
+    split real RecordSource makes: records vs. raw volume clusters)."""
+
+    def __init__(self, records_by_number, volume_bytes, bytes_per_cluster):
+        super().__init__(records_by_number)
+        self._volume_bytes = volume_bytes
+        self._bytes_per_cluster = bytes_per_cluster
+
+    def read_clusters(self, lcn, cluster_count):
+        start = lcn * self._bytes_per_cluster
+        end = start + cluster_count * self._bytes_per_cluster
+        return self._volume_bytes[start:end]
+
+
+def _single_run_bytes(length_clusters, lcn):
+    """One data run: length field 1 byte, LCN-offset field 2 bytes (signed,
+    relative to 0 since it's the first/only run) -- header nibble 0x21."""
+    return b"\x21" + bytes([length_clusters]) + lcn.to_bytes(2, "little", signed=True) + b"\x00"
+
+
+def test_nonresident_attribute_list_merges_a_file_name_from_an_extension_record():
+    # The real-world bug this covers: a heavily hard-linked file (common in
+    # WinSxS/GAC-style system areas) has enough $FILE_NAME entries that its
+    # $ATTRIBUTE_LIST itself has to go non-resident -- mft_parser used to
+    # give up on those entirely (_parse_attribute_list returned [] for any
+    # non-resident list), silently losing every extension-record $FILE_NAME
+    # (and, when $DATA itself was one of the spilled attributes, the file's
+    # real size too).
+    base_record_number = 80
+    ext_record_number = 81
+    ext_sequence = 4
+    ext_frn = _pack_frn(ext_sequence, ext_record_number)
+    bytes_per_cluster = 64
+    lcn = 3
+
+    attr_list_value = _attribute_list_value([
+        (mft_parser._ATTR_FILE_NAME, 2, ext_frn),
+    ])
+    attribute_list_attr = _build_nonresident_attr(
+        mft_parser._ATTR_ATTRIBUTE_LIST, allocated_size=bytes_per_cluster,
+        real_size=len(attr_list_value), initialized_size=len(attr_list_value),
+        attribute_id=0, data_runs=_single_run_bytes(1, lcn),
+    )
+    attrs = bytearray()
+    attrs += attribute_list_attr
+    attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
+    attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, _file_name_value(100, "primary.txt"), 1)
+    attrs += _build_resident_attr(mft_parser._ATTR_DATA, b"abc", 3)
+    base_record = _assemble_record(base_record_number, attrs)
+
+    ext_record = build_record(
+        ext_record_number,
+        base_frn=_pack_frn(1, base_record_number),
+        sequence_number=ext_sequence,
+        std_info_value=None,
+        file_names=[(_file_name_value(200, "extra_link.txt"), 2)],
+    )
+
+    volume = bytearray(lcn * bytes_per_cluster + bytes_per_cluster)
+    start = lcn * bytes_per_cluster
+    volume[start:start + len(attr_list_value)] = attr_list_value
+
+    source = FakeRecordSourceWithClusters(
+        {base_record_number: base_record, ext_record_number: ext_record},
+        bytes(volume), bytes_per_cluster,
+    )
+    parsed = parse_base_record(base_record_number, source)
+
+    assert parsed is not None
+    names = {n.parent_frn: n.name for n in parsed.names}
+    assert names == {100: "primary.txt", 200: "extra_link.txt"}
+    assert parsed.logical_size == 3  # the base record's own $DATA, unaffected
+
+
+def test_nonresident_attribute_list_without_cluster_reader_is_ignored():
+    # A record_source that can't do raw cluster reads (e.g. a lightweight
+    # record_at-only fake, or -- in principle -- a future record source
+    # without volume access) must degrade gracefully: no extra names
+    # resolved, but the base record's own attributes still parse fine.
+    base_record_number = 90
+    attribute_list_attr = _build_nonresident_attr(
+        mft_parser._ATTR_ATTRIBUTE_LIST, allocated_size=64,
+        real_size=26, initialized_size=26, attribute_id=0,
+        data_runs=_single_run_bytes(1, 3),
+    )
+    attrs = bytearray()
+    attrs += attribute_list_attr
+    attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
+    attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, _file_name_value(100, "primary.txt"), 1)
+    base_record = _assemble_record(base_record_number, attrs)
+
+    source = _single_record_source(base_record_number, base_record)
+    parsed = parse_base_record(base_record_number, source)
+
+    assert parsed is not None
+    assert len(parsed.names) == 1
+    assert parsed.names[0].name == "primary.txt"
+
+
 def test_mtime_atime_and_reparse_and_cloud_placeholder_flags():
     filetime_2020_01_01 = 132223104000000000  # arbitrary real-looking FILETIME
     reparse_and_offline = 0x400 | 0x00001000  # FILE_ATTRIBUTE_REPARSE_POINT | OFFLINE
@@ -409,6 +511,28 @@ def test_mtime_atime_and_reparse_and_cloud_placeholder_flags():
     assert parsed.is_cloud_placeholder
     assert parsed.mtime > 0
     assert parsed.atime > 0
+
+
+def test_recall_on_open_without_reparse_point_is_not_a_cloud_placeholder():
+    # The real bug this covers: CompactOS/WIMBoot-compressed system files
+    # set FILE_ATTRIBUTE_RECALL_ON_OPEN on-disk ("decompress from the WIM
+    # on open") without ever being a reparse point. Confirmed via a raw
+    # MFT read against a real machine's C:\Windows\Boot: thousands of
+    # ordinary boot DLLs parsed this way, and Compatible's live os.stat()
+    # never reported RECALL_ON_OPEN for the same files at all -- they are
+    # not cloud placeholders. A genuine OneDrive-style placeholder is
+    # always also a reparse point (IO_REPARSE_TAG_CLOUD).
+    recall_on_open_only = 0x20 | 0x00040000  # FILE_ATTRIBUTE_ARCHIVE | RECALL_ON_OPEN
+    record = build_record(
+        61,
+        std_info_value=_std_info_value(file_attributes=recall_on_open_only),
+        file_names=[(_file_name_value(1, "kd_02_10df.dll"), 1)],
+    )
+    parsed = parse_base_record(61, _single_record_source(61, record))
+
+    assert parsed is not None
+    assert not parsed.is_reparse_point
+    assert not parsed.is_cloud_placeholder
 
 
 # -- decode_data_runs -------------------------------------------------------- #

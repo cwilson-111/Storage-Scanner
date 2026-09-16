@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner import drive_info, mft_volume, turbo_scan
+from storage_scanner import drive_info, mft_volume, turbo_cache, turbo_scan, usn_journal
 from storage_scanner.mft_parser import _pack_frn
 
 _RECORD_SIZE = 1024
@@ -261,10 +261,28 @@ class _FakeCreateFileW:
 
 
 class _FakeKernel32:
-    def __init__(self, volume_bytes):
+    """Also fakes a minimal, working USN Change Journal (FSCTL_QUERY_USN_
+    JOURNAL/FSCTL_CREATE_USN_JOURNAL/FSCTL_READ_USN_JOURNAL) alongside the
+    NTFS volume-data FSCTL turbo_scan.get_records_using_cache's caching
+    path now also exercises on every real scan -- a first attempt at this
+    fake only ever handled one FSCTL code regardless of what was actually
+    requested, which would have silently fed USN journal calls garbage
+    _NTFS_VOLUME_DATA_BUFFER-shaped data instead of failing loudly."""
+
+    def __init__(self, volume_bytes, volume_serial=1, usn_journal_id=777):
         self.volume_bytes = volume_bytes
+        self.volume_serial = volume_serial
         self._file_pointer = 0
         self.CreateFileW = _FakeCreateFileW()
+        self.usn_journal_id = usn_journal_id
+        self.usn_first_usn = 0
+        self.usn_next_usn = 1000
+        self.usn_lowest_valid_usn = 0
+        # Queued raw FSCTL_READ_USN_JOURNAL response payloads (8-byte next-
+        # USN cursor + zero or more packed USN_RECORDs) -- tests inject
+        # simulated file changes here; defaults to "caught up, no records".
+        self.usn_read_responses = []
+        self.read_file_calls = 0
 
     def GetDriveTypeW(self, root_path):
         return drive_info._DRIVE_FIXED
@@ -274,19 +292,50 @@ class _FakeKernel32:
         return 1
 
     def DeviceIoControl(self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped):
-        info = ctypes.cast(out_ref, ctypes.POINTER(mft_volume._NTFS_VOLUME_DATA_BUFFER)).contents
-        info.BytesPerSector = _SECTOR_SIZE
-        info.BytesPerCluster = _BYTES_PER_CLUSTER
-        info.BytesPerFileRecordSegment = _RECORD_SIZE
-        info.MftValidDataLength = 0  # unused -- record_count now comes from decoded extents
-        info.MftStartLcn = _MFT_START_LCN
-        return 1
+        if code == mft_volume._FSCTL_GET_NTFS_VOLUME_DATA:
+            info = ctypes.cast(out_ref, ctypes.POINTER(mft_volume._NTFS_VOLUME_DATA_BUFFER)).contents
+            info.VolumeSerialNumber = self.volume_serial
+            info.BytesPerSector = _SECTOR_SIZE
+            info.BytesPerCluster = _BYTES_PER_CLUSTER
+            info.BytesPerFileRecordSegment = _RECORD_SIZE
+            info.MftValidDataLength = 0  # unused -- record_count now comes from decoded extents
+            info.MftStartLcn = _MFT_START_LCN
+            return 1
+
+        if code == usn_journal._FSCTL_QUERY_USN_JOURNAL:
+            info = ctypes.cast(out_ref, ctypes.POINTER(usn_journal._USN_JOURNAL_DATA_V0)).contents
+            info.UsnJournalID = self.usn_journal_id
+            info.FirstUsn = self.usn_first_usn
+            info.NextUsn = self.usn_next_usn
+            info.LowestValidUsn = self.usn_lowest_valid_usn
+            info.MaxUsn = 999_999_999
+            info.MaximumSize = 0
+            info.AllocationDelta = 0
+            return 1
+
+        if code == usn_journal._FSCTL_CREATE_USN_JOURNAL:
+            return 1
+
+        if code == usn_journal._FSCTL_READ_USN_JOURNAL:
+            request = ctypes.cast(in_buf, ctypes.POINTER(usn_journal._READ_USN_JOURNAL_DATA_V0)).contents
+            if request.UsnJournalID != self.usn_journal_id:
+                return 0
+            payload = (
+                self.usn_read_responses.pop(0) if self.usn_read_responses
+                else struct.pack("<q", self.usn_next_usn)  # caught up: no records
+            )
+            out_ref.raw = payload.ljust(out_size, b"\x00")
+            ctypes.cast(bytes_ret_ref, ctypes.POINTER(wintypes.DWORD)).contents.value = len(payload)
+            return 1
+
+        raise AssertionError(f"unexpected FSCTL code {code:#x}")
 
     def SetFilePointerEx(self, handle, distance, new_position_ref, method):
         self._file_pointer = distance.value
         return 1
 
     def ReadFile(self, handle, buffer, length, bytes_read_ref, overlapped):
+        self.read_file_calls += 1
         data = self.volume_bytes[self._file_pointer:self._file_pointer + length]
         buffer.raw = data.ljust(length, b"\x00")
         ctypes.cast(bytes_read_ref, ctypes.POINTER(wintypes.DWORD)).contents.value = length
@@ -301,7 +350,13 @@ class _FakeWinDLL:
         self.kernel32 = kernel32
 
 
-def test_full_pipeline_scans_a_subfolder_through_the_real_engine(monkeypatch):
+def _init_cache_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(turbo_cache, "DB_NAME", tmp_path / "turbo_scan_cache.db")
+    turbo_cache.init_cache_db()
+
+
+def test_full_pipeline_scans_a_subfolder_through_the_real_engine(monkeypatch, tmp_path):
+    _init_cache_db(tmp_path, monkeypatch)
     volume_bytes = _build_fake_volume()
     kernel32 = _FakeKernel32(volume_bytes)
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
@@ -325,7 +380,8 @@ def test_full_pipeline_scans_a_subfolder_through_the_real_engine(monkeypatch):
     assert child_names == {"inside.txt"}
 
 
-def test_full_pipeline_scans_the_whole_volume(monkeypatch):
+def test_full_pipeline_scans_the_whole_volume(monkeypatch, tmp_path):
+    _init_cache_db(tmp_path, monkeypatch)
     volume_bytes = _build_fake_volume()
     kernel32 = _FakeKernel32(volume_bytes)
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
@@ -346,11 +402,12 @@ def test_full_pipeline_scans_the_whole_volume(monkeypatch):
     assert child_names == {"hello.txt", "Sub"}
 
 
-def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_full(monkeypatch):
+def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_full(monkeypatch, tmp_path):
     # The exact real-world bug the validation gate caught: without the
     # fix, scanning just "C:\Sub" would zero out "in_sub.bin" because the
     # SAME file's other occurrence ("in_root.bin", outside this subtree
     # entirely) got picked as the whole volume's "primary" instead.
+    _init_cache_db(tmp_path, monkeypatch)
     volume_bytes = _build_fake_volume_with_cross_subtree_hardlink()
     kernel32 = _FakeKernel32(volume_bytes)
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
@@ -374,3 +431,102 @@ def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_f
     assert in_sub.size == len(b"hello world")
     assert node.size == len(b"hello world")
     assert node.file_count == 1
+
+
+# -- cache + USN Journal incremental refresh --------------------------------- #
+# The single most valuable coverage for this feature: catching wiring
+# mistakes *between* turbo_cache/usn_journal/turbo_scan that per-module unit
+# tests (test_turbo_cache.py, test_usn_journal.py) can't see, by driving the
+# real, unmocked orchestration through two scans of the same fake volume.
+
+def _pack_usn_record(frn, parent_frn, usn, reason):
+    return struct.pack(
+        usn_journal._USN_RECORD_HEADER_FORMAT,
+        usn_journal._USN_RECORD_HEADER_SIZE, 2, 0,
+        frn, parent_frn, usn, 0,
+        reason, 0, 0, 0, 0, usn_journal._USN_RECORD_HEADER_SIZE,
+    )
+
+
+def _usn_read_response(next_usn, records_bytes=b""):
+    return struct.pack("<q", next_usn) + records_bytes
+
+
+def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch, tmp_path):
+    _init_cache_db(tmp_path, monkeypatch)
+    volume_bytes = _build_fake_volume()
+    kernel32 = _FakeKernel32(volume_bytes)
+    monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
+    monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
+
+    progress_q, cancel_event = queue.Queue(), threading.Event()
+    first_node, first_report = turbo_scan.scan_with_best_engine(
+        "C:\\", progress_q, cancel_event, turbo_enabled=True,
+    )
+    assert first_report.engine == turbo_scan.ENGINE_TURBO
+    reads_for_full_scan = kernel32.read_file_calls
+    assert reads_for_full_scan > 0
+
+    kernel32.read_file_calls = 0
+    second_node, second_report = turbo_scan.scan_with_best_engine(
+        "C:\\", queue.Queue(), threading.Event(), turbo_enabled=True,
+    )
+
+    assert second_report.engine == turbo_scan.ENGINE_TURBO
+    assert second_node.file_count == first_node.file_count == 2
+    assert second_node.size == first_node.size == 3 + 5
+    assert {c.name for c in second_node.children} == {"hello.txt", "Sub"}
+    # The incremental path never re-walks the whole MFT sequentially --
+    # only record #0 (re-bootstrapping $MFT's own extent layout) plus a
+    # handful of chunk reads for whatever the (empty) USN journal query
+    # touches, nowhere near a full 9-record walk's worth of chunk loads.
+    assert kernel32.read_file_calls < reads_for_full_scan
+
+
+def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(monkeypatch, tmp_path):
+    _init_cache_db(tmp_path, monkeypatch)
+    volume_bytes = bytearray(_build_fake_volume())
+    kernel32 = _FakeKernel32(bytes(volume_bytes))
+    monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
+    monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
+
+    progress_q, cancel_event = queue.Queue(), threading.Event()
+    first_node, first_report = turbo_scan.scan_with_best_engine(
+        "C:\\", progress_q, cancel_event, turbo_enabled=True,
+    )
+    assert first_report.engine == turbo_scan.ENGINE_TURBO
+    assert {c.name for c in first_node.children} == {"hello.txt", "Sub"}
+
+    # Record 9 is already-allocated-but-unused space in the fake volume's
+    # single MFT extent (_build_fake_volume rounds its extent up to a
+    # whole number of clusters) -- write a real new file there without
+    # touching $MFT's own extent layout/record_count at all, exactly like
+    # NTFS reusing free MFT slots for a newly created file in real life.
+    root_frn = _pack_frn(1, 5)
+    new_record = _build_record(
+        9, is_directory=False, sequence_number=1,
+        file_name=_file_name_value(root_frn, "new.txt"), data=b"NEW",
+    )
+    new_record_offset = _MFT_BYTE_OFFSET + 9 * _RECORD_SIZE
+    volume_bytes[new_record_offset:new_record_offset + _RECORD_SIZE] = new_record
+    kernel32.volume_bytes = bytes(volume_bytes)
+
+    new_file_frn = _pack_frn(1, 9)
+    usn_record = _pack_usn_record(new_file_frn, root_frn, usn=1050, reason=0x100)  # FILE_CREATE
+    kernel32.usn_read_responses = [
+        _usn_read_response(next_usn=1100, records_bytes=usn_record),
+        _usn_read_response(next_usn=1100),  # caught up
+    ]
+
+    second_node, second_report = turbo_scan.scan_with_best_engine(
+        "C:\\", queue.Queue(), threading.Event(), turbo_enabled=True,
+    )
+
+    assert second_report.engine == turbo_scan.ENGINE_TURBO
+    assert {c.name for c in second_node.children} == {"hello.txt", "Sub", "new.txt"}
+    assert second_node.file_count == 3  # hello.txt + Sub/inside.txt + new.txt
+    assert second_node.size == 3 + 5 + 3  # "hi!" + "xyz12" + "NEW"

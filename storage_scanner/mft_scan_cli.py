@@ -21,11 +21,10 @@ import json
 import sys
 import threading
 
-from storage_scanner.mft_parser import parse_base_record
 from storage_scanner.mft_scan import build_tree, finalize_subtree
 from storage_scanner.mft_volume import open_record_source
 from storage_scanner.serialization import node_to_dict
-from storage_scanner.turbo_scan import find_subtree_node
+from storage_scanner.turbo_scan import find_subtree_node, get_records_using_cache
 
 EXIT_OK = 0
 EXIT_SCAN_ERROR = 1
@@ -43,17 +42,6 @@ def build_arg_parser():
         help="Write the resulting Node as JSON to FILE",
     )
     return parser
-
-
-def _read_all_records(record_source, cancel_event):
-    records = []
-    for record_number in range(record_source.record_count):
-        if cancel_event.is_set():
-            break
-        parsed = parse_base_record(record_number, record_source)
-        if parsed is not None:
-            records.append(parsed)
-    return records
 
 
 def run_mft_scan(argv):
@@ -75,7 +63,9 @@ def run_mft_scan(argv):
                                            # by terminating it outright
         record_source = open_record_source(args.drive)
         try:
-            records = _read_all_records(record_source, cancel_event)
+            records = get_records_using_cache(
+                record_source, args.drive, progress_q=None, cancel_event=cancel_event,
+            )
         finally:
             record_source.close()
 

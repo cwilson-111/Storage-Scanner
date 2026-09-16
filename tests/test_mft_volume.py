@@ -201,19 +201,22 @@ class _FakeCreateFileW:
     def __init__(self, fails=False):
         self.fails = fails
         self.restype = None
+        self.last_access = None
 
     def __call__(self, path, access, share, security, disposition, flags, template):
+        self.last_access = access
         if self.fails:
             return mft_volume._INVALID_HANDLE_VALUE
         return 424242
 
 
 class _FakeDeviceIoControl:
-    def __init__(self, mft_start_lcn, bytes_per_cluster, record_size, fails=False):
+    def __init__(self, mft_start_lcn, bytes_per_cluster, record_size, fails=False, volume_serial=0):
         self.mft_start_lcn = mft_start_lcn
         self.bytes_per_cluster = bytes_per_cluster
         self.record_size = record_size
         self.fails = fails
+        self.volume_serial = volume_serial
         self.calls = 0
 
     def __call__(self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped):
@@ -221,6 +224,7 @@ class _FakeDeviceIoControl:
         if self.fails:
             return 0
         info = ctypes.cast(out_ref, ctypes.POINTER(mft_volume._NTFS_VOLUME_DATA_BUFFER)).contents
+        info.VolumeSerialNumber = self.volume_serial
         info.BytesPerSector = 512
         info.BytesPerCluster = self.bytes_per_cluster
         info.BytesPerFileRecordSegment = self.record_size
@@ -275,10 +279,12 @@ class _FakeKernel32:
         self, volume_bytes, *, mft_start_lcn, bytes_per_cluster=_BYTES_PER_CLUSTER,
         record_size=_RECORD_SIZE, create_file_fails=False,
         device_io_control_fails=False, read_file_fails=False, short_read=False,
+        volume_serial=0,
     ):
         self.CreateFileW = _FakeCreateFileW(fails=create_file_fails)
         self.DeviceIoControl = _FakeDeviceIoControl(
-            mft_start_lcn, bytes_per_cluster, record_size, fails=device_io_control_fails,
+            mft_start_lcn, bytes_per_cluster, record_size,
+            fails=device_io_control_fails, volume_serial=volume_serial,
         )
         self.SetFilePointerEx = _FakeSetFilePointerEx()
         self.ReadFile = _FakeReadFile(
@@ -306,6 +312,35 @@ def test_opens_volume_and_reports_record_count_from_decoded_extents(monkeypatch)
     source = RecordSource("C:\\")
 
     assert source.record_count == 10
+
+
+def test_opens_read_only(monkeypatch):
+    # Deliberately read-only -- confirmed on a real machine that adding
+    # GENERIC_WRITE (for storage_scanner.usn_journal's FSCTL_CREATE_USN_
+    # JOURNAL, which shares this handle via raw_handle) gets the whole
+    # volume-open blocked by FortiClient (this user's AV/EDR), breaking
+    # every Turbo Scan, not just journal creation. usn_journal.py's own
+    # create_journal()/ensure_journal() are designed to work against a
+    # read-only handle instead -- see their docstrings.
+    volume_bytes = _make_single_extent_volume(record_count=10, lcn=8)
+    kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8)
+    _patch(monkeypatch, kernel32)
+
+    RecordSource("C:\\")
+
+    assert kernel32.CreateFileW.last_access == mft_volume._GENERIC_READ
+
+
+def test_exposes_volume_serial_record_size_and_raw_handle(monkeypatch):
+    volume_bytes = _make_single_extent_volume(record_count=10, lcn=8)
+    kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8, volume_serial=0xABCDEF)
+    _patch(monkeypatch, kernel32)
+
+    source = RecordSource("C:\\")
+
+    assert source.volume_serial == 0xABCDEF
+    assert source.record_size == _RECORD_SIZE
+    assert source.raw_handle == 424242  # the fake handle _FakeCreateFileW returns
 
 
 def test_sequential_reads_within_one_chunk_issue_a_single_syscall(monkeypatch):
@@ -350,6 +385,100 @@ def test_reading_a_record_in_a_different_chunk_issues_a_new_read(monkeypatch):
     record = source.record_at(5)  # a later chunk still
     assert len(kernel32.ReadFile.calls) == reads_after_init + 3
     assert record == bytes([5]) * _RECORD_SIZE
+
+
+def test_out_of_order_lookup_does_not_evict_the_sequential_walk_chunk(monkeypatch):
+    # The real bug this covers: mft_parser's out-of-order $ATTRIBUTE_LIST
+    # extension-record lookups, interleaved with the main sequential walk,
+    # used to evict record_at's one shared chunk -- so resuming the walk
+    # right afterward always needed a fresh reload too, turning one
+    # out-of-order lookup into (at least) two full chunk reads. Confirmed
+    # on a real C:\Windows: 95,598 chunk loads for what a clean sequential
+    # pass over ~1.15M records needs only ~282 of (93.8% of total scan
+    # time). The fix gives out-of-order lookups their own aux chunk slot.
+    monkeypatch.setattr(mft_volume, "_READ_CHUNK_BYTES", 2 * _RECORD_SIZE)
+    volume_bytes = _make_single_extent_volume(record_count=6, lcn=8)
+    kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8)
+    _patch(monkeypatch, kernel32)
+
+    source = RecordSource("C:\\")
+    reads_after_init = len(kernel32.ReadFile.calls)
+
+    source.record_at(0)  # loads the primary chunk covering [0, 2)
+    source.record_at(1)  # still within it -- no new read
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 1
+
+    source.record_at(5)  # out-of-order -- must not evict the primary chunk
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 2
+
+    record = source.record_at(1)  # resuming the walk: still a hit on primary
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 2
+    assert record == bytes([1]) * _RECORD_SIZE
+
+
+def test_walk_advancing_past_an_out_of_order_detour_does_not_reload_primary(monkeypatch):
+    # The real interleaving pattern mft_parser produces: record_at(n), then
+    # some number of out-of-order $ATTRIBUTE_LIST lookups for record n, then
+    # record_at(n + 1) to continue the walk -- never a revisit of n itself
+    # (unlike the test above, which only proves aux can't evict primary).
+    # A first attempt at this fix decided "is this call sequential" by
+    # checking whether aux already held the record, which happened to make
+    # every test above pass while still causing catastrophic thrashing on
+    # a real volume (88,481 aux loads, 94.3% of scan time, no better than
+    # no fix at all) -- because an out-of-order detour landing in the
+    # region the walk was about to reach next let aux quietly satisfy the
+    # walk's next step, so the walk's own primary chunk stopped advancing
+    # for good. This is the case that regression actually needs: the walk
+    # continuing to a genuinely new record right after a detour.
+    monkeypatch.setattr(mft_volume, "_READ_CHUNK_BYTES", 2 * _RECORD_SIZE)
+    volume_bytes = _make_single_extent_volume(record_count=6, lcn=8)
+    kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8)
+    _patch(monkeypatch, kernel32)
+
+    source = RecordSource("C:\\")
+    reads_after_init = len(kernel32.ReadFile.calls)
+
+    source.record_at(0)  # walk: loads primary [0, 2)
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 1
+
+    source.record_at(5)  # detour: loads aux, must not touch primary
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 2
+
+    record = source.record_at(1)  # walk continues to record 1 -- still in primary
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 2
+    assert record == bytes([1]) * _RECORD_SIZE
+
+
+def test_aux_chunk_uses_its_own_smaller_size_independent_of_the_primary_chunk(monkeypatch):
+    # Measured on a real, heavily hard-linked C:\Windows: out-of-order
+    # $ATTRIBUTE_LIST extension-record lookups reused an already-loaded aux
+    # chunk only ~5x on average before needing a different one -- so giving
+    # aux the same 4MB primary chunk size (the first version of this fix)
+    # read ~4096x more data than needed per lookup (161.3s, 89.4% of a real
+    # scan) for locality that thin. This proves the two sizes are actually
+    # independent, not just incidentally matching in the other tests here
+    # (which never separately monkeypatch _AUX_READ_CHUNK_BYTES).
+    monkeypatch.setattr(mft_volume, "_READ_CHUNK_BYTES", 4 * _RECORD_SIZE)
+    monkeypatch.setattr(mft_volume, "_AUX_READ_CHUNK_BYTES", 2 * _RECORD_SIZE)
+    volume_bytes = _make_single_extent_volume(record_count=10, lcn=8)
+    kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8)
+    _patch(monkeypatch, kernel32)
+
+    source = RecordSource("C:\\")
+    assert source._chunk_records == 4
+    assert source._aux_chunk_records == 2
+
+    reads_after_init = len(kernel32.ReadFile.calls)
+    source.record_at(0)  # primary load covers [0, 4)
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 1
+
+    record = source.record_at(7)  # out-of-order -- aux's own small chunk [6, 8)
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 2
+    assert record == bytes([7]) * _RECORD_SIZE
+
+    record = source.record_at(9)  # outside that aux window -- a new, separate aux load
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 3
+    assert record == bytes([9]) * _RECORD_SIZE
 
 
 def test_record_at_out_of_range_raises_index_error(monkeypatch):
@@ -476,6 +605,25 @@ def test_chunk_reads_never_cross_an_extent_boundary(monkeypatch):
     # One read for each extent's chunk -- proves it didn't try (and fail)
     # to satisfy both records from a single oversized read.
     assert len(kernel32.ReadFile.calls) == reads_after_init + 2
+
+
+# -- read_clusters (for non-resident $ATTRIBUTE_LIST reassembly) ------------ #
+
+def test_read_clusters_reads_the_right_offset_and_length(monkeypatch):
+    volume_bytes = _make_single_extent_volume(record_count=5, lcn=8)
+    kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8)
+    _patch(monkeypatch, kernel32)
+
+    source = RecordSource("C:\\")
+    reads_after_init = len(kernel32.ReadFile.calls)
+
+    data = source.read_clusters(lcn=8, cluster_count=2)
+
+    assert len(kernel32.ReadFile.calls) == reads_after_init + 1
+    offset, length = kernel32.ReadFile.calls[-1]
+    assert offset == 8 * _BYTES_PER_CLUSTER
+    assert length == 2 * _BYTES_PER_CLUSTER
+    assert data == volume_bytes[8 * _BYTES_PER_CLUSTER:8 * _BYTES_PER_CLUSTER + 2 * _BYTES_PER_CLUSTER]
 
 
 def test_records_per_cluster_greater_than_one_is_handled(monkeypatch):

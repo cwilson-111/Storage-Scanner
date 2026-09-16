@@ -26,6 +26,21 @@ _CLOUD_PLACEHOLDER_ATTRS = (
     | _FILE_ATTRIBUTE_OFFLINE
 )
 
+
+def is_cloud_placeholder_attrs(attrs):
+    """True only when `attrs` both carries a placeholder-recall bit AND is a
+    reparse point -- every real Cloud Files API placeholder (OneDrive Files
+    On-Demand included) is implemented as an IO_REPARSE_TAG_CLOUD reparse
+    point, no exceptions. Requiring it here rules out a real false positive
+    found on a real machine: CompactOS/WIMBoot-compressed system files also
+    set FILE_ATTRIBUTE_RECALL_ON_OPEN on-disk (to mark "decompress from the
+    WIM on open"), unrelated to cloud sync, but are never reparse points --
+    confirmed via Turbo Scan's raw $STANDARD_INFORMATION read showing
+    thousands of ordinary C:\\Windows\\Boot files as RECALL_ON_OPEN with no
+    REPARSE_POINT bit at all, none of which are actually cloud placeholders.
+    """
+    return bool(attrs & _CLOUD_PLACEHOLDER_ATTRS) and bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
 _INVALID_FILE_SIZE = 0xFFFFFFFF
 
 # GetCompressedFileSizeW-per-volume cluster size, cached so an entire scan
@@ -158,7 +173,7 @@ def scan(path, progress_q, cancel_event, workers=None):
             root.mtime = st_info.st_mtime
             root.atime = st_info.st_atime
             attrs = getattr(st_info, "st_file_attributes", 0)
-            root.is_cloud_placeholder = bool(attrs & _CLOUD_PLACEHOLDER_ATTRS)
+            root.is_cloud_placeholder = is_cloud_placeholder_attrs(attrs)
             root.file_count = 1
         except OSError:
             root.error = True
@@ -201,7 +216,7 @@ def scan(path, progress_q, cancel_event, workers=None):
             # recurse forever. They're recorded as a leaf instead.
             attrs = getattr(st_info, "st_file_attributes", 0) if st_info is not None else 0
             is_reparse = bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-            is_placeholder = bool(attrs & _CLOUD_PLACEHOLDER_ATTRS)
+            is_placeholder = is_cloud_placeholder_attrs(attrs)
             try:
                 is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse
             except OSError:

@@ -337,3 +337,14 @@ A compelling next release would include:
 - Automated tests, signed or checksum-verified release assets, and a portable ZIP.
 
 That release would materially improve reliability, usability, visual clarity, and trust instead of merely adding more menu items.
+
+
+## Compressing chosen csv files to parquet 
+2. Using PyArrow (Fastest & Memory Efficient)If you are dealing with larger datasets and want to bypass the overhead of creating a Pandas DataFrame, you can use pyarrow directly. It is highly optimized for the Apache Arrow format. [1] (https://www.confessionsofadataguy.com/converting-csvs-to-parquets-with-python-and-scala/)pythonimport pyarrow.csv as pv
+import pyarrow.parquet as pq
+
+# Read the CSV file into an Arrow Table
+table = pv.read_csv('input.csv')
+
+# Write the Table to a Parquet file with specified compression
+pq.write_table(table, 'output.parquet', compression='snappy')

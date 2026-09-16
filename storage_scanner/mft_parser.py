@@ -19,7 +19,7 @@ sequential/random-access volume reader.
 import struct
 from dataclasses import dataclass, field
 
-from storage_scanner.scanner import _CLOUD_PLACEHOLDER_ATTRS
+from storage_scanner.scanner import is_cloud_placeholder_attrs
 import stat as _stat
 
 _FILE_ATTRIBUTE_REPARSE_POINT = _stat.FILE_ATTRIBUTE_REPARSE_POINT
@@ -324,19 +324,49 @@ def _dedup_file_names(names):
     return list(by_parent.values())
 
 
-def _parse_attribute_list(raw_attr):
-    """Resolve a (resident) $ATTRIBUTE_LIST's entries.
+def _read_nonresident_attribute_list(raw_attr, record_source):
+    """Reassemble a non-resident $ATTRIBUTE_LIST's real bytes by reading its
+    own data runs' clusters straight off the volume, or None if that isn't
+    possible (a record_source that can't do raw cluster reads -- e.g. the
+    lightweight record_at-only fakes some tests use -- an empty/undecodable
+    run list, or a failed read), all treated as best-effort, never an error.
 
-    A non-resident $ATTRIBUTE_LIST's entry bytes aren't reachable from this
-    attribute record alone (that would require decoding its $DATA-style
-    run list -- out of scope, since sizing never needs run decoding and
-    this is the only other place it would matter). That case is rare in
-    practice (only very heavily hard-linked or fragmented records need it)
-    and is treated as "no extra attributes resolvable", not an error.
+    Assumes no run is sparse (offset_size == 0), which decode_data_runs
+    silently drops -- true of every $ATTRIBUTE_LIST seen in practice, since
+    sparse is a $DATA-stream-only NTFS feature, but would misalign/truncate
+    the reassembled bytes if it ever weren't.
+    """
+    read_clusters = getattr(record_source, "read_clusters", None)
+    if read_clusters is None or not raw_attr.data_runs:
+        return None
+    try:
+        chunks = [
+            read_clusters(lcn, length_clusters)
+            for length_clusters, lcn in decode_data_runs(raw_attr.data_runs)
+        ]
+    except (LookupError, OSError):
+        return None
+    if not chunks:
+        return None
+    return b"".join(chunks)[:raw_attr.real_size]
+
+
+def _parse_attribute_list(raw_attr, record_source):
+    """Resolve a $ATTRIBUTE_LIST's entries, resident or non-resident.
+
+    A resident list is parsed directly out of the record. A non-resident
+    one (needed once a heavily hard-linked file/directory -- common in
+    WinSxS/GAC-style system areas -- has too many $FILE_NAME/other entries
+    to fit inline) is reassembled via _read_nonresident_attribute_list;
+    if that fails, this returns [] ("no extra attributes resolvable"),
+    same as always, never an error.
     """
     if raw_attr.non_resident:
-        return []
-    value = raw_attr.value
+        value = _read_nonresident_attribute_list(raw_attr, record_source)
+        if value is None:
+            return []
+    else:
+        value = raw_attr.value
     entries = []
     offset = 0
     while offset + _ATTR_LIST_ENTRY_MIN_SIZE <= len(value):
@@ -385,7 +415,7 @@ def parse_base_record(record_number, record_source):
     for attr in list(attrs):
         if attr.attr_type != _ATTR_ATTRIBUTE_LIST:
             continue
-        for entry in _parse_attribute_list(attr):
+        for entry in _parse_attribute_list(attr, record_source):
             target_record_number = entry.base_frn & _FRN_RECORD_NUMBER_MASK
             if target_record_number == record_number:
                 continue  # already covered by this record's own attributes
@@ -444,7 +474,7 @@ def parse_base_record(record_number, record_source):
         is_directory=bool(header["flags"] & _RECORD_FLAG_IS_DIRECTORY),
         file_attributes=file_attributes,
         is_reparse_point=bool(file_attributes & _FILE_ATTRIBUTE_REPARSE_POINT),
-        is_cloud_placeholder=bool(file_attributes & _CLOUD_PLACEHOLDER_ATTRS),
+        is_cloud_placeholder=is_cloud_placeholder_attrs(file_attributes),
         mtime=std_info["mtime"],
         atime=std_info["atime"],
         logical_size=logical_size,

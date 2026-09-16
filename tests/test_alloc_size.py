@@ -195,3 +195,36 @@ def test_get_cluster_size_returns_none_on_failure(monkeypatch):
 )
 def test_cloud_placeholder_attribute_bits(attrs, expected):
     assert bool(attrs & scanner._CLOUD_PLACEHOLDER_ATTRS) is expected
+
+
+_REPARSE_POINT = 0x00000400
+_RECALL_ON_OPEN = 0x00040000
+_RECALL_ON_DATA_ACCESS = 0x00400000
+_OFFLINE = 0x00001000
+_ARCHIVE = 0x00000020
+
+
+@pytest.mark.parametrize(
+    "attrs,expected",
+    [
+        (0, False),
+        (_ARCHIVE, False),
+        (_REPARSE_POINT, False),  # a plain reparse point alone isn't a placeholder
+        # The real bug this covers: CompactOS/WIMBoot-compressed system
+        # files set RECALL_ON_OPEN on-disk ("decompress from the WIM on
+        # open") without ever being a reparse point -- confirmed on a real
+        # machine, where thousands of ordinary C:\Windows\Boot files raw-
+        # MFT-read this way and are NOT cloud placeholders.
+        (_ARCHIVE | _RECALL_ON_OPEN, False),
+        (_ARCHIVE | _RECALL_ON_DATA_ACCESS, False),
+        (_ARCHIVE | _OFFLINE, False),
+        # A genuine cloud placeholder (OneDrive Files On-Demand etc.) is
+        # always also a reparse point (IO_REPARSE_TAG_CLOUD) -- only this
+        # combination should count.
+        (_ARCHIVE | _REPARSE_POINT | _RECALL_ON_OPEN, True),
+        (_ARCHIVE | _REPARSE_POINT | _RECALL_ON_DATA_ACCESS, True),
+        (_ARCHIVE | _REPARSE_POINT | _OFFLINE, True),
+    ],
+)
+def test_is_cloud_placeholder_attrs_requires_reparse_point(attrs, expected):
+    assert scanner.is_cloud_placeholder_attrs(attrs) is expected
