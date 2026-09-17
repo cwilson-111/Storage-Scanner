@@ -1,6 +1,16 @@
 # Build-time only. Storage Scanner itself has no third-party runtime
-# dependencies (matplotlib is optional, used only for growth-history charts).
+# dependencies (matplotlib is optional, used only for growth-history charts;
+# pyarrow and openpyxl are optional, used only for the CSV-to-Parquet and
+# CSV-to-Excel export tools respectively).
 pyinstaller>=6.0
+
+# Needed to exercise the real CSV-to-Parquet compression path in
+# tests/test_csv_to_parquet.py rather than only the "not installed" branch.
+pyarrow>=15.0
+
+# Needed to exercise the real CSV-to-Excel conversion path in
+# tests/test_csv_to_xlsx.py rather than only the "not installed" branch.
+openpyxl>=3.1
 
 # Only needed to regenerate the app icon via make_icon.py (icon.ico is
 # already committed, so this is not required just to build the .exe).

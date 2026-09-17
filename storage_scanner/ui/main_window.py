@@ -19,6 +19,10 @@ from tkinter import (
 from history import get_app_metadata, set_app_metadata, set_budget
 from storage_scanner import turbo_scan
 from storage_scanner.audit import recycle_and_log
+from storage_scanner.csv_to_parquet import compress_csv_to_parquet
+from storage_scanner.csv_to_parquet import default_output_path as default_parquet_path
+from storage_scanner.csv_to_xlsx import convert_csv_to_xlsx
+from storage_scanner.csv_to_xlsx import default_output_path as default_xlsx_path
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
 from storage_scanner.formatting import bar, human_size
@@ -94,6 +98,15 @@ class MainWindowMixin:
         history_menu.add_command(label="Audit Log", command=self.show_audit_log)
         history_menu.add_command(label="Storage Budgets", command=self.show_budgets)
         self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
+
+        data_menu = Menu(self.tools_menu, tearoff=0)
+        data_menu.add_command(
+            label="Compress CSV to Parquet…", command=self.compress_csv_to_parquet
+        )
+        data_menu.add_command(
+            label="Convert CSV to Excel (.xlsx)…", command=self.convert_csv_to_xlsx
+        )
+        self.tools_menu.add_cascade(label="Data Tools", menu=data_menu)
 
         # Turbo Scan (NTFS MFT fast path) is Windows-only and off by
         # default — persisted the same way as the schema_version key, via
@@ -236,6 +249,63 @@ class MainWindowMixin:
         )
         if chosen:
             self.path_var.set(os.path.normpath(chosen))
+    def compress_csv_to_parquet(self):
+        csv_path = filedialog.askopenfilename(
+            title="Choose a CSV file to compress",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not csv_path:
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Save Parquet file as",
+            initialdir=os.path.dirname(csv_path),
+            initialfile=os.path.basename(default_parquet_path(csv_path)),
+            defaultextension=".parquet",
+            filetypes=[("Parquet files", "*.parquet")],
+        )
+        if not output_path:
+            return
+
+        result = compress_csv_to_parquet(csv_path, output_path)
+        if not result.success:
+            messagebox.showerror("Storage Scanner", f"Could not compress to Parquet:\n{result.error}")
+            return
+
+        try:
+            before = os.path.getsize(csv_path)
+            after = os.path.getsize(result.output_path)
+            saved = f"\n\n{human_size(before)} → {human_size(after)}" if before else ""
+        except OSError:
+            saved = ""
+        messagebox.showinfo(
+            "Storage Scanner",
+            f"Compressed to:\n{result.output_path}{saved}",
+        )
+    def convert_csv_to_xlsx(self):
+        csv_path = filedialog.askopenfilename(
+            title="Choose a CSV file to convert",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not csv_path:
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Save Excel file as",
+            initialdir=os.path.dirname(csv_path),
+            initialfile=os.path.basename(default_xlsx_path(csv_path)),
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+        )
+        if not output_path:
+            return
+
+        result = convert_csv_to_xlsx(csv_path, output_path)
+        if not result.success:
+            messagebox.showerror("Storage Scanner", f"Could not convert to Excel:\n{result.error}")
+            return
+
+        messagebox.showinfo("Storage Scanner", f"Converted to:\n{result.output_path}")
     def _request_elevation(self):
         current = self.path_var.get().strip().strip('"')
 
