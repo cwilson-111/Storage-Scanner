@@ -19,6 +19,15 @@ never make this mistake, because it only ever sees what it actually
 walked. This whole-volume-vs-requested-subtree scope mismatch was a real
 bug the Turbo Scan validation gate caught on a real machine (files under
 C:\\Windows\\Fonts, also hard-linked into WinSxS, showing up zeroed).
+
+Similarly, build_tree() always treats a reparse point as a leaf, never
+traversed -- correct for one encountered as a *child*, but not for the
+node a caller actually asked to scan (find_subtree_node's result): a
+requested folder that happens to be a junction/symlink should still be
+followed and its real contents shown, matching scanner.scan()'s own root-
+vs-child asymmetry. See reroot_if_reparse_point() for that one-node
+exception, applied by the caller after find_subtree_node(), before
+finalize_subtree().
 """
 
 import os
@@ -34,20 +43,27 @@ _ROOT_RECORD_NUMBER = 5
 _FRN_RECORD_NUMBER_MASK = 0x0000FFFFFFFFFFFF
 
 
-def _make_node(record, name):
+def _make_node(record, name, is_root=False):
     # A reparse point (junction, symlink, OneDrive cloud-placeholder-style
     # tag) is never traversed regardless of the record's own directory
     # flag -- treated as a leaf, exactly like scanner.py's
     # `is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse`.
-    is_dir = record.is_directory and not record.is_reparse_point
+    # BUT only when it's encountered as a *child* during traversal: when
+    # it's the requested scan root itself (is_root=True), scanner.py's own
+    # root handling (`os.path.isdir(path)`) follows a reparse point
+    # transparently, with no such exclusion -- see reroot_if_reparse_point
+    # for where this asymmetry actually gets exercised.
+    is_dir = record.is_directory and (is_root or not record.is_reparse_point)
     node = Node(path="", name=name, is_dir=is_dir)
     node.mtime = record.mtime
     node.atime = record.atime
     node.is_cloud_placeholder = record.is_cloud_placeholder
     # A cloud placeholder that also carries the reparse bit still renders
     # as a normal file, not a link -- matches scanner.py's
-    # `is_link = is_reparse and not is_placeholder`.
-    node.is_link = record.is_reparse_point and not record.is_cloud_placeholder
+    # `is_link = is_reparse and not is_placeholder`. A followed root is
+    # never flagged as a link either, matching scanner.py's root Node
+    # (which never sets is_link at all).
+    node.is_link = record.is_reparse_point and not record.is_cloud_placeholder and not is_root
     # Full, undeduped size -- see module docstring for why hard-link
     # dedup is deferred to finalize_subtree() rather than decided here.
     node.size = record.logical_size
@@ -116,7 +132,7 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     root_name = root_path if root_path.endswith(os.sep) else (
         os.path.basename(root_path) or root_path
     )
-    root_node = _make_node(root_record, root_name)
+    root_node = _make_node(root_record, root_name, is_root=True)
     root_node.path = root_path
     frn_by_node_id = {id(root_node): root_record.frn}
 
@@ -149,6 +165,49 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
 
     orphan_count = total_occurrences - attached_occurrences
     return root_node, orphan_count, frn_by_node_id
+
+
+def reroot_if_reparse_point(node, target_path, records, frn_by_node_id):
+    """If `node` (whatever find_subtree_node() located) is a reparse point
+    that build_tree() left as an unexpanded leaf, rebuild it as a fresh
+    root and return that instead -- matching scanner.scan()'s own root-vs-
+    child asymmetry: a reparse point is only ever an unfollowable leaf
+    when encountered as a *child* during traversal, never when it's the
+    requested scan root itself (scanner.py's root handling just uses
+    os.path.isdir(), which transparently follows a reparse point; only its
+    per-child walk excludes them). Any reparse point *inside* the rebuilt
+    subtree is still correctly left as a leaf -- build_tree()'s normal
+    per-child rule takes back over one level down; only the single
+    outermost node passed in here ever gets the root treatment.
+
+    No-op (returns `node` unchanged) if it isn't actually a reparse point,
+    its FRN can't be resolved, or the underlying record turns out not to
+    be a directory after all (a reparse point can just as easily be a
+    symlink to a *file*, which scanner.py's root handling wouldn't follow
+    as a directory either -- `os.path.isdir()` would be False for it).
+
+    Mutates `frn_by_node_id` in place to fold in the rebuilt subtree's
+    nodes, so a later finalize_subtree() call on the returned node still
+    resolves hard-link scoping correctly.
+    """
+    if not node.is_link:
+        return node
+    frn = frn_by_node_id.get(id(node))
+    if frn is None:
+        return node
+    original_record = next((r for r in records if r.frn == frn), None)
+    if original_record is None or not original_record.is_directory:
+        return node
+
+    record_number = frn & _FRN_RECORD_NUMBER_MASK
+    new_root, _orphan_count, new_frn_by_node_id = build_tree(
+        records, root_path=target_path, root_record_number=record_number,
+    )
+    if new_root is None:
+        return node
+
+    frn_by_node_id.update(new_frn_by_node_id)
+    return new_root
 
 
 def finalize_subtree(subtree_root, frn_by_node_id):

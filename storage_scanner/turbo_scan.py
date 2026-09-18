@@ -243,6 +243,11 @@ def _run_turbo_in_process(path, progress_q, cancel_event):
     if orphan_count:
         logger.warning("Turbo Scan of %r had %d unreachable record(s)", path, orphan_count)
     subtree_node = find_subtree_node(root_node, path)
+    # A requested folder that's itself a reparse point (junction/symlink)
+    # must still be followed, matching scanner.scan()'s own root handling
+    # -- see mft_scan.reroot_if_reparse_point's docstring for why this
+    # can't just be decided up front, during build_tree().
+    subtree_node = mft_scan.reroot_if_reparse_point(subtree_node, path, records, frn_by_node_id)
     # Hard-link dedup is deliberately scoped to just this subtree, not the
     # whole volume -- see mft_scan.finalize_subtree's docstring for why.
     return mft_scan.finalize_subtree(subtree_node, frn_by_node_id)

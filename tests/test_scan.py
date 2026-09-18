@@ -18,6 +18,19 @@ def _run_scan(path):
     return scan(str(path), progress_q, cancel_event)
 
 
+def _run_scan_with_messages(path):
+    progress_q = queue.Queue()
+    cancel_event = threading.Event()
+    root = scan(str(path), progress_q, cancel_event)
+    messages = []
+    while True:
+        try:
+            messages.append(progress_q.get_nowait())
+        except queue.Empty:
+            break
+    return root, messages
+
+
 def _by_name(node):
     return {child.name: child for child in node.children}
 
@@ -70,3 +83,37 @@ def test_symlinked_directory_is_not_traversed(tmp_path):
     link_node = children["link_to_real"]
     assert not link_node.children
     assert root.size == children["real"].size + link_node.size
+
+
+def test_scanning_a_directory_posts_a_live_root_reference_before_done(tmp_path):
+    # storage_scanner.ui.main_window's live-tree preview (see scan()'s own
+    # docstring) needs a reference to the exact same Node its worker
+    # threads go on to mutate, posted before any scanning work happens --
+    # not a copy, and not just at the very end alongside the final result.
+    (tmp_path / "a.bin").write_bytes(b"x" * 100)
+    root, messages = _run_scan_with_messages(tmp_path)
+
+    root_messages = [payload for kind, payload in messages if kind == "root"]
+    assert len(root_messages) == 1
+    assert root_messages[0] is root
+
+
+def test_scanning_a_single_file_never_posts_a_live_root_reference(tmp_path):
+    # A single-file target returns instantly -- there's no in-progress
+    # tree worth watching, so scan() shouldn't claim there is one.
+    target = tmp_path / "solo.bin"
+    target.write_bytes(b"x" * 100)
+    _root, messages = _run_scan_with_messages(target)
+
+    assert not any(kind == "root" for kind, _payload in messages)
+
+
+def test_progress_bytes_tracks_towards_the_final_rolled_up_size(tmp_path):
+    (tmp_path / "a.bin").write_bytes(b"x" * 100)
+    (tmp_path / "b.bin").write_bytes(b"y" * 200)
+    root, messages = _run_scan_with_messages(tmp_path)
+
+    byte_totals = [payload for kind, payload in messages if kind == "progress_bytes"]
+    assert byte_totals  # at least one was posted
+    assert byte_totals[-1] == root.size == 300
+    assert byte_totals == sorted(byte_totals)  # monotonically non-decreasing

@@ -3,7 +3,7 @@
 from tkinter import ttk
 
 from storage_scanner.logging_setup import logger
-from storage_scanner.platform_support import IS_MACOS
+from storage_scanner.platform_support import IS_LINUX, IS_MACOS
 
 
 _WINDOWS_DUPLICATE_EXCLUDES = (
@@ -28,9 +28,43 @@ _MACOS_DUPLICATE_EXCLUDES = (
     "/.Trash",
 )
 
-DEFAULT_DUPLICATE_EXCLUDES = (
-    _MACOS_DUPLICATE_EXCLUDES if IS_MACOS else _WINDOWS_DUPLICATE_EXCLUDES
+# Standard FHS/XDG system paths, plus the two conventional per-user trash
+# locations (XDG Trash spec's ~/.local/share/Trash, and the top-level
+# .Trash-<uid> a removable/non-home filesystem uses instead) -- previously
+# missing entirely, which meant is_protected_path() silently fell through
+# to the *Windows* list on Linux (see settings.py's own DEFAULT_
+# DUPLICATE_EXCLUDES below), matching nothing real on a Linux filesystem.
+#
+# is_protected_path()/DuplicatesMixin's own version both match these as a
+# plain substring, not a path-segment boundary (same as the existing
+# Windows/macOS lists above) -- a trailing "/" is deliberate on every
+# short entry here (/etc, /usr, /lib, /dev, ...) so it can't also match
+# an ordinary, unrelated user folder that just happens to start with the
+# same letters (e.g. "/home/user/devops-notes" starts with "/dev", but
+# not with "/dev/"). The longer, already-distinctive entries don't need
+# it for the same reason the macOS/Windows lists above don't.
+_LINUX_DUPLICATE_EXCLUDES = (
+    "/proc/",
+    "/sys/",
+    "/dev/",
+    "/boot/",
+    "/usr/",
+    "/lib/",
+    "/lib64/",
+    "/etc/",
+    "/snap",
+    "/var/lib",
+    "/var/cache",
+    "/.Trash",
+    "/.local/share/Trash",
 )
+
+if IS_MACOS:
+    DEFAULT_DUPLICATE_EXCLUDES = _MACOS_DUPLICATE_EXCLUDES
+elif IS_LINUX:
+    DEFAULT_DUPLICATE_EXCLUDES = _LINUX_DUPLICATE_EXCLUDES
+else:
+    DEFAULT_DUPLICATE_EXCLUDES = _WINDOWS_DUPLICATE_EXCLUDES
 
 # --------------------------------------------------------------------------- #
 # Theme — "Structural Light": a light, data-tool palette. Fine hairlines and

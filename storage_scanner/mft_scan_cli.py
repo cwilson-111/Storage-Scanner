@@ -21,7 +21,7 @@ import json
 import sys
 import threading
 
-from storage_scanner.mft_scan import build_tree, finalize_subtree
+from storage_scanner.mft_scan import build_tree, finalize_subtree, reroot_if_reparse_point
 from storage_scanner.mft_volume import open_record_source
 from storage_scanner.serialization import node_to_dict
 from storage_scanner.turbo_scan import find_subtree_node, get_records_using_cache
@@ -75,6 +75,9 @@ def run_mft_scan(argv):
                 f"Turbo Scan could not locate a root directory record on {args.drive!r}"
             )
         subtree_node = find_subtree_node(root_node, args.subtree)
+        # A requested folder that's itself a reparse point must still be
+        # followed -- see mft_scan.reroot_if_reparse_point's docstring.
+        subtree_node = reroot_if_reparse_point(subtree_node, args.subtree, records, frn_by_node_id)
         # Hard-link dedup is deliberately scoped to just this subtree, not
         # the whole volume -- see mft_scan.finalize_subtree's docstring.
         finalize_subtree(subtree_node, frn_by_node_id)

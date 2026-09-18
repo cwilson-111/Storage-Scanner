@@ -58,6 +58,16 @@ class StorageScannerApp(
         self._sort_key = "size"  # "name" | "size" | "items"
         self._sort_reverse = True   # sizes default biggest-first
 
+        # Live scan preview (see main_window._start_live_tree) -- only ever
+        # populated for a Compatible-engine scan, which builds its Node
+        # tree in place as it walks; Turbo Scan has no equivalent (its
+        # tree only exists once the whole MFT has been parsed).
+        self._live_root_node = None
+        self._live_root_iid = None
+        self._live_total_bytes = 0
+        self._live_expanded_iids = set()
+        self._last_live_refresh = 0.0
+
         init_history_db()
         self.last_scan_id = None
         self.last_previous_scan_id = None
