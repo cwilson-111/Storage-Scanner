@@ -14,20 +14,61 @@ reads that file back once the elevated process exits.
 Distinct from priv_scan_cli.py's `--priv-scan` and cli.py's `--cli`: this
 is Windows-only, Turbo-Scan-specific, and never meant to be run directly
 by a user.
+
+`--progress-file` is the same idea applied to *live* progress instead of
+the final result: a real queue.Queue can't cross a process boundary, so
+this process can't just post to the GUI's progress_q the way the
+in-process Turbo Scan path does (see turbo_scan._run_turbo_in_process).
+Before this existed, a scan running through this elevated-helper path
+posted zero progress of any kind for its entire duration -- often 15s to
+a minute-plus on a cold scan (real, measured, see
+TURBO_SCAN_VALIDATION_STATUS.md) -- indistinguishable from a hang. See
+_ProgressFileWriter below.
 """
 
 import argparse
 import json
+import os
 import sys
 import threading
 
-from storage_scanner.mft_scan import build_tree, finalize_subtree
+from storage_scanner.mft_scan import build_tree, finalize_subtree, reroot_if_reparse_point
 from storage_scanner.mft_volume import open_record_source
 from storage_scanner.serialization import node_to_dict
 from storage_scanner.turbo_scan import find_subtree_node, get_records_using_cache
 
 EXIT_OK = 0
 EXIT_SCAN_ERROR = 1
+
+
+class _ProgressFileWriter:
+    """Duck-types just enough of queue.Queue's `.put()` interface for
+    get_records_using_cache()/_full_scan_and_cache() to use unmodified --
+    they already call `progress_q.put(("progress", count))` periodically
+    during a cold full scan, previously discarded outright by passing
+    `progress_q=None`. Every write replaces the file's entire contents
+    with just the latest count (there's no reader here that needs a
+    history of every value, only the most recent one) via a temp-file-plus-
+    os.replace swap, so a concurrent reader (run_elevated_scan_windows,
+    polling from a completely separate process) can never observe a
+    half-written value.
+
+    Only "progress" messages are relayed -- "root"/"progress_bytes" are
+    scanner.py's own directory-walk-engine message kinds, never posted by
+    Turbo Scan's record-parsing loop, so there's nothing else to handle.
+    """
+
+    def __init__(self, path):
+        self.path = path
+
+    def put(self, item):
+        kind, payload = item
+        if kind != "progress":
+            return
+        tmp_path = self.path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(str(payload))
+        os.replace(tmp_path, self.path)
 
 
 def build_arg_parser():
@@ -40,6 +81,13 @@ def build_arg_parser():
     parser.add_argument(
         "--output", required=True, metavar="FILE",
         help="Write the resulting Node as JSON to FILE",
+    )
+    parser.add_argument(
+        "--progress-file", default=None, metavar="FILE",
+        help="Continuously overwrite FILE with the latest record count read "
+             "so far, for run_elevated_scan_windows to relay back to the "
+             "GUI's progress_q -- optional, omitted entirely when this is "
+             "invoked outside that path (e.g. directly from a terminal).",
     )
     return parser
 
@@ -61,10 +109,11 @@ def run_mft_scan(argv):
         cancel_event = threading.Event()  # no external cancellation in this
                                            # process -- the caller cancels
                                            # by terminating it outright
+        progress_q = _ProgressFileWriter(args.progress_file) if args.progress_file else None
         record_source = open_record_source(args.drive)
         try:
             records = get_records_using_cache(
-                record_source, args.drive, progress_q=None, cancel_event=cancel_event,
+                record_source, args.drive, progress_q=progress_q, cancel_event=cancel_event,
             )
         finally:
             record_source.close()
@@ -75,6 +124,9 @@ def run_mft_scan(argv):
                 f"Turbo Scan could not locate a root directory record on {args.drive!r}"
             )
         subtree_node = find_subtree_node(root_node, args.subtree)
+        # A requested folder that's itself a reparse point must still be
+        # followed -- see mft_scan.reroot_if_reparse_point's docstring.
+        subtree_node = reroot_if_reparse_point(subtree_node, args.subtree, records, frn_by_node_id)
         # Hard-link dedup is deliberately scoped to just this subtree, not
         # the whole volume -- see mft_scan.finalize_subtree's docstring.
         finalize_subtree(subtree_node, frn_by_node_id)

@@ -137,7 +137,7 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
 
     if cached is not None and cached["record_size"] == record_source.record_size:
         try:
-            records = _try_incremental_refresh(record_source, cached, cancel_event)
+            records = _try_incremental_refresh(record_source, cached, progress_q, cancel_event)
         except usn_journal.UsnJournalError as exc:
             logger.info(
                 "Turbo Scan cache for %r could not be refreshed incrementally, "
@@ -193,12 +193,31 @@ def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, 
     return records
 
 
-def _try_incremental_refresh(record_source, cached, cancel_event):
+def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
     """Returns a refreshed records list, or None if there's no usable
     cursor to refresh from (the caller then does a full scan). Raises
     usn_journal.UsnJournalError for every other reason a refresh can't
     proceed -- the caller invalidates the cache and falls back to a full
-    scan in that case too, just with a logged reason."""
+    scan in that case too, just with a logged reason.
+
+    Posts progress the same way _full_scan_and_cache does -- previously
+    this function posted nothing at all, regardless of engine path
+    (in-process or elevated-helper), which is a real, separate gap from
+    the elevated-helper-specific process-boundary fix: even an
+    already-elevated in-process Turbo Scan going through a cached
+    incremental refresh showed zero progress of any kind, found via a
+    real user report. Two phases can each take real, visible time even
+    though the change set itself is usually small: reparsing the dirty
+    records themselves, and -- per this session's own earlier latency
+    investigation (see TURBO_SCAN_VALIDATION_STATUS.md's "Known
+    follow-up") -- load_all_records() re-deserializing the *entire*
+    cached volume afterward, unrelated to how few records actually
+    changed. A `("status", text)` message (new kind, main_window._poll_
+    progress just sets the status bar text verbatim) marks the start of
+    each phase; `("progress", n)` during the reparse loop matches
+    _full_scan_and_cache's own existing convention, at a finer interval
+    since a dirty set is typically far smaller than a full volume.
+    """
     if cached["next_usn"] is None:
         return None  # cached records exist, but no journal cursor was ever established
 
@@ -213,8 +232,11 @@ def _try_incremental_refresh(record_source, cached, cancel_event):
         handle, state.journal_id, cached["next_usn"],
     )
 
+    if progress_q is not None and dirty:
+        progress_q.put(("status", f"Turbo Scan: applying {len(dirty):,} change(s)…"))
+
     upserts, deletes = [], []
-    for dirty_record in dirty:
+    for i, dirty_record in enumerate(dirty, start=1):
         if cancel_event.is_set():
             return None
         parsed = mft_parser.parse_base_record(dirty_record.record_number, record_source)
@@ -222,8 +244,13 @@ def _try_incremental_refresh(record_source, cached, cancel_event):
             deletes.append(dirty_record.record_number)
         else:
             upserts.append(parsed)
+        if progress_q is not None and i % 200 == 0:
+            progress_q.put(("progress", i))
 
     turbo_cache.apply_incremental_changes(cached["volume_serial"], upserts, deletes, new_next_usn)
+
+    if progress_q is not None:
+        progress_q.put(("status", "Turbo Scan: loading cached records…"))
     return turbo_cache.load_all_records(cached["volume_serial"])
 
 
@@ -242,20 +269,43 @@ def _run_turbo_in_process(path, progress_q, cancel_event):
         raise RuntimeError("Turbo Scan could not locate a root directory record")
     if orphan_count:
         logger.warning("Turbo Scan of %r had %d unreachable record(s)", path, orphan_count)
+    logger.debug(
+        "Turbo Scan of %r: %d records read, root has %d direct children",
+        path, len(records), len(root_node.children),
+    )
     subtree_node = find_subtree_node(root_node, path)
+    logger.debug(
+        "Turbo Scan of %r: subtree node %r has %d direct children before reroot",
+        path, subtree_node.path, len(subtree_node.children),
+    )
+    # A requested folder that's itself a reparse point (junction/symlink)
+    # must still be followed, matching scanner.scan()'s own root handling
+    # -- see mft_scan.reroot_if_reparse_point's docstring for why this
+    # can't just be decided up front, during build_tree().
+    subtree_node = mft_scan.reroot_if_reparse_point(subtree_node, path, records, frn_by_node_id)
     # Hard-link dedup is deliberately scoped to just this subtree, not the
     # whole volume -- see mft_scan.finalize_subtree's docstring for why.
-    return mft_scan.finalize_subtree(subtree_node, frn_by_node_id)
+    finalized = mft_scan.finalize_subtree(subtree_node, frn_by_node_id)
+    logger.debug(
+        "Turbo Scan of %r: finalized node has %d direct children, size=%d, file_count=%d",
+        path, len(finalized.children), finalized.size, finalized.file_count,
+    )
+    return finalized
 
 
-def _run_turbo_via_elevated_helper(path, cancel_event):
+def _run_turbo_via_elevated_helper(path, progress_q, cancel_event):
     """Not yet elevated: hand the raw-volume read off to a headless
     elevated helper process and reconstruct its result. The helper's own
     `--subtree` handling already resolves the subtree via find_subtree_node
     before ever serializing, so `result` on success is that subtree's dict,
     ready for dict_to_node -- see storage_scanner/mft_scan_cli.py.
+
+    `progress_q` is relayed live record counts from the elevated process
+    via a polled progress file -- see run_elevated_scan_windows's and
+    mft_scan_cli._ProgressFileWriter's docstrings for why a real queue
+    can't just be shared across the process boundary directly.
     """
-    ok, result = run_elevated_scan_windows(path, cancel_event)
+    ok, result = run_elevated_scan_windows(path, progress_q, cancel_event)
     if not ok:
         raise RuntimeError(result)
     return dict_to_node(result)
@@ -264,7 +314,7 @@ def _run_turbo_via_elevated_helper(path, cancel_event):
 def _attempt_turbo_scan(path, progress_q, cancel_event):
     if IS_ROOT:
         return _run_turbo_in_process(path, progress_q, cancel_event)
-    return _run_turbo_via_elevated_helper(path, cancel_event)
+    return _run_turbo_via_elevated_helper(path, progress_q, cancel_event)
 
 
 def scan_with_best_engine(path, progress_q, cancel_event, workers=None, turbo_enabled=None):

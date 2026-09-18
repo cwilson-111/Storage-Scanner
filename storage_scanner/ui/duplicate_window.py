@@ -39,17 +39,29 @@ class DuplicatesMixin:
         """
         Hash the first and last chunk of a file.
 
-        This is much faster than full hashing large files. 
+        This is much faster than full hashing large files.
         Used only as a filtering stage before full hashing.
+
+        Returns (partial_digest, full_digest). For any file no larger than
+        `chunk_size`, the "first chunk" read above already covers the whole
+        file -- read() past EOF just returns what's there, so the trailing
+        `if file_size > chunk_size` branch never runs. Rather than let a
+        second pass (_full_hash_file) reopen and re-read those same bytes
+        just to get a stronger digest, compute that strong digest right here
+        from the bytes already in memory and hand it back as `full_digest`,
+        so the caller can skip re-reading the file entirely. `full_digest`
+        is None for anything larger than `chunk_size`, where this function
+        only ever samples the head and tail, not the whole file.
         """
         try:
 
             if cancel_event and cancel_event.is_set():
-                return None
-            
+                return None, None
+
             file_size = os.path.getsize(path)
 
             h = hashlib.blake2b(digest_size=16)
+            full_digest = None
 
             with open(path, "rb") as f:
                 first_chunk = f.read(chunk_size)
@@ -60,11 +72,13 @@ class DuplicatesMixin:
                     f.seek(seek_pos)
                     last_chunk = f.read(chunk_size)
                     h.update(last_chunk)
+                else:
+                    full_digest = hashlib.blake2b(first_chunk, digest_size=32).hexdigest()
 
-            return h.hexdigest()
+            return h.hexdigest(), full_digest
 
         except (OSError, PermissionError):
-            return None
+            return None, None
     def _full_hash_file(self, path, cancel_event = None, chunk_size=1024 * 1024):
         """
         Full-file hash used only after size and partial hash match.
@@ -230,14 +244,20 @@ class DuplicatesMixin:
         # ------------------------------------------------------------
         by_partial_hash = defaultdict(list)
 
+        # Files no larger than one chunk get their strong confirmation
+        # digest computed for free in the partial-hash pass below (see
+        # _partial_hash_file's docstring) -- cached here so phase 3 can
+        # reuse it instead of reopening and re-reading the same file.
+        full_digest_cache = {}
+
         max_workers = min(8, (os.cpu_count() or 4) * 2) # Change max workers to 4 if it gets sluggish
 
         def partial_job(node):
             if cancel_event.is_set():
-                return node, None
+                return node, None, None
 
-            digest = self._partial_hash_file(node.path, cancel_event)
-            return node, digest
+            digest, full_digest = self._partial_hash_file(node.path, cancel_event)
+            return node, digest, full_digest
 
         completed = 0
 
@@ -251,13 +271,15 @@ class DuplicatesMixin:
                 if cancel_event.is_set():
                     return []
 
-                node, digest = future.result()
+                node, digest, full_digest = future.result()
                 completed += 1
 
                 self.dup_stats["partial_hashed"] = completed
 
                 if digest:
                     by_partial_hash[(node.size, digest)].append(node)
+                    if full_digest:
+                        full_digest_cache[node] = full_digest
 
                 if progress_q and (completed % 50 == 0 or completed == total_partial_files):
                     progress_q.put((
@@ -294,6 +316,10 @@ class DuplicatesMixin:
         def full_job(node):
             if cancel_event.is_set():
                 return node, None
+
+            cached_digest = full_digest_cache.get(node)
+            if cached_digest is not None:
+                return node, cached_digest
 
             digest = self._full_hash_file(node.path, cancel_event)
             return node, digest
@@ -389,6 +415,11 @@ class DuplicatesMixin:
                 return
             else:
                 self.duplicates = duplicates
+                # Tied to the exact root_node these results came from, so a
+                # rescan of a different path (which sets root_node to a new
+                # object) can never be mistaken for still having a valid
+                # cached duplicate set -- see start_scan's matching reset.
+                self._duplicates_scan_root = self.root_node
                 self.dup_progress_q.put(("done", duplicates))
 
         except Exception as exc:
@@ -694,6 +725,7 @@ class DuplicatesMixin:
                     iid_to_group.pop(iid, None)
                     tv.delete(iid)
                     self._remove_node_from_scan_tree(node)
+                    self._remove_from_duplicate_cache(node)
                 else:
                     failed.append(node.path)
 
@@ -735,6 +767,47 @@ class DuplicatesMixin:
                 f"Found {len(duplicates):,} duplicate groups. "
                 f"Potential cleanup: {human_size(total_wasted)}"
             )
+    def _remove_from_duplicate_cache(self, target_node):
+        """Keep self.duplicates (the last completed "Find Duplicate Files"
+        result, reused by Cleanup Recommendations -- see
+        cleanup_window.show_cleanup_recommendations) consistent after a
+        file or folder is deleted through *any* window, so a later reopen
+        never recommends deleting something that's already gone.
+
+        A group that drops to one remaining copy is no longer a duplicate
+        of anything and is dropped entirely, not just shrunk to one row.
+        """
+        duplicates = self.duplicates
+        if not duplicates:
+            return
+
+        if target_node.is_dir:
+            stale = set()
+            stack = [target_node]
+            while stack:
+                node = stack.pop()
+                if node.is_dir:
+                    stack.extend(node.children)
+                else:
+                    stale.add(node)
+            if not stale:
+                return
+        else:
+            stale = {target_node}
+
+        updated = []
+        changed = False
+        for size, digest, nodes in duplicates:
+            remaining = [n for n in nodes if n not in stale]
+            if len(remaining) == len(nodes):
+                updated.append((size, digest, nodes))
+                continue
+            changed = True
+            if len(remaining) > 1:
+                updated.append((size, digest, remaining))
+
+        if changed:
+            self.duplicates = updated
     def _remove_node_from_scan_tree(self, target_node):
         """Remove a deleted file node from the in-memory scan tree and update sizes.
 

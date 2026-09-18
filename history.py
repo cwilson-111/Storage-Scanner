@@ -416,6 +416,33 @@ def get_scan_history(scan_path, limit=30):
     return rows
 
 
+def get_scan_ids_by_created_at(scan_path, limit=30):
+    """{created_at: scan_id} for the same window get_scan_history(scan_path,
+    limit) returns. A separate lookup rather than adding an id column to
+    get_scan_history()'s own row shape, since several existing callers
+    (forecasting.py, anomaly_detection.py, the matplotlib chart) already
+    unpack its rows positionally and have no use for the id. Lets a caller
+    that already has anomaly_detection.Anomaly objects (keyed by
+    created_at) map one back to the scan ids whose comparison produced it,
+    e.g. to find which folder was most responsible via get_folder_growth().
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT created_at, id
+        FROM scans
+        WHERE scan_path = ?
+        ORDER BY created_at ASC
+        LIMIT ?
+    """, (scan_path, limit))
+
+    rows = dict(cur.fetchall())
+    conn.close()
+
+    return rows
+
+
 def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_message=None):
     """Record one deletion/recycle action to the audit ledger.
 

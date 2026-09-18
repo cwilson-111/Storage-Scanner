@@ -4,13 +4,16 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
 import os
-from tkinter import BOTH, E, END, LEFT, RIGHT, StringVar, TOP, Toplevel, W, X, ttk
+from tkinter import (
+    BOTH, E, END, LEFT, Menu, RIGHT, StringVar, TOP, Toplevel, W, X, ttk,
+)
 
 from history import (
     get_folder_growth,
     get_growth_summary,
     get_previous_scan_id,
     get_scan_history,
+    get_scan_ids_by_created_at,
     list_scans_for_path,
     save_scan_snapshot,
 )
@@ -19,7 +22,7 @@ from storage_scanner.budgets import check_budget_for_path
 from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
-from storage_scanner.platform_support import resource_path
+from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
 from storage_scanner.settings import COLORS, FONT_BOLD
 
 
@@ -141,11 +144,64 @@ class HistoryMixin:
             f"({forecast.confidence} confidence, {forecast.data_points} scans "
             f"over {forecast.span_days:,.0f} days, R²={forecast.r_squared:.2f})"
         )
-    def _build_anomalies_tab(self, frame, anomalies, history_count):
+    def _likely_folder_for_anomaly(self, scan_path, anomaly, created_ats_in_order, scan_ids_by_created_at):
+        """Best-effort: which currently-tracked folder (>=50MB, see
+        _collect_folder_sizes_for_history) most likely drove this anomaly's
+        scan-to-scan change, found the same way the Growth Details tab
+        already ranks folder changes (history.get_folder_growth) — just for
+        the specific pair of scans this anomaly compares, instead of the
+        two most recent.
+
+        Returns None whenever a specific folder can't honestly be pointed
+        to: a missing scan id, no tracked folder that actually moved in the
+        anomaly's direction, or nothing but the root folder itself (which
+        just restates the anomaly's own total, not a cause). This mirrors
+        the rest of the app's "a lead worth checking, not a diagnosis"
+        stance on anomalies — showing nothing is better than guessing.
+        """
+        try:
+            index = created_ats_in_order.index(anomaly.created_at)
+        except ValueError:
+            return None
+        if index == 0:
+            return None
+
+        current_id = scan_ids_by_created_at.get(anomaly.created_at)
+        previous_id = scan_ids_by_created_at.get(created_ats_in_order[index - 1])
+        if current_id is None or previous_id is None:
+            return None
+
+        rows = get_folder_growth(current_id, previous_id, limit=50)
+        normalized_root = os.path.normcase(os.path.normpath(scan_path))
+        candidates = [
+            row for row in rows
+            if os.path.normcase(os.path.normpath(row[0])) != normalized_root
+        ]
+        if not candidates:
+            return None
+
+        if anomaly.kind == "drop":
+            folder_path, _prev, _curr, growth_bytes = min(
+                candidates, key=lambda r: r[3]
+            )[:4]
+            if growth_bytes >= 0:
+                return None
+        else:
+            folder_path, _prev, _curr, growth_bytes = max(
+                candidates, key=lambda r: r[3]
+            )[:4]
+            if growth_bytes <= 0:
+                return None
+
+        return folder_path
+    def _build_anomalies_tab(self, frame, anomalies, history_count, folder_by_anomaly=None):
         """Populate the Anomalies tab: scan-to-scan size changes that were
         statistical outliers for this path's own history (see
         storage_scanner.anomaly_detection) — a lead worth checking, not a
-        diagnosis."""
+        diagnosis. `folder_by_anomaly` (anomaly -> folder path or None)
+        adds a best-effort "which folder" column, since an anomaly on its
+        own only knows the root path's total changed, not where — see
+        _likely_folder_for_anomaly."""
         if history_count < 4:
             ttk.Label(
                 frame,
@@ -156,14 +212,18 @@ class HistoryMixin:
             ).pack(side=TOP, anchor=W)
             return
 
-        cols = ("date", "kind", "change")
+        folder_by_anomaly = folder_by_anomaly or {}
+
+        cols = ("date", "kind", "change", "folder")
         tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
         tv.heading("date", text="Date")
         tv.heading("kind", text="Type")
         tv.heading("change", text="What happened")
+        tv.heading("folder", text="Likely folder")
         tv.column("date", width=140, anchor=W, stretch=False)
         tv.column("kind", width=80, anchor=W, stretch=False)
-        tv.column("change", width=560, anchor=W, stretch=True)
+        tv.column("change", width=420, anchor=W, stretch=True)
+        tv.column("folder", width=260, anchor=W, stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
@@ -183,16 +243,49 @@ class HistoryMixin:
         tv.tag_configure("drop", foreground=COLORS["warning"])
 
         if not anomalies:
-            tv.insert("", END, values=("—", "—", "No anomalies detected in this path's history."))
+            tv.insert("", END, values=("—", "—", "No anomalies detected in this path's history.", ""))
             return
+
+        # Only anomalies a folder was actually identified for get a
+        # reveal action — nothing to open for "Not identified".
+        iid_to_folder = {}
 
         for index, anomaly in enumerate(anomalies):
             date_text = anomaly.created_at.split("T")[0]
-            tv.insert(
+            folder_path = folder_by_anomaly.get(anomaly)
+            iid = tv.insert(
                 "", END,
-                values=(date_text, anomaly.kind.capitalize(), anomaly.message),
+                values=(
+                    date_text, anomaly.kind.capitalize(), anomaly.message,
+                    folder_path or "Not identified",
+                ),
                 tags=(anomaly.kind, "odd" if index % 2 else "even"),
             )
+            if folder_path:
+                iid_to_folder[iid] = folder_path
+
+        def reveal_selected(_event=None):
+            folder_path = iid_to_folder.get(tv.focus())
+            if folder_path:
+                self._reveal(folder_path, is_dir=True)
+
+        tv.bind("<Double-1>", reveal_selected)
+
+        row_menu = Menu(frame, tearoff=0)
+
+        def show_row_menu(event):
+            iid = tv.identify_row(event.y)
+            if not iid or iid not in iid_to_folder:
+                return
+            tv.selection_set(iid)
+            tv.focus(iid)
+            row_menu.delete(0, END)
+            row_menu.add_command(
+                label=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
+            )
+            row_menu.tk_popup(event.x_root, event.y_root)
+
+        tv.bind("<Button-2>" if IS_MACOS else "<Button-3>", show_row_menu)
     def _summarize_folder_change(self, row):
         if not row:
             return "—"
@@ -272,7 +365,15 @@ class HistoryMixin:
             anomalies_frame,
             text=f"Anomalies ({len(anomaly_list)})" if anomaly_list else "Anomalies",
         )
-        self._build_anomalies_tab(anomalies_frame, anomaly_list, len(full_history))
+        created_ats_in_order = [row[0] for row in full_history]
+        scan_ids_by_created_at = get_scan_ids_by_created_at(scan_path, limit=200)
+        folder_by_anomaly = {
+            anomaly: self._likely_folder_for_anomaly(
+                scan_path, anomaly, created_ats_in_order, scan_ids_by_created_at,
+            )
+            for anomaly in anomaly_list
+        }
+        self._build_anomalies_tab(anomalies_frame, anomaly_list, len(full_history), folder_by_anomaly)
 
         overview = ttk.LabelFrame(summary_frame, text="Overview", padding=10)
         overview.pack(fill=X, pady=(0, 10))

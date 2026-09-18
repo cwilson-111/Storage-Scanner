@@ -22,14 +22,13 @@ This module has no ctypes/Win32 access at all, matching mft_parser.py's own
 and the orchestration that ties both together are separate modules.
 """
 
-import json
+import pickle
 import sqlite3
-from dataclasses import asdict
 from datetime import datetime
 
 from history import APP_DATA_DIR
 from storage_scanner.logging_setup import logger
-from storage_scanner.mft_parser import _FRN_RECORD_NUMBER_MASK, FileNameAttr, ParsedRecord
+from storage_scanner.mft_parser import _FRN_RECORD_NUMBER_MASK
 
 DB_NAME = APP_DATA_DIR / "turbo_scan_cache.db"
 
@@ -46,6 +45,24 @@ def _connect():
 def init_cache_db():
     conn = _connect()
     cur = conn.cursor()
+
+    cur.execute("PRAGMA table_info(cached_records)")
+    existing_columns = {row[1] for row in cur.fetchall()}
+    if "record_json" in existing_columns:
+        # Migrating from the pre-2026-09-17 JSON-text row format to pickle
+        # (see load_all_records's docstring -- JSON was a measured, real
+        # bottleneck at realistic ~1M-record scale). An old row's bytes
+        # aren't valid pickle data, so leaving it in place would make
+        # every future incremental refresh raise instead of just being
+        # slow. Wiping both tables forces exactly one full rescan on the
+        # next call -- correct, just not cached yet -- rather than risk
+        # load_all_records silently returning a partial record list if
+        # only the child table were dropped while a matching
+        # cached_volumes row (which still passes get_records_using_cache's
+        # record_size check) survived.
+        cur.execute("DROP TABLE cached_records")
+        cur.execute("DROP TABLE IF EXISTS cached_volumes")
+        conn.commit()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cached_volumes (
@@ -65,7 +82,7 @@ def init_cache_db():
             volume_serial   INTEGER NOT NULL,
             record_number   INTEGER NOT NULL,
             frn             INTEGER NOT NULL,
-            record_json     TEXT NOT NULL,
+            record_blob     BLOB NOT NULL,
             PRIMARY KEY (volume_serial, record_number),
             FOREIGN KEY (volume_serial) REFERENCES cached_volumes(volume_serial) ON DELETE CASCADE
         )
@@ -80,14 +97,12 @@ def init_cache_db():
     conn.close()
 
 
-def _record_to_json(record):
-    return json.dumps(asdict(record))
+def _record_to_blob(record):
+    return pickle.dumps(record, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def _record_from_json(text):
-    data = json.loads(text)
-    data["names"] = [FileNameAttr(**n) for n in data["names"]]
-    return ParsedRecord(**data)
+def _record_from_blob(blob):
+    return pickle.loads(blob)
 
 
 def get_cached_volume(volume_serial):
@@ -129,10 +144,10 @@ def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
 
     cur.execute("DELETE FROM cached_records WHERE volume_serial = ?", (volume_serial,))
     cur.executemany(
-        "INSERT INTO cached_records (volume_serial, record_number, frn, record_json) "
+        "INSERT INTO cached_records (volume_serial, record_number, frn, record_blob) "
         "VALUES (?, ?, ?, ?)",
         (
-            (volume_serial, record.frn & _FRN_RECORD_NUMBER_MASK, record.frn, _record_to_json(record))
+            (volume_serial, record.frn & _FRN_RECORD_NUMBER_MASK, record.frn, _record_to_blob(record))
             for record in records
         ),
     )
@@ -169,13 +184,13 @@ def apply_incremental_changes(volume_serial, upserts, deletes, new_next_usn):
     cur = conn.cursor()
 
     cur.executemany("""
-        INSERT INTO cached_records (volume_serial, record_number, frn, record_json)
+        INSERT INTO cached_records (volume_serial, record_number, frn, record_blob)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(volume_serial, record_number) DO UPDATE SET
             frn = excluded.frn,
-            record_json = excluded.record_json
+            record_blob = excluded.record_blob
     """, (
-        (volume_serial, record.frn & _FRN_RECORD_NUMBER_MASK, record.frn, _record_to_json(record))
+        (volume_serial, record.frn & _FRN_RECORD_NUMBER_MASK, record.frn, _record_to_blob(record))
         for record in upserts
     ))
 
@@ -201,16 +216,28 @@ def apply_incremental_changes(volume_serial, upserts, deletes, new_next_usn):
 def load_all_records(volume_serial):
     """Every cached record for `volume_serial`, deserialized back into
     ParsedRecord objects -- a drop-in replacement for the `records` list a
-    full Turbo Scan builds by looping parse_base_record over the whole MFT."""
+    full Turbo Scan builds by looping parse_base_record over the whole MFT.
+
+    This always deserializes the *entire* cached volume, however small the
+    caller's actual request was -- get_records_using_cache's incremental
+    path calls this after applying just a handful of dirty records, but
+    build_tree()/find_subtree_node() still need the whole volume's record
+    set to walk down to an arbitrary subtree (see find_subtree_node's own
+    docstring). Measured at realistic ~1.15M-record scale (synthetic
+    benchmark, not real hardware -- see TURBO_SCAN_VALIDATION_STATUS.md):
+    this is why a tiny-subtree incremental scan was taking nearly as long
+    as scanning all of C:\\Windows -- both pay this same fixed cost. Pickle
+    (vs. the original json.dumps(dataclasses.asdict(...)) format) cut that
+    floor by roughly a third; it does not eliminate it."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
-        "SELECT record_json FROM cached_records WHERE volume_serial = ?",
+        "SELECT record_blob FROM cached_records WHERE volume_serial = ?",
         (volume_serial,),
     )
     rows = cur.fetchall()
     conn.close()
-    return [_record_from_json(row[0]) for row in rows]
+    return [_record_from_blob(row[0]) for row in rows]
 
 
 def invalidate_volume(volume_serial):

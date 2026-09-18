@@ -28,6 +28,96 @@ USN journal noise on the same volume — not a correctness issue), tracked
 in its own section near the end of this doc ("Cache + USN Journal
 incremental refresh").
 
+**New bug found 2026-09-17 via a real user report (not this project's own
+validation) — FIXED: the elevated-helper path posted zero progress for its
+entire duration, indistinguishable from a hang.** Every prior real-hardware
+validation of `run_elevated_scan_windows`/`mft_scan_cli.py --mft-scan`
+(including the Phase 4 checklist item below marked "DONE, CONFIRMED
+SHARED") invoked the CLI directly from an already-elevated terminal,
+bypassing the actual `ShellExecuteExW`("runas")/UAC-prompt GUI flow
+entirely — so the *common* path (any user who hasn't already launched the
+whole app as admin) had never actually been exercised end-to-end. A user
+reported Turbo Scan "hangs" with no visible progress and no way to reach
+Tools to turn it off; tracing the code confirmed `mft_scan_cli.run_mft_scan`
+called `get_records_using_cache(..., progress_q=None, ...)` — the elevated
+helper is a genuinely separate OS process, so it was never given any way to
+report back to the GUI's `progress_q` at all. For a cold scan (15s-65s+,
+per the real numbers above), that's the entire scan duration with a static
+status string and a generic spinning progress bar — not an actual deadlock,
+but functionally indistinguishable from one. (Tools staying disabled during
+this is separate, pre-existing, by-design behavior — same for the
+Compatible engine — not a new bug; the real, working escape hatch is
+Cancel, which was already correctly wired to the elevated helper's wait
+loop.)
+
+Fixed with a second temp file (`--progress-file`, alongside the existing
+`--output` result file): `mft_scan_cli._ProgressFileWriter` duck-types
+`queue.Queue.put()` just enough for `get_records_using_cache`'s existing
+`progress_q.put(("progress", count))` calls to work unmodified, atomically
+overwriting the file with just the latest count (temp-file-plus-
+`os.replace`, so a concurrent reader never sees a half-written value).
+`file_ops.run_elevated_scan_windows` polls that file on the same
+`WaitForSingleObject` cadence it already uses to check `cancel_event`, and
+relays genuinely-new values into the real `progress_q` — which
+`main_window._poll_progress` already handles generically, so no UI-side
+change was needed; the existing "Scanning … N files counted" status text
+just starts updating live. `progress_q` is threaded through
+`turbo_scan._attempt_turbo_scan` → `_run_turbo_via_elevated_helper` →
+`run_elevated_scan_windows`, mirroring how `_run_turbo_in_process` already
+had direct access to it.
+
+Unit-tested (mutation-verified): `tests/test_mft_scan_cli.py` (the writer
+itself, and that `run_mft_scan` wires it into `get_records_using_cache`
+only when `--progress-file` is given), `tests/test_run_elevated_scan_windows.py`
+(a full simulated poll loop confirming genuinely-new values get relayed
+and duplicates get deduped).
+
+**Follow-up found immediately after, on a real elevated GUI run (whole
+app launched as admin, title bar "— Elevated (Admin)") — FIXED: this
+above fix didn't cover it, because it's a different code path.** The user
+re-tested and still saw zero progress (status bar stuck on the initial
+"Scanning C:\\ …" the whole time). Checked the real
+`%LOCALAPPDATA%\NeuralStorageMatrix\logs\storage_scanner.log` directly
+rather than guess: the scan was a cached **incremental refresh**
+(confirmed by `turbo_cache: applied incremental refresh` right before it
+in the log), which explains the earlier "2TB in 18 seconds" report too —
+that's incremental-refresh speed, not a cold scan. Root cause:
+`_try_incremental_refresh()` never took a `progress_q` parameter at all
+and posted nothing, ever, completely independent of the elevated-helper
+vs. in-process split the first fix addressed — an already-elevated
+in-process Turbo Scan going through this path had exactly the same
+silent-for-the-whole-duration problem, because there was simply nothing
+posting anything, not a relay problem.
+
+Fixed by threading `progress_q` into `_try_incremental_refresh()` and
+posting on two phases, both of which can take real, visible time even
+when the underlying change set is small: `("status", "...applying N
+change(s)...")` before reparsing the USN journal's dirty records (with
+`("progress", i)` posted every 200 of them, matching
+`_full_scan_and_cache`'s existing per-5000 convention at a finer interval
+since a dirty set is typically far smaller), then `("status", "...loading
+cached records...")` right before the final `turbo_cache.load_all_records()`
+call — per this doc's own "Known follow-up" section above, deserializing
+the *entire* cached volume back into objects is itself a real, measured
+multi-second cost regardless of how few records actually changed, and
+previously that phase was silent too. Added a new `"status"` progress-
+message kind (`main_window._poll_progress` just sets the status bar text
+verbatim) since this is a free-text update, not a count.
+
+One known gap, not yet worth the added complexity to close: the new
+`"status"` messages only reach the in-process path.
+`mft_scan_cli._ProgressFileWriter` (the elevated-helper relay from the
+first fix) only relays `"progress"` counts across the process boundary,
+not free text, so an elevated-*helper* (not already-elevated whole-app)
+Turbo Scan going through an incremental refresh gets the record-count
+progress but not the descriptive status text. Both fixes are
+mutation-verified unit tests only — **still not reconfirmed against a
+live elevated GUI run** (needs a human clicking through, same limitation
+as above) — next real-hardware check should confirm the status bar
+actually updates through both phases during a real cached incremental
+Turbo Scan, launched both as an already-elevated whole app and via the
+UAC-prompted elevated helper.
+
 ### Bugs found and fixed so far (all confirmed via `compare_scan_engines.py`
 against the real machine, not just unit tests)
 
@@ -213,20 +303,58 @@ against the real machine, not just unit tests)
    Not yet reconfirmed against a real `compare_scan_engines.py C:\Windows`
    run — see next step.
 
-## Next step (not yet run)
+## Next step
 
-Ask the user to rerun, from an elevated terminal:
+~~Ask the user to rerun `compare_scan_engines.py C:\Windows` to confirm
+bug #6 collapses the `is_cloud_placeholder` mismatch count~~ —
+**superseded, effectively confirmed.** The later Phase 4 cache-validation
+runs (below) happened after bug #6 landed and explicitly note their
+204,65x discrepancy count "matches the post-bug-6 baseline" — no separate
+rerun needed.
 
-```
-python compare_scan_engines.py C:\Windows
-```
+7. **Reparse-point-as-scan-root gap — FIXED, 2026-09-17.** The theory
+   behind this fix (see "Also still deferred" below) turned out to be
+   wrong on this machine — `fsutil reparsepoint query
+   "C:\Users\danet\Documents"` returned `Error 4390: The file or
+   directory is not a reparse point`, so Documents was never actually
+   the trigger case (the earlier failure investigated under that theory
+   was bug #1's fragmentation bug, unrelated). Fixed anyway, since the
+   underlying architectural gap is real and reachable by any junction/
+   symlink a user might scan directly (OneDrive-redirected folders,
+   `mklink /J`, WSL distro mount points, etc.), not just Documents.
 
-to confirm bug #6 collapses the `is_cloud_placeholder` mismatch count
-(was 38,885) and see what's left once it's gone -- likely dominated by
-the already-understood `hardlink_dup`/`size`/`alloc_size` known
-limitation (~53,841/62,950/87,809), plus the small, real ~42-path
-missing/extra set (actively-changing driver-staging and CSC/WinSxS-
-pending-delete files, not a bug).
+   `mft_scan.build_tree()` always left a reparse point as an unexpanded
+   leaf, correct for one encountered as a *child* but not for the node
+   `find_subtree_node()` actually resolved to — `scanner.py`'s Compatible
+   engine follows a reparse point transparently when it's the scan root
+   (`os.path.isdir()`), only excluding it as a child during traversal.
+   Fixed by adding `mft_scan.reroot_if_reparse_point(node, target_path,
+   records, frn_by_node_id)`: if the resolved node is a reparse point
+   pointing at a real directory, it re-runs `build_tree()` rooted at that
+   node's own record number (reusing `build_tree`'s existing
+   `root_record_number` parameter, already general enough for this) and
+   returns the new expanded root instead. Any reparse point *inside* the
+   newly rebuilt subtree is still correctly left as a leaf — only the one
+   outermost node gets root treatment. Wired into both call sites between
+   `find_subtree_node()` and `finalize_subtree()`: `turbo_scan.
+   _run_turbo_in_process()` and `mft_scan_cli.run_mft_scan()`.
+
+   Tested at the unit level (`tests/test_mft_scan.py`, 4 new tests,
+   mutation-verified against a reverted fix) and the integration level
+   (`tests/test_turbo_scan_integration.py::
+   test_scanning_a_reparse_point_directly_still_reveals_its_contents`,
+   real hand-built MFT bytes through the full `scan_with_best_engine`
+   pipeline, cache included). Full suite: 274 passed (up from 269), same
+   8 pre-existing unrelated failures throughout this whole session.
+
+What's actually left, in priority order:
+
+1. **Not urgent, not correctness:** the small-subtree incremental-scan
+   performance follow-up (see "Known follow-up" below).
+2. Otherwise, Turbo Scan's correctness + the cache/incremental-refresh
+   feature are both confirmed on real hardware. Worth a product decision
+   on whether/when it graduates from "Experimental, opt-in, off by
+   default" toward being recommended more broadly.
 
 Each full-volume diagnostic run takes ~6–7 minutes (reading all ~1.5M MFT
 records twice). `compare_scan_engines.py` on `C:\Windows` now takes
@@ -245,20 +373,8 @@ records twice). `compare_scan_engines.py` on `C:\Windows` now takes
 
 ## Also still deferred (separate from the above, lower priority)
 
-`C:\Users\danet\Documents` is very likely itself a reparse point (OneDrive
-Known Folder redirection — this whole project already lives under
-`OneDrive\Desktop\Projects`, and Documents/Desktop are commonly redirected
-together). `scanner.py`'s Compatible engine has an asymmetry: it excludes
-a reparse point only when encountered as a *child* during traversal, but
-follows it transparently when it's the scan *root* itself (root handling
-just uses `os.path.isdir`). Turbo Scan's `find_subtree_node()` doesn't
-currently make that same distinction — it would return whatever node
-matches the final path component as-is (a leaf, `is_dir=False`, no
-children) if that node happens to be a reparse point. Confirm with
-`fsutil reparsepoint query "C:\Users\danet\Documents"` and decide whether
-`find_subtree_node` needs a fix so the *final* target node is never
-treated as a leaf-only reparse point, even though intermediate/descendant
-reparse points still correctly are.
+~~`C:\Users\danet\Documents` is very likely itself a reparse point~~ —
+**wrong, and fixed anyway; see item 7 in "Next step" above.**
 
 ## Cache + USN Journal incremental refresh (new, started 2026-09-16)
 
@@ -414,22 +530,66 @@ minimum:
    matched the Compatible engine's own time, so JSON-deserializing the
    whole cache is not a bottleneck in practice.
 
-## Known follow-up (not urgent, not a correctness issue)
+## Known follow-up (not urgent, not a correctness issue) — root cause found, partially fixed 2026-09-17
 
 Small-subtree incremental scans (e.g. a 3-file test folder) still took
 ~10s on real hardware, not the near-instant result you'd expect for "a
-handful of dirty records." Leading theory, not yet confirmed with
-instrumentation: `turbo_scan_cache.db` lives on the same `C:` volume it's
-caching, so every `save_full_scan`/`apply_incremental_changes` write to it
-(plus its WAL/SHM sidecar files) shows up in the USN journal as more
-changes for the *next* incremental refresh to page through and filter
-past via `usn_journal.read_journal_changes`'s `FSCTL_READ_USN_JOURNAL`
-loop -- even though `ReturnOnlyOnClose=1` should coalesce most of that
-per file-close, not per write. If this matters enough to chase: instrument
-`read_journal_changes` the same way `diagnose_attribute_list_perf.py`
-instrumented `RecordSource` earlier this session (call count, time spent,
-dirty-record count before/after dedup) against a real repeat scan, to
-confirm or rule this out before changing anything. A plausible fix if
-confirmed: move `turbo_scan_cache.db` off the volume being cached (not
-possible for the sole `C:` case that matters most here), or narrow
-`ReasonMask` to exclude reasons irrelevant to a size/tree cache.
+handful of dirty records." The doc's earlier leading theory (USN-journal
+noise from the cache DB's own writes to itself) was **never confirmed and
+turned out to be wrong** — root-caused instead with a synthetic benchmark
+at realistic ~1.15M-record scale (no elevated session needed:
+`turbo_cache.py` is pure SQLite, zero ctypes/Win32 access, so this is
+fully reproducible without real hardware).
+
+Real cause: `turbo_scan.get_records_using_cache()`'s incremental-refresh
+path calls `turbo_cache.load_all_records()` *unconditionally* after
+applying the dirty records — and that function deserializes the **entire
+cached volume**, every time, regardless of how small the actual change or
+requested subtree was (`apply_incremental_changes` itself, the part that
+actually processes the dirty records, took 4ms for 3 records in the
+benchmark; `load_all_records()` took 8.34s for the full ~1.15M-record
+volume alongside it). This is inherent to the architecture --
+`build_tree()`/`find_subtree_node()` need the whole volume's record set
+to walk down to an arbitrary subtree, caching was only ever meant to skip
+re-reading/re-parsing raw MFT bytes, not to make a small-subtree request
+complete in time proportional to the subtree's own size -- but the ~10s
+floor this imposes on every request, however small, was undocumented and
+worse than expected.
+
+Breaking down where `load_all_records()`'s ~8.3s (1.15M records) went:
+SQLite `SELECT`+`fetchall` transport was only ~0.65s (not the
+bottleneck); `json.loads()` + manual dict-to-dataclass reconstruction was
+~5.6s. **Fixed the easy part:** switched `cached_records`'s stored row
+format from JSON text (`json.dumps(dataclasses.asdict(record))`) to
+Python's stdlib `pickle` (`_record_to_blob`/`_record_from_blob` in
+`turbo_cache.py`) — no new dependency, small diff, measured ~34% faster
+deserialize (5.6s → 3.7s at 1.15M records in the same benchmark). Also
+added a one-time migration in `init_cache_db()`: an old JSON-format
+`cached_records` table (detected via `PRAGMA table_info` for a stale
+`record_json` column) is wiped along with its `cached_volumes` row rather
+than left to raise `UnpicklingError` on every future refresh or, worse,
+silently leave a `cached_volumes` row pointing at an empty new-format
+table — forces exactly one clean full rescan for anyone with a real
+pre-existing cache (this user's own ~337MB real `C:` cache included),
+same as any other cache miss. New tests:
+`tests/test_turbo_cache.py::test_init_cache_db_wipes_a_pre_pickle_json_format_cache`
+(mutation-verified), plus the existing round-trip tests continue to pass
+against the new pickle format unchanged. Full suite: 275 passed (up from
+274), same 8 pre-existing unrelated failures.
+
+**Not fixed, and not attempted:** constructing ~1.15M Python dataclass
+instances is itself an unavoidable floor in pure Python regardless of
+serialization format (confirmed: a single-blob-pickle-for-the-whole-list
+variant was tried in the same benchmark and was no faster than per-row
+pickle — object construction, not serialization format, dominates once
+JSON is off the table). So a small-subtree incremental scan should now
+take roughly ~5-6s instead of ~10s on this machine's real `C:` volume
+size, a real but partial win — not yet reconfirmed on real hardware (no
+elevated session available in this environment; needs the same real
+`C:\TurboScanTest` before/after comparison the original Phase 4 checklist
+used). Getting a small-subtree request closer to actually-near-instant
+would need a real architectural change: an indexed, targeted load that
+only deserializes records relevant to the requested subtree (via
+`parent_frn` chain lookup) instead of always materializing the whole
+volume — considered, explicitly deferred as a bigger, riskier change than
+this session's mandate ("not urgent, not correctness") justified.

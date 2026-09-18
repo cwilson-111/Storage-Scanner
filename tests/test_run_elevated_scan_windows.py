@@ -11,6 +11,7 @@ production code configures.
 import ctypes
 import json
 import os
+import queue
 import sys
 import threading
 from ctypes import wintypes
@@ -46,13 +47,19 @@ class _FakeShellExecuteExW:
 
 
 class _FakeWaitForSingleObject:
-    def __init__(self, results):
+    def __init__(self, results, on_call=None):
         self.results = list(results)
         self.restype = None
         self.calls = []
+        self.on_call = on_call  # optional callback(call_index) -- lets a
+                                 # test simulate the elevated child writing
+                                 # a new progress value between poll ticks
 
     def __call__(self, handle, timeout_ms):
+        index = len(self.calls)
         self.calls.append((handle, timeout_ms))
+        if self.on_call is not None:
+            self.on_call(index)
         if self.results:
             return self.results.pop(0)
         return 0  # WAIT_OBJECT_0
@@ -88,8 +95,8 @@ class _FakeCloseHandle:
 
 
 class _FakeKernel32:
-    def __init__(self, exit_code=0, wait_results=(0,)):
-        self.WaitForSingleObject = _FakeWaitForSingleObject(wait_results)
+    def __init__(self, exit_code=0, wait_results=(0,), on_wait=None):
+        self.WaitForSingleObject = _FakeWaitForSingleObject(wait_results, on_call=on_wait)
         self.GetExitCodeProcess = _FakeGetExitCodeProcess(exit_code)
         self.TerminateProcess = _FakeTerminateProcess()
         self.CloseHandle = _FakeCloseHandle()
@@ -114,13 +121,27 @@ def _patch(monkeypatch, shell_execute_ex_w, kernel32):
     )
 
 
-def test_successful_scan_returns_parsed_json_and_cleans_up_the_temp_file(monkeypatch, tmp_path):
-    # Give mkstemp a known, predictable path instead of parsing it back out
-    # of the quoted command line -- simpler and doesn't depend on
-    # subprocess.list2cmdline's quoting rules.
+def _patch_mkstemp(monkeypatch, output_path, progress_path):
+    """The real code calls tempfile.mkstemp() twice -- once for the JSON
+    result, once for the progress file -- distinguished by their distinct
+    `prefix` kwargs. Routes each call to its own pre-chosen path instead
+    of a real random temp file, so tests can write to (or just check for)
+    a known, predictable location."""
+    output_fd = os.open(str(output_path), os.O_CREAT | os.O_WRONLY)
+    progress_fd = os.open(str(progress_path), os.O_CREAT | os.O_WRONLY)
+
+    def _mkstemp(**kwargs):
+        if kwargs.get("prefix") == "mft_scan_progress_":
+            return progress_fd, str(progress_path)
+        return output_fd, str(output_path)
+
+    monkeypatch.setattr(file_ops.tempfile, "mkstemp", _mkstemp)
+
+
+def test_successful_scan_returns_parsed_json_and_cleans_up_the_temp_files(monkeypatch, tmp_path):
     output_path = tmp_path / "mft_scan_result.json"
-    fd = os.open(str(output_path), os.O_CREAT | os.O_WRONLY)
-    monkeypatch.setattr(file_ops.tempfile, "mkstemp", lambda **kwargs: (fd, str(output_path)))
+    progress_path = tmp_path / "mft_scan_progress.txt"
+    _patch_mkstemp(monkeypatch, output_path, progress_path)
 
     class _WritingShellExecuteExW(_FakeShellExecuteExW):
         def __call__(self, info_ref):
@@ -134,11 +155,12 @@ def test_successful_scan_returns_parsed_json_and_cleans_up_the_temp_file(monkeyp
     _patch(monkeypatch, shell_exec, kernel32)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
 
-    ok, result = run_elevated_scan_windows("C:\\Data", threading.Event())
+    ok, result = run_elevated_scan_windows("C:\\Data", queue.Queue(), threading.Event())
 
     assert ok is True
     assert result == {"path": "C:\\Data", "size": 42}
     assert not output_path.exists()  # cleaned up
+    assert not progress_path.exists()  # cleaned up
     assert kernel32.CloseHandle.calls == [_FAKE_PROCESS_HANDLE]
 
     call = shell_exec.calls[0]
@@ -147,6 +169,61 @@ def test_successful_scan_returns_parsed_json_and_cleans_up_the_temp_file(monkeyp
     assert "--subtree" in call["lpParameters"]
     assert "C:\\Data" in call["lpParameters"]
     assert "--output" in call["lpParameters"]
+    assert "--progress-file" in call["lpParameters"]
+
+
+def test_progress_file_updates_are_relayed_to_progress_q(monkeypatch, tmp_path):
+    # The core fix for "Turbo Scan looks hung through the elevated-helper
+    # path": without this, nothing at all was posted to progress_q for the
+    # scan's entire duration (see mft_scan_cli._ProgressFileWriter's and
+    # run_elevated_scan_windows's docstrings for the full story).
+    output_path = tmp_path / "mft_scan_result.json"
+    progress_path = tmp_path / "mft_scan_progress.txt"
+    _patch_mkstemp(monkeypatch, output_path, progress_path)
+    output_path.write_text(json.dumps({"size": 1}), encoding="utf-8")
+
+    # Simulate the elevated child writing progressively larger counts
+    # between poll ticks -- exactly what _ProgressFileWriter.put() does,
+    # just inlined here since this test never runs the real subprocess.
+    progress_values = [100, 100, 5000, 5000, 12000]  # duplicates should be deduped
+
+    def on_wait(call_index):
+        if call_index < len(progress_values):
+            progress_path.write_text(str(progress_values[call_index]), encoding="utf-8")
+
+    shell_exec = _FakeShellExecuteExW(succeed=True)
+    # One WAIT_TIMEOUT-equivalent poll per progress value, then WAIT_OBJECT_0.
+    wait_results = [258] * len(progress_values) + [0]  # 258 == WAIT_TIMEOUT
+    kernel32 = _FakeKernel32(exit_code=0, wait_results=wait_results, on_wait=on_wait)
+    _patch(monkeypatch, shell_exec, kernel32)
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+
+    progress_q = queue.Queue()
+    ok, _result = run_elevated_scan_windows("C:\\Data", progress_q, threading.Event())
+
+    assert ok is True
+    posted = []
+    while not progress_q.empty():
+        posted.append(progress_q.get_nowait())
+    # Deduped: 100 posted once (not twice), same for 5000 -- only genuinely
+    # new values ever get relayed.
+    assert posted == [("progress", 100), ("progress", 5000), ("progress", 12000)]
+
+
+def test_progress_q_of_none_does_not_crash_even_with_a_progress_file_present(monkeypatch, tmp_path):
+    output_path = tmp_path / "mft_scan_result.json"
+    progress_path = tmp_path / "mft_scan_progress.txt"
+    _patch_mkstemp(monkeypatch, output_path, progress_path)
+    output_path.write_text(json.dumps({"size": 1}), encoding="utf-8")
+    progress_path.write_text("42", encoding="utf-8")
+
+    shell_exec = _FakeShellExecuteExW(succeed=True)
+    kernel32 = _FakeKernel32(exit_code=0, wait_results=[258, 0])
+    _patch(monkeypatch, shell_exec, kernel32)
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+
+    ok, _result = run_elevated_scan_windows("C:\\Data", None, threading.Event())
+    assert ok is True
 
 
 def test_declined_elevation_returns_false_with_a_message(monkeypatch):
@@ -155,7 +232,7 @@ def test_declined_elevation_returns_false_with_a_message(monkeypatch):
     _patch(monkeypatch, shell_exec, kernel32)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
 
-    ok, message = run_elevated_scan_windows("C:\\Data", threading.Event())
+    ok, message = run_elevated_scan_windows("C:\\Data", queue.Queue(), threading.Event())
 
     assert ok is False
     assert "cancelled" in message.lower() or "failed" in message.lower()
@@ -168,7 +245,7 @@ def test_nonzero_exit_code_returns_false_with_a_message(monkeypatch):
     _patch(monkeypatch, shell_exec, kernel32)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
 
-    ok, message = run_elevated_scan_windows("C:\\Data", threading.Event())
+    ok, message = run_elevated_scan_windows("C:\\Data", queue.Queue(), threading.Event())
 
     assert ok is False
     assert "exited with code 1" in message
@@ -183,7 +260,7 @@ def test_missing_output_file_is_a_failure_not_a_crash(monkeypatch):
     _patch(monkeypatch, shell_exec, kernel32)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
 
-    ok, message = run_elevated_scan_windows("C:\\Data", threading.Event())
+    ok, message = run_elevated_scan_windows("C:\\Data", queue.Queue(), threading.Event())
 
     assert ok is False
     assert "could not read" in message.lower()
@@ -199,7 +276,7 @@ def test_cancellation_before_the_process_exits_terminates_it(monkeypatch):
     cancel_event = threading.Event()
     cancel_event.set()
 
-    ok, message = run_elevated_scan_windows("C:\\Data", cancel_event)
+    ok, message = run_elevated_scan_windows("C:\\Data", queue.Queue(), cancel_event)
 
     assert ok is False
     assert message == "Cancelled."
@@ -213,7 +290,7 @@ def test_frozen_build_uses_bare_executable_in_the_command_line(monkeypatch):
     _patch(monkeypatch, shell_exec, kernel32)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
-    run_elevated_scan_windows("C:\\Data", threading.Event())
+    run_elevated_scan_windows("C:\\Data", queue.Queue(), threading.Event())
 
     params = shell_exec.calls[0]["lpParameters"]
     assert sys.executable not in params

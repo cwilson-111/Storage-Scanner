@@ -1,13 +1,14 @@
-"""Headless entry point for `--priv-scan <path>` (macOS elevated scanning).
+"""Headless entry point for `--priv-scan <path>` (macOS and Linux elevated
+scanning -- see storage_scanner.file_ops.run_elevated_scan_macos/
+run_elevated_scan_linux for why each platform needs this rather than
+just relaunching the whole GUI as root).
 
-Relaunching the *whole* GUI as root via `do shell script ... with
-administrator privileges` can never show a window: macOS's authorization
-trampoline detaches the elevated child from the window-server connection,
-so a Tk window it tries to open just never appears. Instead, only this
-headless scan ever runs as root — it walks the tree with elevated
-filesystem access and prints the result as JSON on stdout, which the
-still-running, still-visible GUI process (running as the normal user)
-reads back and displays like any other scan result.
+Nothing about this module itself is platform-specific: it walks the tree
+with whatever filesystem access the process it's run under has, and
+prints the result as JSON on stdout, which the caller (`do shell script`
+on macOS, `pkexec` on Linux) hands back to the still-running,
+still-visible GUI process (running as the normal user), which reads it
+back and displays it like any other scan result.
 """
 
 import json

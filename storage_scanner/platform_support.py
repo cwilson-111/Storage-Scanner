@@ -25,21 +25,31 @@ def resource_path(name):
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
 
 def _detect_elevated():
-    if IS_MACOS:
-        return hasattr(os, "geteuid") and os.geteuid() == 0
     if IS_WINDOWS:
         try:
             return bool(ctypes.windll.shell32.IsUserAnAdmin())
         except Exception:
             logger.warning("IsUserAnAdmin() check failed", exc_info=True)
             return False
-    return False
+    # Covers macOS and Linux (and any other POSIX) alike -- os.geteuid()
+    # doesn't exist on Windows at all, so this branch is never reached
+    # there. Previously gated on IS_MACOS specifically, which meant this
+    # always returned False on Linux even when actually run as root via
+    # sudo -- the same check is equally valid on any POSIX platform.
+    return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
 IS_ROOT = _detect_elevated()
 
-FILE_MANAGER_NAME = "Finder" if IS_MACOS else "Explorer"
-TRASH_NAME = "Trash" if IS_MACOS else "Recycle Bin"
+if IS_MACOS:
+    FILE_MANAGER_NAME = "Finder"
+elif IS_WINDOWS:
+    FILE_MANAGER_NAME = "Explorer"
+else:
+    FILE_MANAGER_NAME = "Files"  # generic term, matches GNOME Files/Nautilus/Dolphin etc.
+
+TRASH_NAME = "Recycle Bin" if IS_WINDOWS else "Trash"  # matches the XDG Trash spec's own naming on Linux

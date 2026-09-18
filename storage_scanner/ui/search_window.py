@@ -208,6 +208,7 @@ class SearchMixin:
                 if recycle_and_log(node, source="Search & Filter"):
                     deleted += 1
                     self._remove_search_result_from_tree(node)
+                    self._remove_from_duplicate_cache(node)
                     iid_to_node.pop(iid, None)
                     tv.delete(iid)
                 else:

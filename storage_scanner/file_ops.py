@@ -4,13 +4,16 @@ import ctypes
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 from ctypes import wintypes
+from datetime import datetime
+from urllib.parse import quote
 
 from storage_scanner.drive_info import get_volume_root
-from storage_scanner.platform_support import IS_MACOS
+from storage_scanner.platform_support import IS_LINUX, IS_MACOS
 
 
 _FO_DELETE = 3
@@ -94,6 +97,81 @@ def _recycle_macos(path):
     return result.returncode == 0
 
 
+def _xdg_trash_home():
+    """The user's own home-volume XDG trash directory: ~/.local/share/Trash
+    (or $XDG_DATA_HOME/Trash). Only correct for a path on the SAME
+    filesystem as $HOME -- the XDG Trash spec calls for a per-mountpoint
+    $topdir/.Trash-$uid instead for anything else (a removable drive, a
+    separate /home mount, etc.), not implemented here. A known, stated
+    scope limit rather than something silently gotten wrong -- matching
+    how this project already documents similar single-case coverage
+    elsewhere (e.g. mft_volume.py's single-contiguous-$MFT-extent note)."""
+    xdg_data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(xdg_data_home, "Trash")
+
+
+def _recycle_linux_manual(path):
+    """Move `path` into ~/.local/share/Trash per the XDG Trash spec,
+    without depending on any trash-cli/gio tool being installed --
+    _recycle_linux's fallback for a minimal/headless install that has
+    neither. Only correct for paths on the same filesystem as $HOME (see
+    _xdg_trash_home)."""
+    trash_home = _xdg_trash_home()
+    files_dir = os.path.join(trash_home, "files")
+    info_dir = os.path.join(trash_home, "info")
+    try:
+        os.makedirs(files_dir, exist_ok=True)
+        os.makedirs(info_dir, exist_ok=True)
+
+        abs_path = os.path.abspath(path)
+        name = os.path.basename(abs_path.rstrip(os.sep)) or abs_path
+        # The spec requires a unique name within the trash; a plain
+        # collision counter (matching Explorer's/Finder's own "file (2)"
+        # convention) is enough -- two concurrent deletes racing for the
+        # exact same free name is astronomically unlikely for a
+        # single-user desktop tool.
+        dest_name, suffix = name, 1
+        while (os.path.exists(os.path.join(files_dir, dest_name))
+               or os.path.exists(os.path.join(info_dir, dest_name + ".trashinfo"))):
+            suffix += 1
+            dest_name = f"{name}.{suffix}"
+
+        info_path = os.path.join(info_dir, dest_name + ".trashinfo")
+        with open(info_path, "w", encoding="utf-8") as f:
+            f.write("[Trash Info]\n")
+            f.write(f"Path={quote(abs_path, safe='/')}\n")
+            f.write(f"DeletionDate={datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}\n")
+
+        shutil.move(abs_path, os.path.join(files_dir, dest_name))
+        return True
+    except OSError:
+        return False
+
+
+def _recycle_linux(path):
+    """Move a file or folder to the Linux desktop Trash (recoverable).
+
+    Prefers `gio trash` (part of glib2, present on most GNOME/GTK-based
+    desktops -- Ubuntu, Fedora Workstation, etc.): it correctly defers to
+    whatever trash implementation the user's actual desktop environment
+    uses, including the separate per-mountpoint trash a removable/non-home
+    filesystem needs. Falls back to a manual XDG Trash-spec move (see
+    _recycle_linux_manual) if `gio` isn't installed or fails, so deletion
+    still stays recoverable even on a minimal/headless install with no
+    desktop trash tool at all. Never depends on a third-party package (no
+    send2trash) per this project's zero-runtime-dependency policy.
+    """
+    try:
+        result = subprocess.run(
+            ["gio", "trash", os.path.abspath(path)], capture_output=True,
+        )
+        if result.returncode == 0:
+            return True
+    except OSError:
+        pass  # gio not installed -- fall through to the manual implementation
+    return _recycle_linux_manual(path)
+
+
 def recycle(path):
     """Send a file or folder to the platform Recycle Bin / Trash (recoverable).
 
@@ -101,6 +179,8 @@ def recycle(path):
     """
     if IS_MACOS:
         return _recycle_macos(path)
+    if IS_LINUX:
+        return _recycle_linux(path)
     return _recycle_windows(path)
 
 
@@ -113,6 +193,16 @@ def open_trash():
     try:
         if IS_MACOS:
             subprocess.run(["open", os.path.expanduser("~/.Trash")], check=True)
+        elif IS_LINUX:
+            try:
+                # "trash:///" is the GVFS URI most file managers (Nautilus,
+                # Nemo, ...) render as the proper, familiar Trash view --
+                # nicer than the raw ~/.local/share/Trash/files folder,
+                # which mixes deleted items in with the spec's own
+                # .trashinfo metadata files.
+                subprocess.run(["gio", "open", "trash:///"], check=True)
+            except (OSError, subprocess.CalledProcessError):
+                subprocess.run(["xdg-open", _xdg_trash_home()], check=True)
         else:
             subprocess.run(["explorer.exe", "shell:RecycleBinFolder"], check=True)
         return True
@@ -159,6 +249,67 @@ def run_elevated_scan_macos(path):
     return True, result.stdout
 
 
+def run_elevated_scan_linux(path):
+    """Scan `path` with root filesystem access via a PolicyKit (pkexec)
+    prompt.
+
+    Same headless-only shape as run_elevated_scan_macos, for a related but
+    distinct reason: unlike macOS, `pkexec` genuinely *can* show a root-
+    owned window on a traditional X11 session (several real Linux disk
+    tools launch themselves this way) -- but Wayland compositors
+    generally refuse a root process's connection to the user's session
+    outright, as a hard security boundary, and there's no reliable way
+    to tell from here which one a given user is actually running. A
+    headless scan (`--priv-scan`, exactly the same entry point macOS
+    already uses -- it's pure storage_scanner.scanner.scan() plus a JSON
+    dump, nothing macOS-specific about it) sidesteps the question
+    entirely: it never opens a window, so it works the same under X11,
+    Wayland, or even a display-less SSH session with polkit configured.
+    The still-running, still-visible GUI stays unprivileged throughout.
+
+    pkexec is the de-facto standard for "ordinary GUI app needs root" on
+    Linux -- ships by default with GNOME/KDE and most desktop distros,
+    unlike bare `sudo`, which has no GUI password prompt of its own and
+    would just hang waiting on a TTY that doesn't exist here. It needs a
+    running polkit authentication agent to actually display that prompt.
+
+    Confirmed on a real (agent-less) machine, not just assumed: contrary
+    to what an earlier version of this docstring claimed, pkexec does
+    NOT fail fast when no authentication agent is registered -- it just
+    blocks indefinitely, waiting for a prompt response that can never
+    arrive. `timeout=` below turns that into a bounded, reported failure
+    instead of hanging this whole thread (and by extension the "Cancel"
+    button, since nothing here currently threads a cancel_event through
+    to pkexec) forever.
+
+    Returns (True, json_text) on success, (False, error_message) if
+    authorization was cancelled/failed, pkexec itself isn't installed,
+    no authentication agent responded within the timeout, or the scan
+    itself errored.
+    """
+    if getattr(sys, "frozen", False):
+        args = ["pkexec", sys.executable, "--priv-scan", path]
+    else:
+        args = ["pkexec", sys.executable, os.path.abspath(sys.argv[0]), "--priv-scan", path]
+
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    except OSError as exc:
+        return False, f"Could not run pkexec (is PolicyKit installed?): {exc}"
+    except subprocess.TimeoutExpired:
+        return False, (
+            "Timed out waiting for authentication. This usually means no "
+            "PolicyKit authentication agent is running for this desktop "
+            "session (common on minimal window managers/headless setups) "
+            "-- install one (e.g. polkit-gnome, lxqt-policykit, or your "
+            "desktop's own) and try again."
+        )
+
+    if result.returncode != 0:
+        return False, (result.stderr or "Authorization was cancelled or failed.").strip()
+    return True, result.stdout
+
+
 def relaunch_elevated_windows(initial_path=None):
     """Relaunch this app elevated via the Windows UAC consent prompt.
 
@@ -194,7 +345,38 @@ def relaunch_elevated_windows(initial_path=None):
     return int(result) > 32
 
 
-def run_elevated_scan_windows(path, cancel_event):
+def _relay_progress_file(progress_path, progress_q, last_value):
+    """Read the elevated helper's --progress-file (see mft_scan_cli.
+    _ProgressFileWriter) and, if its value changed since `last_value`,
+    post it to `progress_q` the same way scanner.py's own directory-walk
+    engine does -- main_window._poll_progress already handles a
+    ("progress", count) message generically, so no UI-side change is
+    needed for this to show up as a live, updating status-bar count
+    instead of the static text a Turbo Scan run showed for its entire
+    duration before this existed.
+
+    Returns the (possibly unchanged) last_value to pass into the next
+    call. Never raises: a missing file (helper hasn't started/written
+    yet), an empty file (mid-write on the other end, despite the writer
+    side's own atomic swap -- cheap extra safety), or unparseable
+    content are all just "nothing new yet," not errors.
+    """
+    if progress_q is None:
+        return last_value
+    try:
+        with open(progress_path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        if not text:
+            return last_value
+        value = int(text)
+    except (OSError, ValueError):
+        return last_value
+    if value != last_value:
+        progress_q.put(("progress", value))
+    return value
+
+
+def run_elevated_scan_windows(path, progress_q, cancel_event):
     """Scan `path` with Turbo Scan's raw-volume access via a headless
     elevated helper process (`--mft-scan`, see
     storage_scanner/mft_scan_cli.py), while this (unprivileged) process
@@ -208,6 +390,18 @@ def run_elevated_scan_windows(path, cancel_event):
     a temp file this function creates and reads back once the process
     exits, using ShellExecuteExW's SEE_MASK_NOCLOSEPROCESS to get a real
     process handle to wait on.
+
+    A second temp file (--progress-file) is polled on the same cadence,
+    relaying live record counts into `progress_q` via
+    _relay_progress_file -- without this, a scan running through this
+    elevated-helper path (the common case: anyone who hasn't already
+    launched the whole GUI as admin) posted zero progress of any kind for
+    its entire duration, often 15s-60s+ on a cold scan, indistinguishable
+    from a hang. A real bug, found via user report, not something this
+    project's own validation had exercised (earlier real-hardware
+    validation of this same helper always invoked it directly from an
+    already-elevated terminal, bypassing the actual ShellExecuteExW/UAC
+    GUI flow entirely -- see TURBO_SCAN_VALIDATION_STATUS.md).
 
     Polls with WaitForSingleObject in a short timeout loop rather than
     blocking outright, so `cancel_event` can be honored: if it's set
@@ -224,16 +418,22 @@ def run_elevated_scan_windows(path, cancel_event):
 
     fd, output_path = tempfile.mkstemp(prefix="mft_scan_", suffix=".json")
     os.close(fd)  # only the path is wanted -- the elevated child opens it itself
+    fd, progress_path = tempfile.mkstemp(prefix="mft_scan_progress_", suffix=".txt")
+    os.close(fd)
 
     try:
         if getattr(sys, "frozen", False):
             target = sys.executable
-            args = ["--mft-scan", volume_root, "--subtree", path, "--output", output_path]
+            args = [
+                "--mft-scan", volume_root, "--subtree", path, "--output", output_path,
+                "--progress-file", progress_path,
+            ]
         else:
             target = sys.executable
             args = [
                 os.path.abspath(sys.argv[0]), "--mft-scan", volume_root,
                 "--subtree", path, "--output", output_path,
+                "--progress-file", progress_path,
             ]
         params = subprocess.list2cmdline(args)
 
@@ -256,6 +456,7 @@ def run_elevated_scan_windows(path, cancel_event):
         h_process = info.hProcess
         kernel32 = ctypes.windll.kernel32
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        last_progress = None
         try:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
@@ -267,6 +468,7 @@ def run_elevated_scan_windows(path, cancel_event):
                     break
                 if wait_result == _WAIT_FAILED:
                     return False, "Waiting for the Turbo Scan helper process failed."
+                last_progress = _relay_progress_file(progress_path, progress_q, last_progress)
 
             exit_code = wintypes.DWORD(0)
             kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
@@ -284,5 +486,9 @@ def run_elevated_scan_windows(path, cancel_event):
     finally:
         try:
             os.remove(output_path)
+        except OSError:
+            pass
+        try:
+            os.remove(progress_path)
         except OSError:
             pass

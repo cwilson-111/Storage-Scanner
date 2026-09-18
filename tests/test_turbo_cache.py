@@ -59,6 +59,49 @@ def test_init_cache_db_is_idempotent_and_creates_all_tables(tmp_path, monkeypatc
     assert {"cached_volumes", "cached_records"} <= tables
 
 
+def test_init_cache_db_wipes_a_pre_pickle_json_format_cache(tmp_path, monkeypatch):
+    # Simulates a real on-disk cache built by an older version of this
+    # module, back when cached_records stored JSON text (record_json)
+    # instead of pickle blobs (record_blob). A stale JSON row can't be
+    # unpickled, so init_cache_db() must detect the old schema and wipe
+    # both tables -- forcing one clean full rescan next time -- rather
+    # than leave a cached_volumes row whose matching records table is
+    # either unreadable or (worse) silently incomplete.
+    db_path = _init_db(tmp_path, monkeypatch)
+    turbo_cache.save_full_scan(
+        VOLUME_SERIAL, "C:\\", ROOT_FRN, 1024,
+        [_record(5, is_directory=True, names=[]), _record(10, names=[_name(ROOT_FRN, "a.txt")])],
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("DROP TABLE cached_records")
+    conn.execute("""
+        CREATE TABLE cached_records (
+            volume_serial   INTEGER NOT NULL,
+            record_number   INTEGER NOT NULL,
+            frn             INTEGER NOT NULL,
+            record_json     TEXT NOT NULL,
+            PRIMARY KEY (volume_serial, record_number)
+        )
+    """)
+    conn.execute(
+        "INSERT INTO cached_records VALUES (?, ?, ?, ?)",
+        (VOLUME_SERIAL, 5, ROOT_FRN, '{"frn": 5}'),
+    )
+    conn.commit()
+    conn.close()
+
+    turbo_cache.init_cache_db()  # simulates restarting on the new code
+
+    assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is None
+    assert turbo_cache.load_all_records(VOLUME_SERIAL) == []
+
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(cached_records)").fetchall()}
+    conn.close()
+    assert columns == {"volume_serial", "record_number", "frn", "record_blob"}
+
+
 def test_get_cached_volume_returns_none_for_unseen_volume(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
     assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is None
