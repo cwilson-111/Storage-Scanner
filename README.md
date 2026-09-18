@@ -25,6 +25,13 @@ forecasting, and an audit log of everything it's ever deleted.
 > Windows SmartScreen may warn about an unsigned app the first time. Click
 > **More info → Run anyway**. (The app is open source — you can read every line here.)
 
+> Some browsers (Opera, Chrome, etc.) may block the `.exe` download itself,
+> flagging it before SmartScreen ever gets a chance to — a reputation check
+> against an unsigned, freshly-released, PyInstaller-built binary, not a
+> real detection. If that happens, download **`StorageScanner-portable.zip`**
+> instead (same binary, zipped — usually avoids the same trigger), or try a
+> different browser. Verify against `SHA256SUMS.txt` either way.
+
 ### Verifying a release
 
 Every release includes, alongside `StorageScanner.exe`:

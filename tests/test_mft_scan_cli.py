@@ -133,3 +133,80 @@ def test_missing_required_arguments_exit_with_usage_error():
     with pytest.raises(SystemExit) as exc_info:
         mft_scan_cli.run_mft_scan(["C:\\"])  # --subtree/--output both missing
     assert exc_info.value.code == 2
+
+
+# -- --progress-file / _ProgressFileWriter ---------------------------------- #
+#
+# Before this existed, a Turbo Scan running through the elevated-helper
+# path (run_elevated_scan_windows) posted zero progress of any kind for
+# its entire duration -- often 15s-60s+ on a cold scan -- indistinguishable
+# from a hang. Found via a real user report, not something this project's
+# own earlier real-hardware validation had exercised (it always invoked
+# this CLI directly from an already-elevated terminal, bypassing the
+# actual ShellExecuteExW/UAC GUI flow that's the common case).
+
+def test_progress_file_writer_writes_the_latest_progress_count(tmp_path):
+    progress_path = tmp_path / "progress.txt"
+    writer = mft_scan_cli._ProgressFileWriter(str(progress_path))
+
+    writer.put(("progress", 100))
+    assert progress_path.read_text(encoding="utf-8") == "100"
+
+    writer.put(("progress", 5000))
+    assert progress_path.read_text(encoding="utf-8") == "5000"  # overwritten, not appended
+
+
+def test_progress_file_writer_ignores_non_progress_message_kinds(tmp_path):
+    progress_path = tmp_path / "progress.txt"
+    writer = mft_scan_cli._ProgressFileWriter(str(progress_path))
+
+    writer.put(("root", object()))
+    writer.put(("progress_bytes", 12345))
+
+    assert not progress_path.exists()  # never touched -- only "progress" is relayed
+
+
+def test_run_mft_scan_wires_progress_file_into_get_records_using_cache(monkeypatch, tmp_path):
+    fake_source = _FakeRecordSource(record_count=3)
+    fake_node = _make_node()
+    captured = {}
+
+    def fake_get_records(record_source, volume_root, progress_q, cancel_event):
+        captured["progress_q"] = progress_q
+        return []
+
+    monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", fake_get_records)
+    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
+    monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
+
+    output_path = tmp_path / "out.json"
+    progress_path = tmp_path / "progress.txt"
+    argv = _base_argv(output_path) + ["--progress-file", str(progress_path)]
+
+    exit_code = mft_scan_cli.run_mft_scan(argv)
+
+    assert exit_code == mft_scan_cli.EXIT_OK
+    assert isinstance(captured["progress_q"], mft_scan_cli._ProgressFileWriter)
+    assert captured["progress_q"].path == str(progress_path)
+
+
+def test_run_mft_scan_without_progress_file_passes_none(monkeypatch, tmp_path):
+    fake_source = _FakeRecordSource(record_count=3)
+    fake_node = _make_node()
+    captured = {}
+
+    def fake_get_records(record_source, volume_root, progress_q, cancel_event):
+        captured["progress_q"] = progress_q
+        return []
+
+    monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", fake_get_records)
+    monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
+    monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
+
+    output_path = tmp_path / "out.json"
+    exit_code = mft_scan_cli.run_mft_scan(_base_argv(output_path))  # no --progress-file
+
+    assert exit_code == mft_scan_cli.EXIT_OK
+    assert captured["progress_q"] is None

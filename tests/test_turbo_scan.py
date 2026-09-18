@@ -189,7 +189,7 @@ def test_not_elevated_uses_elevated_helper_path(monkeypatch):
         lambda *a, **k: pytest.fail("should not scan in-process when not elevated"),
     )
 
-    def fake_via_helper(path, cancel_event):
+    def fake_via_helper(path, progress_q, cancel_event):
         called["via_helper"] = path
         return fake_node
 
@@ -294,6 +294,73 @@ def test_cache_with_valid_journal_and_no_changes_uses_incremental_path(monkeypat
     records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert records is cached_records
+
+
+def test_incremental_refresh_posts_status_and_progress_messages(monkeypatch):
+    # The core fix for "elevated Turbo Scan shows no progress at all" when
+    # the scan turns out to be a cached incremental refresh -- previously
+    # _try_incremental_refresh never took or posted to progress_q at all,
+    # regardless of engine path (in-process or elevated-helper); this is a
+    # real, separate gap from run_elevated_scan_windows's own
+    # process-boundary relay fix, found via a real user report.
+    source = _FakeRecordSource()
+    cached_records = [_fake_parsed_record(0)]
+    dirty = [usn_journal.DirtyRecord(record_number=n, reason=0x1) for n in range(250)]
+
+    monkeypatch.setattr(
+        turbo_scan.turbo_cache, "get_cached_volume",
+        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+    )
+    monkeypatch.setattr(
+        turbo_scan.usn_journal, "query_journal",
+        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+    )
+    monkeypatch.setattr(turbo_scan.usn_journal, "read_journal_changes", lambda handle, journal_id, start_usn: (dirty, 999))
+    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(turbo_scan.turbo_cache, "apply_incremental_changes", lambda *a, **k: None)
+    monkeypatch.setattr(turbo_scan.turbo_cache, "load_all_records", lambda serial: cached_records)
+
+    progress_q = queue.Queue()
+    records = turbo_scan.get_records_using_cache(source, "C:\\", progress_q, threading.Event())
+
+    assert records is cached_records
+    messages = []
+    while not progress_q.empty():
+        messages.append(progress_q.get_nowait())
+
+    statuses = [payload for kind, payload in messages if kind == "status"]
+    assert any("250" in s and "applying" in s.lower() for s in statuses)
+    assert any("loading" in s.lower() for s in statuses)
+
+    progress_counts = [payload for kind, payload in messages if kind == "progress"]
+    assert progress_counts == [200]  # only one multiple of 200 within 250 dirty records
+
+
+def test_incremental_refresh_with_no_dirty_records_skips_the_applying_status(monkeypatch):
+    source = _FakeRecordSource()
+    cached_records = [_fake_parsed_record(0)]
+
+    monkeypatch.setattr(
+        turbo_scan.turbo_cache, "get_cached_volume",
+        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+    )
+    monkeypatch.setattr(
+        turbo_scan.usn_journal, "query_journal",
+        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+    )
+    monkeypatch.setattr(turbo_scan.usn_journal, "read_journal_changes", lambda handle, journal_id, start_usn: ([], 500))
+    monkeypatch.setattr(turbo_scan.turbo_cache, "apply_incremental_changes", lambda *a, **k: None)
+    monkeypatch.setattr(turbo_scan.turbo_cache, "load_all_records", lambda serial: cached_records)
+
+    progress_q = queue.Queue()
+    turbo_scan.get_records_using_cache(source, "C:\\", progress_q, threading.Event())
+
+    messages = []
+    while not progress_q.empty():
+        messages.append(progress_q.get_nowait())
+    statuses = [payload for kind, payload in messages if kind == "status"]
+    assert not any("applying" in s.lower() for s in statuses)  # nothing to apply
+    assert any("loading" in s.lower() for s in statuses)  # still posted -- load_all_records still runs
 
 
 def test_journal_id_mismatch_falls_back_to_full_scan_and_invalidates(monkeypatch):

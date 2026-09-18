@@ -345,7 +345,38 @@ def relaunch_elevated_windows(initial_path=None):
     return int(result) > 32
 
 
-def run_elevated_scan_windows(path, cancel_event):
+def _relay_progress_file(progress_path, progress_q, last_value):
+    """Read the elevated helper's --progress-file (see mft_scan_cli.
+    _ProgressFileWriter) and, if its value changed since `last_value`,
+    post it to `progress_q` the same way scanner.py's own directory-walk
+    engine does -- main_window._poll_progress already handles a
+    ("progress", count) message generically, so no UI-side change is
+    needed for this to show up as a live, updating status-bar count
+    instead of the static text a Turbo Scan run showed for its entire
+    duration before this existed.
+
+    Returns the (possibly unchanged) last_value to pass into the next
+    call. Never raises: a missing file (helper hasn't started/written
+    yet), an empty file (mid-write on the other end, despite the writer
+    side's own atomic swap -- cheap extra safety), or unparseable
+    content are all just "nothing new yet," not errors.
+    """
+    if progress_q is None:
+        return last_value
+    try:
+        with open(progress_path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        if not text:
+            return last_value
+        value = int(text)
+    except (OSError, ValueError):
+        return last_value
+    if value != last_value:
+        progress_q.put(("progress", value))
+    return value
+
+
+def run_elevated_scan_windows(path, progress_q, cancel_event):
     """Scan `path` with Turbo Scan's raw-volume access via a headless
     elevated helper process (`--mft-scan`, see
     storage_scanner/mft_scan_cli.py), while this (unprivileged) process
@@ -359,6 +390,18 @@ def run_elevated_scan_windows(path, cancel_event):
     a temp file this function creates and reads back once the process
     exits, using ShellExecuteExW's SEE_MASK_NOCLOSEPROCESS to get a real
     process handle to wait on.
+
+    A second temp file (--progress-file) is polled on the same cadence,
+    relaying live record counts into `progress_q` via
+    _relay_progress_file -- without this, a scan running through this
+    elevated-helper path (the common case: anyone who hasn't already
+    launched the whole GUI as admin) posted zero progress of any kind for
+    its entire duration, often 15s-60s+ on a cold scan, indistinguishable
+    from a hang. A real bug, found via user report, not something this
+    project's own validation had exercised (earlier real-hardware
+    validation of this same helper always invoked it directly from an
+    already-elevated terminal, bypassing the actual ShellExecuteExW/UAC
+    GUI flow entirely -- see TURBO_SCAN_VALIDATION_STATUS.md).
 
     Polls with WaitForSingleObject in a short timeout loop rather than
     blocking outright, so `cancel_event` can be honored: if it's set
@@ -375,16 +418,22 @@ def run_elevated_scan_windows(path, cancel_event):
 
     fd, output_path = tempfile.mkstemp(prefix="mft_scan_", suffix=".json")
     os.close(fd)  # only the path is wanted -- the elevated child opens it itself
+    fd, progress_path = tempfile.mkstemp(prefix="mft_scan_progress_", suffix=".txt")
+    os.close(fd)
 
     try:
         if getattr(sys, "frozen", False):
             target = sys.executable
-            args = ["--mft-scan", volume_root, "--subtree", path, "--output", output_path]
+            args = [
+                "--mft-scan", volume_root, "--subtree", path, "--output", output_path,
+                "--progress-file", progress_path,
+            ]
         else:
             target = sys.executable
             args = [
                 os.path.abspath(sys.argv[0]), "--mft-scan", volume_root,
                 "--subtree", path, "--output", output_path,
+                "--progress-file", progress_path,
             ]
         params = subprocess.list2cmdline(args)
 
@@ -407,6 +456,7 @@ def run_elevated_scan_windows(path, cancel_event):
         h_process = info.hProcess
         kernel32 = ctypes.windll.kernel32
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        last_progress = None
         try:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
@@ -418,6 +468,7 @@ def run_elevated_scan_windows(path, cancel_event):
                     break
                 if wait_result == _WAIT_FAILED:
                     return False, "Waiting for the Turbo Scan helper process failed."
+                last_progress = _relay_progress_file(progress_path, progress_q, last_progress)
 
             exit_code = wintypes.DWORD(0)
             kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
@@ -435,5 +486,9 @@ def run_elevated_scan_windows(path, cancel_event):
     finally:
         try:
             os.remove(output_path)
+        except OSError:
+            pass
+        try:
+            os.remove(progress_path)
         except OSError:
             pass
