@@ -123,40 +123,55 @@ class CleanupMixin:
         populate(metadata_recs)
         summarize(metadata_recs, suffix="  (scanning for duplicate files…)")
 
-        # Phase 2: Duplicate candidates need content hashing, so that part
-        # reuses the existing duplicate-finder in a background thread —
-        # hashing files again here would be wasted, duplicate work.
-        result_q = queue.Queue()
+        # Phase 2: Duplicate candidates need content hashing. If "Find
+        # Duplicate Files" has already been run for this exact scan, reuse
+        # that result instead of hashing every file a second time — and so
+        # those results are never lost just because that window got closed.
+        # self.duplicates persists across windows (see app.py/duplicate_
+        # window.py); _duplicates_scan_root guards against reusing a stale
+        # result left over from a since-replaced scan of a different path.
+        cached_duplicates = self.duplicates
         cancel_event = threading.Event()
 
-        def worker():
-            try:
-                groups = self._find_duplicate_files(cancel_event=cancel_event)
-                result_q.put(("done", groups))
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Duplicate scan for cleanup recommendations failed")
-                result_q.put(("error", str(exc)))
+        if cached_duplicates is not None and self._duplicates_scan_root is self.root_node:
+            all_recs = metadata_recs + build_duplicate_recommendations(cached_duplicates)
+            all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+            populate(all_recs)
+            summarize(all_recs, suffix="  (duplicate results reused from Find Duplicate Files)")
+            win.protocol("WM_DELETE_WINDOW", win.destroy)
+        else:
+            result_q = queue.Queue()
 
-        def poll():
-            if not win.winfo_exists():
-                cancel_event.set()
-                return
-            try:
-                kind, payload = result_q.get_nowait()
-            except queue.Empty:
-                win.after(150, poll)
-                return
-            if kind == "done":
-                all_recs = metadata_recs + build_duplicate_recommendations(payload)
-                all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
-                populate(all_recs)
-                summarize(all_recs)
-            else:
-                summarize(metadata_recs, suffix=f"  (duplicate scan failed: {payload})")
+            def worker():
+                try:
+                    groups = self._find_duplicate_files(cancel_event=cancel_event)
+                    result_q.put(("done", groups))
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Duplicate scan for cleanup recommendations failed")
+                    result_q.put(("error", str(exc)))
 
-        threading.Thread(target=worker, daemon=True).start()
-        win.after(150, poll)
-        win.protocol("WM_DELETE_WINDOW", lambda: (cancel_event.set(), win.destroy()))
+            def poll():
+                if not win.winfo_exists():
+                    cancel_event.set()
+                    return
+                try:
+                    kind, payload = result_q.get_nowait()
+                except queue.Empty:
+                    win.after(150, poll)
+                    return
+                if kind == "done":
+                    self.duplicates = payload
+                    self._duplicates_scan_root = self.root_node
+                    all_recs = metadata_recs + build_duplicate_recommendations(payload)
+                    all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+                    populate(all_recs)
+                    summarize(all_recs)
+                else:
+                    summarize(metadata_recs, suffix=f"  (duplicate scan failed: {payload})")
+
+            threading.Thread(target=worker, daemon=True).start()
+            win.after(150, poll)
+            win.protocol("WM_DELETE_WINDOW", lambda: (cancel_event.set(), win.destroy()))
 
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
         button_bar.pack(side=BOTTOM, fill=X)
@@ -198,6 +213,7 @@ class CleanupMixin:
                 if recycle_and_log(rec.node, source="Cleanup Recommendations"):
                     deleted += 1
                     self._remove_search_result_from_tree(rec.node)
+                    self._remove_from_duplicate_cache(rec.node)
                     iid_to_rec.pop(iid, None)
                     tv.delete(iid)
                 else:

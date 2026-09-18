@@ -407,6 +407,8 @@ class MainWindowMixin:
         self._live_total_bytes = 0
         self._live_expanded_iids = set()
         self._last_live_refresh = 0.0
+        self.duplicates = None
+        self._duplicates_scan_root = None
 
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
@@ -450,6 +452,8 @@ class MainWindowMixin:
         self._live_total_bytes = 0
         self._live_expanded_iids = set()
         self._last_live_refresh = 0.0
+        self.duplicates = None
+        self._duplicates_scan_root = None
 
         self.scan_btn.config(state="disabled")
         self.elevate_btn.config(state="disabled")
@@ -877,6 +881,8 @@ class MainWindowMixin:
                 "It may be in use, protected, or require admin rights.",
             )
             return
+
+        self._remove_from_duplicate_cache(node)
 
         parent_iid = self.tree.parent(iid)
         parent_node = self.node_by_iid.get(parent_iid)

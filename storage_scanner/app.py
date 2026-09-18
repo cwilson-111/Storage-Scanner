@@ -79,6 +79,17 @@ class StorageScannerApp(
         self.dup_thread = None
         self.dup_cancel_event = threading.Event()
 
+        # The last completed "Find Duplicate Files" result, kept around so
+        # Cleanup Recommendations (and a reopened Duplicate Files window)
+        # can reuse it instead of re-hashing every file a second time, and
+        # so results aren't lost just because that window was closed. Tied
+        # to the exact root_node it was computed from (see
+        # DuplicatesMixin._remove_from_duplicate_cache and start_scan's
+        # reset of both) so a rescan of a different path can't serve stale
+        # duplicate data.
+        self.duplicates = None
+        self._duplicates_scan_root = None
+
         
         self.dup_stats = {
             "files_total": 0,

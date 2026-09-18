@@ -78,6 +78,41 @@ def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatc
     assert [size for _id, _created_at, size, _files in rows] == [150, 200, 100]
 
 
+def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path, monkeypatch):
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+
+    history.init_history_db()
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    for total_size, created_at in [
+        (100, "2024-01-01T00:00:00"),
+        (200, "2024-02-01T00:00:00"),
+    ]:
+        cur.execute(
+            """
+            INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("C:/Example", total_size, 1000, 10, 3, created_at),
+        )
+    # A different path's scan must never leak into this path's mapping.
+    cur.execute(
+        """
+        INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("C:/Other", 999, 1000, 10, 3, "2024-01-01T00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    mapping = history.get_scan_ids_by_created_at("C:/Example")
+
+    assert mapping == {"2024-01-01T00:00:00": 1, "2024-02-01T00:00:00": 2}
+
+
 def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
     monkeypatch.setattr(history, "DB_NAME", str(db_path))
