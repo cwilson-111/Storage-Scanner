@@ -160,6 +160,24 @@ def scan(path, progress_q, cancel_event, workers=None):
 
     Posts the running file count to `progress_q` and stops early if
     `cancel_event` is set.
+
+    Also posts `("root", root)` once, immediately, for a directory target
+    (never for a single-file target, which returns before there's
+    anything worth watching) -- a live reference to the same Node this
+    function's worker threads go on to mutate in place as they walk. A
+    caller (see storage_scanner.ui.main_window's live-tree preview) may
+    read from it concurrently while the scan is still running: appending
+    to node.children is safe to read mid-mutation under the GIL, and
+    every *directory* Node's size/alloc_size/file_count stays at its
+    zeroed default until _rollup() below runs once, at the very end -- a
+    reader must never trust those fields as meaningful before "done" is
+    posted. Also posts `("progress_bytes", total)` alongside every
+    existing `("progress", count)` message, a running total of bytes
+    seen in already-listed directories (post hard-link-dedup, so it
+    tracks towards the same final number `_rollup()` will produce) --
+    cheap, piggybacking on the same already-held counter_lock, unlike a
+    live per-directory size which would need repeatedly re-summing the
+    whole tree.
     """
     path = os.path.abspath(path)
     name = path if path.endswith(os.sep) else os.path.basename(path) or path
@@ -180,10 +198,13 @@ def scan(path, progress_q, cancel_event, workers=None):
         progress_q.put(("progress", root.file_count))
         return root
 
+    progress_q.put(("root", root))
+
     work = queue.Queue()
     work.put(root)
 
     scanned = [0]
+    scanned_bytes = [0]
     counter_lock = threading.Lock()
 
     # Hard links share one (device, file-index) pair; count their bytes once
@@ -202,6 +223,7 @@ def scan(path, progress_q, cancel_event, workers=None):
             return
 
         local_files = 0
+        local_bytes = 0
         for entry in entries:
             if cancel_event.is_set():
                 return
@@ -257,12 +279,16 @@ def scan(path, progress_q, cancel_event, workers=None):
                     child.alloc_size = alloc_size
                 child.file_count = 1
                 local_files += 1
+                local_bytes += child.size
 
         if local_files:
             with counter_lock:
                 scanned[0] += local_files
+                scanned_bytes[0] += local_bytes
                 count = scanned[0]
+                total_bytes = scanned_bytes[0]
             progress_q.put(("progress", count))
+            progress_q.put(("progress_bytes", total_bytes))
 
     def _worker():
         while True:

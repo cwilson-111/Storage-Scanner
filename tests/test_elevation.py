@@ -7,7 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
+from storage_scanner.file_ops import (
+    relaunch_elevated_windows, run_elevated_scan_linux, run_elevated_scan_macos,
+)
 
 
 class _FakeCompletedProcess:
@@ -175,3 +177,81 @@ def test_relaunch_windows_quotes_paths_with_spaces(monkeypatch):
     params = call[3]
     # subprocess.list2cmdline wraps the space-containing path in quotes.
     assert '"C:\\Users\\test\\My Big Folder"' in params
+
+
+def test_elevated_scan_linux_builds_pkexec_command_with_priv_scan(monkeypatch):
+    captured = {}
+
+    def fake_run(args, capture_output=False, text=False, timeout=None):
+        captured["args"] = args
+        captured["timeout"] = timeout
+        return _FakeCompletedProcess(0, stdout='{"ok": true}')
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+
+    ok, output = run_elevated_scan_linux("/home/test/Documents")
+
+    assert ok is True
+    assert output == '{"ok": true}'
+    args = captured["args"]
+    assert args[0] == "pkexec"
+    assert args[1] == sys.executable
+    assert os.path.abspath(sys.argv[0]) in args
+    assert "--priv-scan" in args
+    assert "/home/test/Documents" in args
+    # Must be bounded -- confirmed on a real agent-less machine that
+    # pkexec blocks indefinitely rather than failing fast when no
+    # PolicyKit authentication agent is running, unlike osascript on
+    # macOS (which always has the OS's own auth UI available).
+    assert captured["timeout"] is not None
+
+
+def test_elevated_scan_linux_uses_bare_executable_when_frozen(monkeypatch):
+    captured = {}
+
+    def fake_run(args, capture_output=False, text=False, timeout=None):
+        captured["args"] = args
+        return _FakeCompletedProcess(0, stdout="{}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    run_elevated_scan_linux("/home/test")
+
+    args = captured["args"]
+    assert args.count(sys.executable) == 1
+
+
+def test_elevated_scan_linux_returns_false_when_authorization_is_cancelled(monkeypatch):
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess(127, stderr="Not authorized"),
+    )
+    ok, output = run_elevated_scan_linux("/home/test")
+    assert ok is False
+    assert "not authorized" in output.lower()
+
+
+def test_elevated_scan_linux_returns_false_when_pkexec_is_not_installed(monkeypatch):
+    def fake_run(*a, **k):
+        raise FileNotFoundError("no such file or directory: 'pkexec'")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    ok, output = run_elevated_scan_linux("/home/test")
+    assert ok is False
+    assert "pkexec" in output.lower()
+
+
+def test_elevated_scan_linux_times_out_cleanly_instead_of_hanging_forever(monkeypatch):
+    # Confirmed against a real machine with no PolicyKit authentication
+    # agent registered: pkexec just blocks forever waiting for a prompt
+    # response that can never come. This is the fix for that -- a bounded
+    # subprocess.run(timeout=...) turned into a normal reported failure.
+    def fake_run(args, capture_output=False, text=False, timeout=None):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    ok, output = run_elevated_scan_linux("/home/test")
+    assert ok is False
+    assert "authentication" in output.lower() or "timed out" in output.lower()

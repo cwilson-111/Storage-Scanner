@@ -11,6 +11,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from tkinter import (
     BooleanVar, BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
     filedialog, messagebox, simpledialog, ttk,
@@ -20,11 +21,13 @@ from history import get_app_metadata, set_app_metadata, set_budget
 from storage_scanner import turbo_scan
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.drive_info import is_ntfs_fixed_drive
-from storage_scanner.file_ops import relaunch_elevated_windows, run_elevated_scan_macos
+from storage_scanner.file_ops import (
+    relaunch_elevated_windows, run_elevated_scan_linux, run_elevated_scan_macos,
+)
 from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
-    FILE_MANAGER_NAME, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
+    FILE_MANAGER_NAME, IS_LINUX, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
 )
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
@@ -57,7 +60,7 @@ class MainWindowMixin:
         )
         self.cancel_btn.pack(side=LEFT)
 
-        if (IS_MACOS or IS_WINDOWS) and not IS_ROOT:
+        if (IS_MACOS or IS_WINDOWS or IS_LINUX) and not IS_ROOT:
             self.elevate_btn = ttk.Button(
                 bar_frame, text="🔒 Run as Admin", command=self._request_elevation,
             )
@@ -222,6 +225,29 @@ class MainWindowMixin:
                         drives.append(vol_path)
             return drives
 
+        if IS_LINUX:
+            drives = ["/"]
+            # Removable/external media conventionally show up under one of
+            # these, namespaced by username on a multi-user system --
+            # unlike macOS's single /Volumes, there's no one standard
+            # location, so check every plausible one. os.path.ismount()
+            # filters out an empty placeholder dir with nothing actually
+            # mounted there (udisks2/automount tools create these upfront).
+            username = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+            bases = [b for b in (
+                os.path.join("/media", username) if username else None,
+                os.path.join("/run/media", username) if username else None,
+                "/mnt",
+            ) if b]
+            for base in bases:
+                if not os.path.isdir(base):
+                    continue
+                for name in sorted(os.listdir(base)):
+                    mount_path = os.path.join(base, name)
+                    if os.path.ismount(mount_path):
+                        drives.append(mount_path)
+            return drives
+
         drives = []
         for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
             d = f"{letter}:\\"
@@ -239,34 +265,48 @@ class MainWindowMixin:
     def _request_elevation(self):
         current = self.path_var.get().strip().strip('"')
 
-        if IS_MACOS:
-            # Relaunching the whole GUI as root can't show a window on
-            # macOS (see run_elevated_scan_macos's docstring), so only the
-            # scan itself runs elevated — this window stays open throughout.
+        if IS_MACOS or IS_LINUX:
+            # Relaunching the whole GUI as root can't reliably show a
+            # window on either platform (see run_elevated_scan_macos's
+            # and run_elevated_scan_linux's docstrings for why -- a
+            # different underlying reason on each, same practical
+            # conclusion), so only the scan itself runs elevated — this
+            # window stays open, unprivileged, throughout.
             target = current if os.path.isdir(current) else None
             if not target:
                 messagebox.showerror(
                     "Storage Scanner", "Choose a valid folder to scan first."
                 )
                 return
+            if IS_MACOS:
+                run_scan_fn = run_elevated_scan_macos
+                auth_hint = "You'll be asked for your Mac password."
+                trash_hint = "Deletions still go through Finder's Trash"
+                protection_hint = "macOS still protects some system-integrity files"
+                waiting_suffix = "(enter your Mac password in the prompt)"
+            else:
+                run_scan_fn = run_elevated_scan_linux
+                auth_hint = "You'll be asked to authenticate via your desktop's PolicyKit prompt."
+                trash_hint = "Deletions still go through your desktop Trash"
+                protection_hint = "Some system files may still be protected even from root"
+                waiting_suffix = "(enter your password in the authentication prompt)"
             if not messagebox.askyesno(
                 "Scan with Elevated Permissions",
                 "This re-scans the selected folder with root filesystem "
                 "access so folders your account can't open get counted too, "
                 "instead of under-counting their size.\n\n"
-                "You'll be asked for your Mac password. A few notes:\n"
+                f"{auth_hint} A few notes:\n"
                 "• This window stays open — only the scan itself runs "
                 "elevated, nothing else changes or restarts.\n"
-                "• Deletions still go through Finder's Trash, not raw root "
-                "access, so they stay just as safe as before.\n"
-                "• macOS still protects some system-integrity files even "
-                "from root, so a small number of paths may remain "
-                "unreadable regardless.\n\n"
+                f"• {trash_hint}, not raw root access, so they stay just "
+                "as safe as before.\n"
+                f"• {protection_hint}, so a small number of paths may "
+                "remain unreadable regardless.\n\n"
                 "Continue?",
                 icon="warning",
             ):
                 return
-            self._start_elevated_scan_macos(target)
+            self._start_elevated_scan_headless(target, run_scan_fn, waiting_suffix)
             return
 
         if not messagebox.askyesno(
@@ -362,6 +402,11 @@ class MainWindowMixin:
         self.tree.delete(*self.tree.get_children())
         self.node_by_iid.clear()
         self.root_node = None
+        self._live_root_node = None
+        self._live_root_iid = None
+        self._live_total_bytes = 0
+        self._live_expanded_iids = set()
+        self._last_live_refresh = 0.0
 
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
@@ -385,7 +430,13 @@ class MainWindowMixin:
             logger.exception("Scan of %r failed", target)
             self.progress_q.put(("error", str(exc)))
 
-    def _start_elevated_scan_macos(self, target):
+    def _start_elevated_scan_headless(self, target, run_scan_fn, waiting_suffix):
+        """Shared by macOS and Linux: both only ever run the scan itself
+        elevated (via `run_scan_fn`, either run_elevated_scan_macos or
+        run_elevated_scan_linux -- same (ok, json_text_or_error) return
+        contract), never the whole GUI -- this window stays open and
+        unprivileged throughout. See _request_elevation's call site for
+        why a full relaunch-as-root isn't used on either platform."""
         if self.scan_thread and self.scan_thread.is_alive():
             messagebox.showerror("Storage Scanner", "A scan is already running.")
             return
@@ -394,25 +445,27 @@ class MainWindowMixin:
         self.tree.delete(*self.tree.get_children())
         self.node_by_iid.clear()
         self.root_node = None
+        self._live_root_node = None
+        self._live_root_iid = None
+        self._live_total_bytes = 0
+        self._live_expanded_iids = set()
+        self._last_live_refresh = 0.0
 
         self.scan_btn.config(state="disabled")
         self.elevate_btn.config(state="disabled")
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
         self._start_indeterminate_progress()
-        self.status_var.set(
-            f"Requesting elevated access for {target} … "
-            "(enter your Mac password in the prompt)"
-        )
+        self.status_var.set(f"Requesting elevated access for {target} … {waiting_suffix}")
 
         self.scan_thread = threading.Thread(
-            target=self._elevated_scan_worker_macos, args=(target,), daemon=True
+            target=self._elevated_scan_worker_headless, args=(target, run_scan_fn), daemon=True
         )
         self.scan_thread.start()
         self.root.after(100, self._poll_progress)
 
-    def _elevated_scan_worker_macos(self, target):
-        ok, output = run_elevated_scan_macos(target)
+    def _elevated_scan_worker_headless(self, target, run_scan_fn):
+        ok, output = run_scan_fn(target)
         if not ok:
             self.progress_q.put(("error", output))
             return
@@ -431,6 +484,10 @@ class MainWindowMixin:
                 kind, payload = self.progress_q.get_nowait()
                 if kind == "progress":
                     self.status_var.set(f"Scanning … {payload:,} files counted")
+                elif kind == "root":
+                    self._start_live_tree(payload)
+                elif kind == "progress_bytes":
+                    self._live_total_bytes = payload
                 elif kind == "done":
                     node, report = payload
                     self._finish_scan(node, report)
@@ -440,6 +497,7 @@ class MainWindowMixin:
                     return
         except queue.Empty:
             pass
+        self._maybe_refresh_live_tree()
         self.root.after(100, self._poll_progress)
     
     # -- History helper functions ------------------------------------------ #
@@ -453,6 +511,14 @@ class MainWindowMixin:
         if self.cancel_event.is_set():
             self.status_var.set("Scan cancelled.")
             return
+
+        # Whatever the live-scan preview inserted (see _start_live_tree) is
+        # purely provisional -- discard it and rebuild from scratch here,
+        # from `node`'s own final, authoritative, rolled-up numbers, rather
+        # than try to reconcile provisional rows in place.
+        self.tree.delete(*self.tree.get_children())
+        self.node_by_iid.clear()
+        self._live_root_node = None
 
         self.root_node = node
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
@@ -492,6 +558,70 @@ class MainWindowMixin:
             self.elevate_btn.config(state="normal")
         self.status_var.set("Scan failed.")
         messagebox.showerror("Storage Scanner", f"Scan failed:\n{msg}")
+
+    # -- Live scan preview (Compatible engine only) ------------------------- #
+    #
+    # storage_scanner.scanner.scan() builds its Node tree in place, in a
+    # background thread, as it walks -- node.children already grows live;
+    # the only thing missing was the UI ever looking at it before "done".
+    # Turbo Scan has no equivalent tree to preview (MFT records come back
+    # in arbitrary order, not directory-walk order, so nothing resembling
+    # a folder tree exists until the whole volume has been parsed) -- it
+    # simply never posts a "root" message, so none of this ever activates
+    # for a Turbo Scan. Everything inserted here is purely provisional:
+    # _finish_scan always discards it and rebuilds from the final,
+    # authoritative rolled-up tree, so a wrong/stale number here can never
+    # end up on screen once the scan completes.
+    _LIVE_REFRESH_INTERVAL_SECONDS = 0.5
+
+    def _start_live_tree(self, root_node):
+        """Handle a ("root", node) progress message: insert the scan
+        target's own row immediately, open, so newly-discovered top-level
+        children start appearing as soon as the first refresh tick finds
+        them."""
+        self._live_root_node = root_node
+        self._live_total_bytes = 0
+        self._live_expanded_iids = set()
+        self._live_root_iid = self._insert_node("", root_node, parent_size=1, live=True)
+        self.tree.item(self._live_root_iid, open=True)
+
+    def _maybe_refresh_live_tree(self):
+        if self._live_root_node is None:
+            return
+        now = time.monotonic()
+        if now - self._last_live_refresh < self._LIVE_REFRESH_INTERVAL_SECONDS:
+            return
+        self._last_live_refresh = now
+        self._refresh_live_tree()
+
+    def _refresh_live_tree(self):
+        """Update the running byte total shown on the root row, and pull
+        in any newly-discovered children under it and under every row the
+        user has manually expanded (self._live_expanded_iids) -- never
+        recurses into rows nobody has looked at, so cost stays bounded by
+        how much of the tree is actually on screen, not by how much of
+        the disk has been scanned so far."""
+        self.tree.set(self._live_root_iid, "size", human_size(self._live_total_bytes))
+        for parent_iid in (self._live_root_iid, *self._live_expanded_iids):
+            node = self.node_by_iid.get(parent_iid)
+            if node is not None:
+                self._sync_live_children(parent_iid, node)
+
+    def _sync_live_children(self, parent_iid, node):
+        existing_names = {
+            self.node_by_iid[iid].name
+            for iid in self.tree.get_children(parent_iid)
+            if iid in self.node_by_iid
+        }
+        # node.children is still being appended to by a background worker
+        # thread -- safe to iterate mid-append under the GIL (list.append
+        # is atomic; at worst this snapshot misses the very latest arrival,
+        # picked up on the next throttled tick instead).
+        for child in list(node.children):
+            if child.name in existing_names:
+                continue
+            index = len(self.tree.get_children(parent_iid))
+            self._insert_node(parent_iid, child, parent_size=1, index=index, live=True)
 
     def _show_turbo_fallback_banner(self, reason):
         """Dismissible banner explaining a scan silently used the
@@ -553,10 +683,19 @@ class MainWindowMixin:
             self.tree.tag_configure(name, foreground=heat_color(bucket / 24))
             self._heat_tags.add(name)
         return name
-    def _insert_node(self, parent_iid, node, parent_size, index=0):
-        fraction = (node.size / parent_size) if parent_size else 0
-        percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
-        items = f"{node.file_count:,}" if node.is_dir else ""
+    def _insert_node(self, parent_iid, node, parent_size, index=0, live=False):
+        # `live=True` means `node` came from a scan still in progress: a
+        # directory's size/alloc_size/file_count are only meaningful after
+        # scanner._rollup() runs once, at the very end (see scan()'s own
+        # docstring) -- showing them, or a percent-of-parent computed from
+        # them, before then would just be a misleading, usually-wrong
+        # placeholder. A *file*'s own size is real and known immediately,
+        # so it's shown as-is; only the percent/heat-color columns (which
+        # need a trustworthy parent total) stay suppressed for every live
+        # row, file or directory alike.
+        fraction = 0 if live else ((node.size / parent_size) if parent_size else 0)
+        percent = "—" if live else f"{bar(fraction)} {fraction * 100:5.1f}%"
+        items = "" if live else (f"{node.file_count:,}" if node.is_dir else "")
         if node.error:
             tags = ["error"]
         elif node.is_cloud_placeholder:
@@ -580,17 +719,24 @@ class MainWindowMixin:
         else:
             icon = "📄"
 
-        # A cloud placeholder's `size` is its full logical size (what it'll
-        # be once downloaded); `alloc_size` is what's actually using local
-        # disk right now — worth showing side by side rather than picking one.
-        alloc_text = human_size(node.alloc_size)
-        if node.is_cloud_placeholder:
-            alloc_text += " (online-only)"
+        if live and node.is_dir:
+            # Not sized yet -- this directory's own scan may not even have
+            # started (see the docstring note above).
+            size_text = alloc_text = "…"
+        else:
+            # A cloud placeholder's `size` is its full logical size (what
+            # it'll be once downloaded); `alloc_size` is what's actually
+            # using local disk right now — worth showing side by side
+            # rather than picking one.
+            size_text = human_size(node.size)
+            alloc_text = human_size(node.alloc_size)
+            if node.is_cloud_placeholder:
+                alloc_text += " (online-only)"
 
         label = f"{icon} {node.name}" + ("\\" if node.is_dir and not node.name.endswith("\\") else "")
         iid = self.tree.insert(
             parent_iid, END, text=label,
-            values=(human_size(node.size), alloc_text, percent, items),
+            values=(size_text, alloc_text, percent, items),
             tags=tuple(tags),
         )
         self.node_by_iid[iid] = node
@@ -599,7 +745,7 @@ class MainWindowMixin:
         if node.is_dir and node.children:
             self.tree.insert(iid, END, text="…(loading)", tags=("placeholder",))
         return iid
-    def _populate_children(self, parent_iid, node):
+    def _populate_children(self, parent_iid, node, live=False):
         # Remove placeholder if present.
         kids = self.tree.get_children(parent_iid)
         if len(kids) == 1 and self.tree.item(kids[0], "text") == "…(loading)":
@@ -611,7 +757,7 @@ class MainWindowMixin:
                          reverse=self._sort_reverse)
         for index, child in enumerate(ordered):
             self._insert_node(parent_iid, child, parent_size=node.size or 1,
-                              index=index)
+                              index=index, live=live)
     def _node_sort_key(self, node):
         if self._sort_key == "name":
             return node.name.lower()
@@ -621,8 +767,12 @@ class MainWindowMixin:
     def _on_open(self, _event):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
-        if node and node.is_dir:
-            self._populate_children(iid, node)
+        if not node or not node.is_dir:
+            return
+        live = self._live_root_node is not None
+        self._populate_children(iid, node, live=live)
+        if live:
+            self._live_expanded_iids.add(iid)
     def _on_double_click(self, _event):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
@@ -774,6 +924,13 @@ class MainWindowMixin:
                     subprocess.run(["open", path])
                 else:
                     subprocess.run(["open", "-R", path])
+            elif IS_LINUX:
+                # No portable "select this one file" flag across file
+                # managers (Nautilus/Dolphin/Nemo/etc. each have their
+                # own, if any, and xdg-open has none) -- opens the file's
+                # own containing folder instead, same degraded-but-
+                # functional fallback for a file as for a directory.
+                subprocess.run(["xdg-open", path if is_dir else os.path.dirname(path)])
             elif is_dir:
                 os.startfile(path)  # type: ignore[attr-defined]
             else:

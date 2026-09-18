@@ -54,8 +54,11 @@ def _resident_attr(attr_type, value, attribute_id):
     return bytes(body)
 
 
-def _std_info_value():
-    return struct.pack("<QQQQI", 0, 0, 0, 0, 0)
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _std_info_value(file_attributes=0):
+    return struct.pack("<QQQQI", 0, 0, 0, 0, file_attributes)
 
 
 def _file_name_value(parent_frn, name):
@@ -146,14 +149,18 @@ def _stamp_fixups(record):
     return bytes(record)
 
 
-def _build_record(record_number, *, is_directory, sequence_number, file_name=None, file_names=None, data=None):
+def _build_record(
+    record_number, *, is_directory, sequence_number, file_name=None,
+    file_names=None, data=None, is_reparse_point=False,
+):
     """`file_name` is a convenience for the common single-name case;
     `file_names` (a list) supports a genuinely hard-linked record with
     more than one $FILE_NAME attribute, one per parent directory."""
     if file_names is None:
         file_names = [file_name]
+    file_attributes = _FILE_ATTRIBUTE_REPARSE_POINT if is_reparse_point else 0
     attrs = bytearray()
-    attrs += _resident_attr(_ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
+    attrs += _resident_attr(_ATTR_STANDARD_INFORMATION, _std_info_value(file_attributes), 0)
     for i, name_value in enumerate(file_names):
         attrs += _resident_attr(_ATTR_FILE_NAME, name_value, 1 + i)
     if data is not None:
@@ -241,6 +248,38 @@ def _build_fake_volume_with_cross_subtree_hardlink():
             _file_name_value(sub_frn, "in_sub.bin"),
         ],
         data=b"hello world",
+    ))
+
+    mft_bytes = b"".join(records)
+    mft_bytes = mft_bytes.ljust(length_clusters * _RECORDS_PER_CLUSTER * _RECORD_SIZE, b"\x00")
+    volume = (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
+    return volume
+
+
+def _build_fake_volume_with_reparse_point_scan_target():
+    """Record 0: real $MFT record (one extent). 1-4: unused. 5: root.
+    6: "Link" -- a directory *and* a reparse point (a junction/symlink),
+    directly under root. 7: "inside.txt", a real file under Link. Scanning
+    "C:\\Link" directly must still reveal inside.txt, matching
+    scanner.scan()'s own root-vs-child asymmetry (its root handling just
+    uses os.path.isdir(), which follows a reparse point transparently --
+    only its per-*child* walk excludes them)."""
+    root_frn = _pack_frn(1, 5)
+    link_frn = _pack_frn(1, 6)
+
+    total_records = 8  # 0..7
+    length_clusters = -(-total_records // _RECORDS_PER_CLUSTER)  # ceil division
+    record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
+
+    records = [record0] + [_unused_record(n) for n in range(1, 5)]
+    records.append(_build_record(5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")))
+    records.append(_build_record(
+        6, is_directory=True, sequence_number=1, is_reparse_point=True,
+        file_name=_file_name_value(root_frn, "Link"),
+    ))
+    records.append(_build_record(
+        7, is_directory=False, sequence_number=1,
+        file_name=_file_name_value(link_frn, "inside.txt"), data=b"hello",
     ))
 
     mft_bytes = b"".join(records)
@@ -430,6 +469,37 @@ def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_f
     assert in_sub.hardlink_dup is False
     assert in_sub.size == len(b"hello world")
     assert node.size == len(b"hello world")
+    assert node.file_count == 1
+
+
+def test_scanning_a_reparse_point_directly_still_reveals_its_contents(monkeypatch, tmp_path):
+    # scanner.py's Compatible engine follows a reparse point transparently
+    # when it's the scan *root* (os.path.isdir() doesn't care), but excludes
+    # it when it's a *child* encountered during traversal. Before this fix,
+    # Turbo Scan applied the child rule everywhere, so scanning a junction/
+    # symlinked folder directly would come back empty.
+    _init_cache_db(tmp_path, monkeypatch)
+    volume_bytes = _build_fake_volume_with_reparse_point_scan_target()
+    kernel32 = _FakeKernel32(volume_bytes)
+    monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
+    monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
+
+    progress_q, cancel_event = queue.Queue(), threading.Event()
+    node, report = turbo_scan.scan_with_best_engine(
+        "C:\\Link", progress_q, cancel_event, turbo_enabled=True,
+    )
+
+    assert report.engine == turbo_scan.ENGINE_TURBO
+    assert report.fallback_reason is None
+    assert node.name == "Link"
+    assert node.is_dir
+    assert not node.is_link  # matches scanner.py's root Node: never flagged as a link
+
+    child_names = {c.name for c in node.children}
+    assert child_names == {"inside.txt"}
+    assert node.size == len(b"hello")
     assert node.file_count == 1
 
 

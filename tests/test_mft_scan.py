@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.mft_parser import ParsedRecord, FileNameAttr, _pack_frn
-from storage_scanner.mft_scan import build_tree, finalize_subtree
+from storage_scanner.mft_scan import build_tree, finalize_subtree, reroot_if_reparse_point
 
 ROOT_FRN = _pack_frn(1, 5)
 
@@ -296,3 +296,93 @@ def test_root_record_that_is_not_a_directory_returns_none():
     fake_root = _record(5, is_directory=False, names=[])
     tree, _orphan_count, _frn_by_node_id = build_tree([fake_root], root_path="C:\\Data")
     assert tree is None
+
+
+# -- reroot_if_reparse_point --------------------------------------------- #
+# A requested scan target that's itself a reparse point (junction/symlink)
+# must still be followed, matching scanner.scan()'s own root-vs-child
+# asymmetry (its root handling uses os.path.isdir(), which transparently
+# follows a reparse point; only its per-child walk excludes them).
+
+def test_reroot_follows_the_target_but_leaves_a_nested_reparse_point_alone():
+    link_dir = _record(
+        40, is_directory=True, is_reparse_point=True, names=[_name(ROOT_FRN, "Link")],
+    )
+    inside = _record(41, names=[_name(_frn(40), "inside.txt")], logical_size=10)
+    # A reparse point nested *inside* the one being followed -- this one
+    # must still be excluded; only the single outermost node passed to
+    # reroot_if_reparse_point ever gets the root treatment.
+    nested_link = _record(
+        42, is_directory=True, is_reparse_point=True, names=[_name(_frn(40), "NestedLink")],
+    )
+    deep = _record(43, names=[_name(_frn(42), "deep.txt")], logical_size=20)
+
+    records = [_root(), link_dir, inside, nested_link, deep]
+    tree, _orphan_count, frn_by_node_id = build_tree(records, root_path="C:\\Data")
+
+    link_node = _by_name(tree)["Link"]
+    assert not link_node.is_dir
+    assert link_node.is_link
+    assert link_node.children == []
+
+    rerooted = reroot_if_reparse_point(link_node, "C:\\Data\\Link", records, frn_by_node_id)
+
+    assert rerooted is not link_node  # a fresh node, not the original leaf
+    assert rerooted.is_dir
+    assert not rerooted.is_link  # matches scanner.py's root Node: never flagged as a link
+    assert rerooted.path == "C:\\Data\\Link"
+
+    children = _by_name(rerooted)
+    assert set(children) == {"inside.txt", "NestedLink"}
+    assert children["inside.txt"].size == 10
+
+    nested = children["NestedLink"]
+    assert not nested.is_dir      # still correctly excluded
+    assert nested.is_link
+    assert nested.children == []  # "deep.txt" never attached
+
+    # finalize_subtree still works correctly on the rerooted result.
+    finalize_subtree(rerooted, frn_by_node_id)
+    assert rerooted.size == 10  # NestedLink, a leaf like any other reparse
+                                 # point, contributes 0 (matches _make_node's
+                                 # `file_count = 0 if is_dir else 1`, but its
+                                 # size is its own logical_size, 0 by default
+                                 # here since the fixture never set one)
+    assert rerooted.file_count == 2  # inside.txt + NestedLink (a leaf still counts)
+
+
+def test_reroot_is_a_noop_for_a_reparse_point_that_is_actually_a_file():
+    # A symlink to a *file*, not a directory -- scanner.py's os.path.isdir()
+    # would be False for this too, so there's nothing to follow/reveal.
+    link_file = _record(
+        50, is_directory=False, is_reparse_point=True, names=[_name(ROOT_FRN, "LinkToFile")],
+    )
+    records = [_root(), link_file]
+    tree, _orphan_count, frn_by_node_id = build_tree(records, root_path="C:\\Data")
+
+    link_node = _by_name(tree)["LinkToFile"]
+    result = reroot_if_reparse_point(link_node, "C:\\Data\\LinkToFile", records, frn_by_node_id)
+
+    assert result is link_node
+
+
+def test_reroot_is_a_noop_for_an_ordinary_directory():
+    folder = _record(60, is_directory=True, names=[_name(ROOT_FRN, "Normal")])
+    records = [_root(), folder]
+    tree, _orphan_count, frn_by_node_id = build_tree(records, root_path="C:\\Data")
+
+    node = _by_name(tree)["Normal"]
+    result = reroot_if_reparse_point(node, "C:\\Data\\Normal", records, frn_by_node_id)
+
+    assert result is node
+
+
+def test_reroot_is_a_noop_for_an_ordinary_file():
+    file_node_record = _record(70, names=[_name(ROOT_FRN, "plain.txt")], logical_size=5)
+    records = [_root(), file_node_record]
+    tree, _orphan_count, frn_by_node_id = build_tree(records, root_path="C:\\Data")
+
+    node = _by_name(tree)["plain.txt"]
+    result = reroot_if_reparse_point(node, "C:\\Data\\plain.txt", records, frn_by_node_id)
+
+    assert result is node

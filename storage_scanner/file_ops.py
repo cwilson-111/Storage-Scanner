@@ -4,13 +4,16 @@ import ctypes
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 from ctypes import wintypes
+from datetime import datetime
+from urllib.parse import quote
 
 from storage_scanner.drive_info import get_volume_root
-from storage_scanner.platform_support import IS_MACOS
+from storage_scanner.platform_support import IS_LINUX, IS_MACOS
 
 
 _FO_DELETE = 3
@@ -94,6 +97,81 @@ def _recycle_macos(path):
     return result.returncode == 0
 
 
+def _xdg_trash_home():
+    """The user's own home-volume XDG trash directory: ~/.local/share/Trash
+    (or $XDG_DATA_HOME/Trash). Only correct for a path on the SAME
+    filesystem as $HOME -- the XDG Trash spec calls for a per-mountpoint
+    $topdir/.Trash-$uid instead for anything else (a removable drive, a
+    separate /home mount, etc.), not implemented here. A known, stated
+    scope limit rather than something silently gotten wrong -- matching
+    how this project already documents similar single-case coverage
+    elsewhere (e.g. mft_volume.py's single-contiguous-$MFT-extent note)."""
+    xdg_data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(xdg_data_home, "Trash")
+
+
+def _recycle_linux_manual(path):
+    """Move `path` into ~/.local/share/Trash per the XDG Trash spec,
+    without depending on any trash-cli/gio tool being installed --
+    _recycle_linux's fallback for a minimal/headless install that has
+    neither. Only correct for paths on the same filesystem as $HOME (see
+    _xdg_trash_home)."""
+    trash_home = _xdg_trash_home()
+    files_dir = os.path.join(trash_home, "files")
+    info_dir = os.path.join(trash_home, "info")
+    try:
+        os.makedirs(files_dir, exist_ok=True)
+        os.makedirs(info_dir, exist_ok=True)
+
+        abs_path = os.path.abspath(path)
+        name = os.path.basename(abs_path.rstrip(os.sep)) or abs_path
+        # The spec requires a unique name within the trash; a plain
+        # collision counter (matching Explorer's/Finder's own "file (2)"
+        # convention) is enough -- two concurrent deletes racing for the
+        # exact same free name is astronomically unlikely for a
+        # single-user desktop tool.
+        dest_name, suffix = name, 1
+        while (os.path.exists(os.path.join(files_dir, dest_name))
+               or os.path.exists(os.path.join(info_dir, dest_name + ".trashinfo"))):
+            suffix += 1
+            dest_name = f"{name}.{suffix}"
+
+        info_path = os.path.join(info_dir, dest_name + ".trashinfo")
+        with open(info_path, "w", encoding="utf-8") as f:
+            f.write("[Trash Info]\n")
+            f.write(f"Path={quote(abs_path, safe='/')}\n")
+            f.write(f"DeletionDate={datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}\n")
+
+        shutil.move(abs_path, os.path.join(files_dir, dest_name))
+        return True
+    except OSError:
+        return False
+
+
+def _recycle_linux(path):
+    """Move a file or folder to the Linux desktop Trash (recoverable).
+
+    Prefers `gio trash` (part of glib2, present on most GNOME/GTK-based
+    desktops -- Ubuntu, Fedora Workstation, etc.): it correctly defers to
+    whatever trash implementation the user's actual desktop environment
+    uses, including the separate per-mountpoint trash a removable/non-home
+    filesystem needs. Falls back to a manual XDG Trash-spec move (see
+    _recycle_linux_manual) if `gio` isn't installed or fails, so deletion
+    still stays recoverable even on a minimal/headless install with no
+    desktop trash tool at all. Never depends on a third-party package (no
+    send2trash) per this project's zero-runtime-dependency policy.
+    """
+    try:
+        result = subprocess.run(
+            ["gio", "trash", os.path.abspath(path)], capture_output=True,
+        )
+        if result.returncode == 0:
+            return True
+    except OSError:
+        pass  # gio not installed -- fall through to the manual implementation
+    return _recycle_linux_manual(path)
+
+
 def recycle(path):
     """Send a file or folder to the platform Recycle Bin / Trash (recoverable).
 
@@ -101,6 +179,8 @@ def recycle(path):
     """
     if IS_MACOS:
         return _recycle_macos(path)
+    if IS_LINUX:
+        return _recycle_linux(path)
     return _recycle_windows(path)
 
 
@@ -113,6 +193,16 @@ def open_trash():
     try:
         if IS_MACOS:
             subprocess.run(["open", os.path.expanduser("~/.Trash")], check=True)
+        elif IS_LINUX:
+            try:
+                # "trash:///" is the GVFS URI most file managers (Nautilus,
+                # Nemo, ...) render as the proper, familiar Trash view --
+                # nicer than the raw ~/.local/share/Trash/files folder,
+                # which mixes deleted items in with the spec's own
+                # .trashinfo metadata files.
+                subprocess.run(["gio", "open", "trash:///"], check=True)
+            except (OSError, subprocess.CalledProcessError):
+                subprocess.run(["xdg-open", _xdg_trash_home()], check=True)
         else:
             subprocess.run(["explorer.exe", "shell:RecycleBinFolder"], check=True)
         return True
@@ -154,6 +244,67 @@ def run_elevated_scan_macos(path):
     result = subprocess.run(
         ["osascript", "-e", apple_script], capture_output=True, text=True
     )
+    if result.returncode != 0:
+        return False, (result.stderr or "Authorization was cancelled or failed.").strip()
+    return True, result.stdout
+
+
+def run_elevated_scan_linux(path):
+    """Scan `path` with root filesystem access via a PolicyKit (pkexec)
+    prompt.
+
+    Same headless-only shape as run_elevated_scan_macos, for a related but
+    distinct reason: unlike macOS, `pkexec` genuinely *can* show a root-
+    owned window on a traditional X11 session (several real Linux disk
+    tools launch themselves this way) -- but Wayland compositors
+    generally refuse a root process's connection to the user's session
+    outright, as a hard security boundary, and there's no reliable way
+    to tell from here which one a given user is actually running. A
+    headless scan (`--priv-scan`, exactly the same entry point macOS
+    already uses -- it's pure storage_scanner.scanner.scan() plus a JSON
+    dump, nothing macOS-specific about it) sidesteps the question
+    entirely: it never opens a window, so it works the same under X11,
+    Wayland, or even a display-less SSH session with polkit configured.
+    The still-running, still-visible GUI stays unprivileged throughout.
+
+    pkexec is the de-facto standard for "ordinary GUI app needs root" on
+    Linux -- ships by default with GNOME/KDE and most desktop distros,
+    unlike bare `sudo`, which has no GUI password prompt of its own and
+    would just hang waiting on a TTY that doesn't exist here. It needs a
+    running polkit authentication agent to actually display that prompt.
+
+    Confirmed on a real (agent-less) machine, not just assumed: contrary
+    to what an earlier version of this docstring claimed, pkexec does
+    NOT fail fast when no authentication agent is registered -- it just
+    blocks indefinitely, waiting for a prompt response that can never
+    arrive. `timeout=` below turns that into a bounded, reported failure
+    instead of hanging this whole thread (and by extension the "Cancel"
+    button, since nothing here currently threads a cancel_event through
+    to pkexec) forever.
+
+    Returns (True, json_text) on success, (False, error_message) if
+    authorization was cancelled/failed, pkexec itself isn't installed,
+    no authentication agent responded within the timeout, or the scan
+    itself errored.
+    """
+    if getattr(sys, "frozen", False):
+        args = ["pkexec", sys.executable, "--priv-scan", path]
+    else:
+        args = ["pkexec", sys.executable, os.path.abspath(sys.argv[0]), "--priv-scan", path]
+
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    except OSError as exc:
+        return False, f"Could not run pkexec (is PolicyKit installed?): {exc}"
+    except subprocess.TimeoutExpired:
+        return False, (
+            "Timed out waiting for authentication. This usually means no "
+            "PolicyKit authentication agent is running for this desktop "
+            "session (common on minimal window managers/headless setups) "
+            "-- install one (e.g. polkit-gnome, lxqt-policykit, or your "
+            "desktop's own) and try again."
+        )
+
     if result.returncode != 0:
         return False, (result.stderr or "Authorization was cancelled or failed.").strip()
     return True, result.stdout
