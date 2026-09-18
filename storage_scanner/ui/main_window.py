@@ -554,6 +554,8 @@ class MainWindowMixin:
                 kind, payload = self.progress_q.get_nowait()
                 if kind == "progress":
                     self.status_var.set(f"Scanning … {payload:,} files counted")
+                elif kind == "status":
+                    self.status_var.set(payload)
                 elif kind == "root":
                     self._start_live_tree(payload)
                 elif kind == "progress_bytes":
@@ -591,9 +593,18 @@ class MainWindowMixin:
         self._live_root_node = None
 
         self.root_node = node
+        logger.debug(
+            "_finish_scan: node %r has %d direct children, size=%s, file_count=%s, engine=%s",
+            node.path, len(node.children), node.size, node.file_count,
+            report.engine if report is not None else "compatible",
+        )
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
         self.tree.item(root_iid, open=True)
         self._populate_children(root_iid, node)
+        logger.debug(
+            "_finish_scan: after populate, tree has %d top-level row(s), root row has %d child row(s)",
+            len(self.tree.get_children("")), len(self.tree.get_children(root_iid)),
+        )
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 

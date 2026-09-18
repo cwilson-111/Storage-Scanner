@@ -28,6 +28,96 @@ USN journal noise on the same volume — not a correctness issue), tracked
 in its own section near the end of this doc ("Cache + USN Journal
 incremental refresh").
 
+**New bug found 2026-09-17 via a real user report (not this project's own
+validation) — FIXED: the elevated-helper path posted zero progress for its
+entire duration, indistinguishable from a hang.** Every prior real-hardware
+validation of `run_elevated_scan_windows`/`mft_scan_cli.py --mft-scan`
+(including the Phase 4 checklist item below marked "DONE, CONFIRMED
+SHARED") invoked the CLI directly from an already-elevated terminal,
+bypassing the actual `ShellExecuteExW`("runas")/UAC-prompt GUI flow
+entirely — so the *common* path (any user who hasn't already launched the
+whole app as admin) had never actually been exercised end-to-end. A user
+reported Turbo Scan "hangs" with no visible progress and no way to reach
+Tools to turn it off; tracing the code confirmed `mft_scan_cli.run_mft_scan`
+called `get_records_using_cache(..., progress_q=None, ...)` — the elevated
+helper is a genuinely separate OS process, so it was never given any way to
+report back to the GUI's `progress_q` at all. For a cold scan (15s-65s+,
+per the real numbers above), that's the entire scan duration with a static
+status string and a generic spinning progress bar — not an actual deadlock,
+but functionally indistinguishable from one. (Tools staying disabled during
+this is separate, pre-existing, by-design behavior — same for the
+Compatible engine — not a new bug; the real, working escape hatch is
+Cancel, which was already correctly wired to the elevated helper's wait
+loop.)
+
+Fixed with a second temp file (`--progress-file`, alongside the existing
+`--output` result file): `mft_scan_cli._ProgressFileWriter` duck-types
+`queue.Queue.put()` just enough for `get_records_using_cache`'s existing
+`progress_q.put(("progress", count))` calls to work unmodified, atomically
+overwriting the file with just the latest count (temp-file-plus-
+`os.replace`, so a concurrent reader never sees a half-written value).
+`file_ops.run_elevated_scan_windows` polls that file on the same
+`WaitForSingleObject` cadence it already uses to check `cancel_event`, and
+relays genuinely-new values into the real `progress_q` — which
+`main_window._poll_progress` already handles generically, so no UI-side
+change was needed; the existing "Scanning … N files counted" status text
+just starts updating live. `progress_q` is threaded through
+`turbo_scan._attempt_turbo_scan` → `_run_turbo_via_elevated_helper` →
+`run_elevated_scan_windows`, mirroring how `_run_turbo_in_process` already
+had direct access to it.
+
+Unit-tested (mutation-verified): `tests/test_mft_scan_cli.py` (the writer
+itself, and that `run_mft_scan` wires it into `get_records_using_cache`
+only when `--progress-file` is given), `tests/test_run_elevated_scan_windows.py`
+(a full simulated poll loop confirming genuinely-new values get relayed
+and duplicates get deduped).
+
+**Follow-up found immediately after, on a real elevated GUI run (whole
+app launched as admin, title bar "— Elevated (Admin)") — FIXED: this
+above fix didn't cover it, because it's a different code path.** The user
+re-tested and still saw zero progress (status bar stuck on the initial
+"Scanning C:\\ …" the whole time). Checked the real
+`%LOCALAPPDATA%\NeuralStorageMatrix\logs\storage_scanner.log` directly
+rather than guess: the scan was a cached **incremental refresh**
+(confirmed by `turbo_cache: applied incremental refresh` right before it
+in the log), which explains the earlier "2TB in 18 seconds" report too —
+that's incremental-refresh speed, not a cold scan. Root cause:
+`_try_incremental_refresh()` never took a `progress_q` parameter at all
+and posted nothing, ever, completely independent of the elevated-helper
+vs. in-process split the first fix addressed — an already-elevated
+in-process Turbo Scan going through this path had exactly the same
+silent-for-the-whole-duration problem, because there was simply nothing
+posting anything, not a relay problem.
+
+Fixed by threading `progress_q` into `_try_incremental_refresh()` and
+posting on two phases, both of which can take real, visible time even
+when the underlying change set is small: `("status", "...applying N
+change(s)...")` before reparsing the USN journal's dirty records (with
+`("progress", i)` posted every 200 of them, matching
+`_full_scan_and_cache`'s existing per-5000 convention at a finer interval
+since a dirty set is typically far smaller), then `("status", "...loading
+cached records...")` right before the final `turbo_cache.load_all_records()`
+call — per this doc's own "Known follow-up" section above, deserializing
+the *entire* cached volume back into objects is itself a real, measured
+multi-second cost regardless of how few records actually changed, and
+previously that phase was silent too. Added a new `"status"` progress-
+message kind (`main_window._poll_progress` just sets the status bar text
+verbatim) since this is a free-text update, not a count.
+
+One known gap, not yet worth the added complexity to close: the new
+`"status"` messages only reach the in-process path.
+`mft_scan_cli._ProgressFileWriter` (the elevated-helper relay from the
+first fix) only relays `"progress"` counts across the process boundary,
+not free text, so an elevated-*helper* (not already-elevated whole-app)
+Turbo Scan going through an incremental refresh gets the record-count
+progress but not the descriptive status text. Both fixes are
+mutation-verified unit tests only — **still not reconfirmed against a
+live elevated GUI run** (needs a human clicking through, same limitation
+as above) — next real-hardware check should confirm the status bar
+actually updates through both phases during a real cached incremental
+Turbo Scan, launched both as an already-elevated whole app and via the
+UAC-prompted elevated helper.
+
 ### Bugs found and fixed so far (all confirmed via `compare_scan_engines.py`
 against the real machine, not just unit tests)
 
