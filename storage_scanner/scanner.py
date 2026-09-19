@@ -94,7 +94,15 @@ def _windows_alloc_size(path, fallback):
     """
     try:
         low = ctypes.windll.kernel32.GetCompressedFileSizeW(path, None)
-        if low == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
+        # ctypes defaults an un-annotated windll call to a signed 32-bit
+        # return type, so the real Win32 failure sentinel 0xFFFFFFFF comes
+        # back here as -1, not as 0xFFFFFFFF -- comparing `low` directly
+        # against _INVALID_FILE_SIZE silently never matches on a real
+        # failure (this fallback becomes unreachable, and a failed call's
+        # -1 gets rounded against the cluster size below into a bogus 0
+        # instead of falling back to the logical size). Masking to 32 bits
+        # makes the comparison correct whichever way `low` comes back.
+        if (low & 0xFFFFFFFF) == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
             return fallback
         # High 32 bits aren't retrievable without a second out-param this
         # call doesn't use; files large enough for that to matter are rare
@@ -228,7 +236,18 @@ def scan(path, progress_q, cancel_event, workers=None):
             if cancel_event.is_set():
                 return
             try:
-                st_info = entry.stat(follow_symlinks=False)
+                if _IS_WINDOWS:
+                    # entry.stat() on Windows never populates real
+                    # st_ino/st_dev/st_nlink (always 0/0/1) -- it's built
+                    # from the cheap WIN32_FIND_DATA the directory listing
+                    # itself already returned, which carries no file-index
+                    # or link-count info at all. A real os.stat() call is
+                    # the only way to get accurate hard-link identity --
+                    # without it, hard-link dedup below silently never
+                    # triggers on Windows (every ino comes back 0).
+                    st_info = os.stat(entry.path, follow_symlinks=False)
+                else:
+                    st_info = entry.stat(follow_symlinks=False)
             except OSError:
                 st_info = None
 
