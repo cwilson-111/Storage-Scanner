@@ -9,6 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner import scanner
 from storage_scanner.scanner import scan
 
 
@@ -36,6 +37,39 @@ def _by_name(node):
 
 
 def test_hardlinks_are_not_double_counted(tmp_path):
+    original = tmp_path / "original.bin"
+    original.write_bytes(b"x" * 1000)
+    linked = tmp_path / "linked.bin"
+    os.link(original, linked)
+
+    root = _run_scan(tmp_path)
+
+    assert root.file_count == 2
+    assert root.size == 1000
+
+    children = _by_name(root)
+    dup_flags = {children["original.bin"].hardlink_dup, children["linked.bin"].hardlink_dup}
+    assert dup_flags == {False, True}
+
+
+def test_hardlinks_are_not_double_counted_on_the_windows_stat_path(tmp_path, monkeypatch):
+    """entry.stat() (from os.scandir) never populates real st_ino/st_dev/
+    st_nlink on Windows -- always 0/0/1, regardless of actual link count,
+    per CPython's own documented Windows limitation -- which silently
+    disabled hard-link dedup on Windows entirely until _scan_one() was
+    fixed to call os.stat() directly instead, on that platform. Forcing
+    _IS_WINDOWS here exercises that exact branch on whatever host actually
+    runs this test: a real hard link's st_ino/st_nlink are correct via
+    os.stat() on any platform, so this doesn't need an actual Windows
+    machine to catch a regression here."""
+    monkeypatch.setattr(scanner, "_IS_WINDOWS", True)
+    # Isolate this test to just the st_info/hard-link-identity branch under
+    # test: _measure_alloc_size has its own, separate _IS_WINDOWS branch
+    # that calls the real ctypes.windll (which doesn't exist at all on a
+    # non-Windows host -- an AttributeError there would silently kill this
+    # scan's worker thread, not what this test means to exercise).
+    monkeypatch.setattr(scanner, "_measure_alloc_size", lambda path, st_info: st_info.st_size)
+
     original = tmp_path / "original.bin"
     original.write_bytes(b"x" * 1000)
     linked = tmp_path / "linked.bin"

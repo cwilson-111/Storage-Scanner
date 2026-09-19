@@ -134,6 +134,22 @@ def test_windows_alloc_size_falls_back_on_invalid_file_size(monkeypatch):
     assert _windows_alloc_size(r"C:\file.bin", fallback=999) == 999
 
 
+def test_windows_alloc_size_falls_back_when_ctypes_returns_the_signed_sentinel(monkeypatch):
+    """A real (non-test-faked) ctypes windll call defaults to a signed
+    32-bit return type, so the real Win32 failure sentinel 0xFFFFFFFF
+    actually comes back as -1, not as 0xFFFFFFFF -- unlike every other
+    fake in this file, which returns the sentinel as a plain positive int
+    and so never would have caught this. Confirmed via a real windows-
+    latest CI run: without the `& 0xFFFFFFFF` mask in _windows_alloc_size,
+    this -1 fell through the fallback check entirely and got rounded
+    against the cluster size into a bogus 0 instead of `fallback`."""
+    fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=-1))
+    monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
+    monkeypatch.setattr(ctypes, "GetLastError", lambda: 5, raising=False)
+
+    assert _windows_alloc_size(r"C:\file.bin", fallback=999) == 999
+
+
 def test_measure_alloc_size_dispatches_to_windows_path_when_flagged(monkeypatch):
     monkeypatch.setattr(scanner, "_IS_WINDOWS", True)
     fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=256))
