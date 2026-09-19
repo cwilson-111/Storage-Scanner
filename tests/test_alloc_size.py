@@ -38,6 +38,12 @@ def _by_name(node):
     return {child.name: child for child in node.children}
 
 
+@pytest.mark.skipif(
+    not hasattr(os.stat_result, "st_blocks"),
+    reason="st_blocks doesn't exist on this platform (e.g. Windows) -- "
+           "_measure_alloc_size's own Windows path is covered separately "
+           "by the test_windows_alloc_size_* tests below.",
+)
 def test_alloc_size_matches_real_disk_usage_via_st_blocks(tmp_path):
     f = tmp_path / "a.bin"
     f.write_bytes(b"x" * 1000)
