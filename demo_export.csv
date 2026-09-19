@@ -1,0 +1,11 @@
+path,name,is_dir,size,alloc_size,file_count,mtime,is_link,hardlink_dup,is_cloud_placeholder,error
+C:\Demo,Demo,True,52428800,52432896,6,2026-09-10T08:15:00,False,False,False,
+C:\Demo\Reports,Reports,True,10485760,10489856,2,2026-09-10T08:16:00,False,False,False,
+C:\Demo\Reports\q1_summary.pdf,q1_summary.pdf,False,5242880,5246976,1,2026-08-01T09:30:00,False,False,False,
+C:\Demo\Reports\q2_summary.pdf,q2_summary.pdf,False,5242880,5242880,1,2026-09-01T09:31:00,False,False,False,
+C:\Demo\Photos,Photos,True,31457280,31461376,3,2026-07-15T14:20:00,False,False,False,
+C:\Demo\Photos\vacation1.jpg,vacation1.jpg,False,10485760,10489856,1,2026-07-15T14:20:00,False,False,False,
+C:\Demo\Photos\vacation2.jpg,vacation2.jpg,False,10485760,10485760,1,2026-07-15T14:21:00,False,False,False,
+C:\Demo\Photos\vacation3.jpg,vacation3.jpg,False,10485760,10485760,1,2026-07-15T14:22:00,False,True,False,
+C:\Demo\Backups,Backups,True,10485760,10489856,1,2026-06-01T00:00:00,False,False,True,
+C:\Demo\Backups\archive.zip,archive.zip,False,10485760,10485760,1,2026-06-01T00:00:00,False,False,True,
