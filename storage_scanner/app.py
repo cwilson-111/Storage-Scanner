@@ -37,7 +37,7 @@ class StorageScannerApp(
     def __init__(self, root, initial_path=None):
         self.root = root
         self._initial_path = initial_path
-        root.title("Neural Storage Matrix — Elevated (Admin)" if IS_ROOT else "Neural Storage Matrix")
+        root.title("Storage Scanner — Elevated (Admin)" if IS_ROOT else "Storage Scanner")
         root.geometry("960x640")
         # Tkinter's default behavior for an exception raised inside a widget
         # callback (button command, bind, etc.) is to print a traceback to
@@ -181,5 +181,5 @@ def main():
     # resetting.
     initial_path = sys.argv[1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else None
     root = Tk()
-    StorageScannerApp(root, initial_path=initial_path)  # applies the dark cyber theme
+    StorageScannerApp(root, initial_path=initial_path)  # applies the Structural Light theme
     root.mainloop()

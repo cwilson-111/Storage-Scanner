@@ -1,8 +1,8 @@
-name: Build StorageScanner.exe
+name: Build Storage Scanner
 
-# Builds the standalone Windows executable on every push to main (downloadable
-# from the Actions tab as an artifact). Pushing a version tag like v1.0.0 also
-# attaches StorageScanner.exe to a GitHub Release automatically.
+# Builds a Windows .exe, a macOS .dmg, and a Linux binary on every push to
+# main (downloadable from the Actions tab as artifacts). Pushing a version
+# tag like v1.0.0 also attaches all three to a GitHub Release automatically.
 # Can also be triggered manually from the Actions tab (Run workflow).
 on:
   push:
@@ -14,7 +14,30 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    # Windows, not ubuntu: several tests exercise Windows-only code paths
+    # (NTFS MFT/Turbo Scan, drive-letter/volume-root resolution, cluster-size
+    # allocation) that this repo has never run or verified on Linux, and the
+    # build job below only ever targets windows-latest anyway.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run test suite
+        run: pytest tests/
+
+      - name: Lint
+        run: python -m pyflakes storage_scanner/ tests/
+
   build:
+    needs: test
     runs-on: windows-latest
     steps:
       # Actions are pinned to an immutable commit SHA rather than a mutable
@@ -77,3 +100,131 @@ jobs:
             dist/StorageScanner-portable.zip
             dist/sbom.json
             dist/SHA256SUMS.txt
+
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Build icons
+        run: python make_icon.py
+
+      - name: Stamp version
+        # Same convention as the Windows build job: bakes the git tag into
+        # storage_scanner/version.py so the frozen app knows its own version.
+        run: python -c "open('storage_scanner/version.py', 'w').write('__version__ = ' + repr('${{ github.ref_name }}') + chr(10))"
+
+      - name: Build .app bundle
+        # --onedir, not --onefile: a macOS .app bundle IS a directory
+        # structure (Contents/MacOS, Contents/Resources, ...) that Finder
+        # treats as a single double-clickable icon -- PyInstaller's
+        # --onefile mode targets a single flat binary, which is the right
+        # shape for Windows but not what a native macOS app looks like.
+        # icon.icns (not .ico) is macOS's own multi-resolution icon format.
+        run: |
+          pyinstaller --windowed --name StorageScanner --icon icon.icns \
+            --add-data "icon.ico:." --add-data "icon.icns:." Storage-Scanner.py
+
+      - name: Create DMG
+        # A DMG containing the .app plus an /Applications symlink is the
+        # conventional macOS "drag to install" distribution format --
+        # hdiutil is a stock macOS tool, no extra dependency needed.
+        run: |
+          mkdir -p dist/dmg
+          cp -R dist/StorageScanner.app dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname "Storage Scanner" -srcfolder dist/dmg \
+            -ov -format UDZO dist/StorageScanner.dmg
+
+      - name: Generate software bill of materials
+        run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom-macos.json
+
+      - name: Generate SHA-256 checksums
+        run: |
+          shasum -a 256 dist/StorageScanner.dmg dist/sbom-macos.json > dist/SHA256SUMS-macos.txt
+          cat dist/SHA256SUMS-macos.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: StorageScanner-macOS
+          path: |
+            dist/StorageScanner.dmg
+            dist/sbom-macos.json
+            dist/SHA256SUMS-macos.txt
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            dist/StorageScanner.dmg
+            dist/sbom-macos.json
+            dist/SHA256SUMS-macos.txt
+
+  build-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Stamp version
+        # Same convention as the Windows/macOS build jobs: bakes the git tag
+        # into storage_scanner/version.py so the frozen app knows its own
+        # version.
+        run: python -c "open('storage_scanner/version.py', 'w').write('__version__ = ' + repr('${{ github.ref_name }}') + chr(10))"
+
+      - name: Build executable
+        # A plain --onefile ELF binary, matching the Windows job's own
+        # shape -- Linux has no single standard installer/app-bundle format
+        # the way Windows has .exe or macOS has .app/.dmg, so a single
+        # portable "download, chmod +x, run" binary is the least surprising
+        # choice, and needs no extra packaging tool (no fpm/appimagetool)
+        # to stay inside this project's zero-extra-dependency policy.
+        run: pyinstaller --onefile --name StorageScanner --add-data "icon.ico:." Storage-Scanner.py
+
+      - name: Generate software bill of materials
+        run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom-linux.json
+
+      - name: Package
+        run: |
+          chmod +x dist/StorageScanner
+          tar -czf dist/StorageScanner-linux-x86_64.tar.gz -C dist StorageScanner
+
+      - name: Generate SHA-256 checksums
+        run: |
+          sha256sum dist/StorageScanner-linux-x86_64.tar.gz dist/sbom-linux.json > dist/SHA256SUMS-linux.txt
+          cat dist/SHA256SUMS-linux.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: StorageScanner-Linux
+          path: |
+            dist/StorageScanner-linux-x86_64.tar.gz
+            dist/sbom-linux.json
+            dist/SHA256SUMS-linux.txt
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            dist/StorageScanner-linux-x86_64.tar.gz
+            dist/sbom-linux.json
+            dist/SHA256SUMS-linux.txt

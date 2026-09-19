@@ -16,6 +16,14 @@ APP_NAME = "NeuralStorageMatrix"
 
 if sys.platform == "darwin":
     _APP_DATA_BASE = Path.home() / "Library" / "Application Support"
+elif sys.platform.startswith("linux"):
+    # Matches file_ops.py's _xdg_trash_home() convention: the XDG Base
+    # Directory spec's per-user data location, not LOCALAPPDATA (a Windows-
+    # only env var that's never set on Linux, which used to make this fall
+    # straight through to Path.home() -- dumping storage_history.db and the
+    # log directory loose in the home directory instead of a proper,
+    # XDG-standard app-data folder).
+    _APP_DATA_BASE = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
 else:
     _APP_DATA_BASE = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
 
