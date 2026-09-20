@@ -9,7 +9,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.scanner import scan
+from storage_scanner.models import Node
+from storage_scanner.scanner import _rollup, scan
 
 
 def _run_scan(path):
@@ -60,6 +61,47 @@ def test_independent_files_are_each_counted(tmp_path):
     assert root.file_count == 2
     assert root.size == 300
     assert not any(child.hardlink_dup for child in root.children)
+
+
+def test_rollup_propagates_a_grandchilds_error_all_the_way_to_the_root():
+    """A permission-denied folder anywhere in the tree must leave every
+    ancestor's size/file_count total visibly marked as incomplete (the ⚠
+    icon in main_window._insert_node reads node.error directly) -- not
+    just the one row that actually failed to list, which a user could
+    easily never have expanded."""
+    root = Node("C:\\Data", "Data", True)
+    mid = Node("C:\\Data\\mid", "mid", True)
+    locked = Node("C:\\Data\\mid\\locked", "locked", True)
+    locked.error = True  # os.scandir() raised OSError on this one
+    ok_file = Node("C:\\Data\\ok.bin", "ok.bin", False)
+    ok_file.size = 100
+    ok_file.file_count = 1
+
+    mid.children = [locked]
+    root.children = [mid, ok_file]
+
+    _rollup(root)
+
+    assert locked.error is True
+    assert mid.error is True    # propagated from its direct child
+    assert root.error is True   # propagated transitively, in the same pass
+    # The rest of the rollup still works normally alongside the propagation.
+    assert root.size == 100
+
+
+def test_rollup_leaves_error_false_when_nothing_failed():
+    root = Node("C:\\Data", "Data", True)
+    child = Node("C:\\Data\\ok", "ok", True)
+    f = Node("C:\\Data\\ok\\a.bin", "a.bin", False)
+    f.size = 50
+    f.file_count = 1
+    child.children = [f]
+    root.children = [child]
+
+    _rollup(root)
+
+    assert child.error is False
+    assert root.error is False
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks not supported")

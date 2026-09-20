@@ -77,18 +77,26 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
                 continue
 
         score_text = "far outside its usual pattern" if z in (float("inf"), float("-inf")) else f"z-score {z:+.1f}"
-        if delta > 0:
+        # "spike"/"drop" and the faster-/more-than-usual framing describe
+        # the deviation from this folder's own baseline trend (sign of z),
+        # not the raw sign of delta -- a folder that steadily grows ~1GB/
+        # scan and then grows only 50MB in one scan is unusually *slow*
+        # growth (z < 0, a "drop" relative to its own pattern) even though
+        # delta itself is still positive. The literal "Grew by"/"Shrank
+        # by" wording always matches delta's real sign regardless, so the
+        # message never claims a shrink that didn't happen (or vice versa).
+        if z > 0:
             kind = "spike"
-            message = (
-                f"Grew by {human_size(delta)} in one scan — much faster than "
-                f"this folder's typical growth ({score_text})."
-            )
+            trend_text = "much faster than this folder's typical growth"
         else:
             kind = "drop"
-            message = (
-                f"Shrank by {human_size(abs(delta))} in one scan — far more "
-                f"than usual, worth checking it was intentional ({score_text})."
-            )
+            trend_text = "far more than usual, worth checking it was intentional"
+
+        if delta >= 0:
+            amount_text = f"Grew by {human_size(delta)}"
+        else:
+            amount_text = f"Shrank by {human_size(abs(delta))}"
+        message = f"{amount_text} in one scan — {trend_text} ({score_text})."
         anomalies.append(Anomaly(
             created_at=created_at, kind=kind, growth_bytes=delta,
             z_score=z, message=message,

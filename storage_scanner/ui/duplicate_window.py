@@ -14,24 +14,22 @@ from tkinter import (
     messagebox, ttk,
 )
 
-from storage_scanner.cleanup_recommendations import keeper_reason, pick_keeper
+from storage_scanner.cleanup_recommendations import (
+    is_protected_path, keeper_reason, pick_keeper,
+)
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME, IS_MACOS, TRASH_NAME, resource_path,
 )
-from storage_scanner.settings import COLORS, DEFAULT_DUPLICATE_EXCLUDES
+from storage_scanner.settings import COLORS
 
 
 class DuplicatesMixin:
     def _should_skip_duplicate_scan(self, path):
-        
         """Return True if this path should be ignored during duplicate scans."""
-        normalized = os.path.normcase(os.path.normpath(path))
-
-
-        return any(part in normalized for part in DEFAULT_DUPLICATE_EXCLUDES)
+        return is_protected_path(path)
 
 
     # -- Delete to Recycle Bin --------------------------------------------- #
@@ -106,6 +104,25 @@ class DuplicatesMixin:
         if cancel_event is None:
             cancel_event = threading.Event()
 
+        # A purely local counter, never self.dup_stats -- this function
+        # runs from two independent callers that can be active at once
+        # (show_duplicates()'s own background worker, and
+        # CleanupMixin's own duplicate-candidate scan). Mutating a single
+        # shared dict from either would race the other and cross-
+        # contaminate whichever window is currently displaying it.
+        # show_duplicates()'s live-progress display still works exactly
+        # as before: it reads self.dup_stats only from the "stats"
+        # messages posted below, assigned wholesale by
+        # _poll_duplicate_progress, never by mutating this dict in place.
+        stats = {
+            "files_total": self.root_node.file_count if self.root_node else 0,
+            "files_checked": 0,
+            "files_skipped": 0,
+            "bytes_skipped": 0,
+            "partial_hashed": 0,
+            "full_hashed": 0,
+        }
+
         # ------------------------------------------------------------
         # Phase 0: collect files from your existing scanned tree
         # ------------------------------------------------------------
@@ -134,13 +151,13 @@ class DuplicatesMixin:
                             skipped_count += 1
                             skipped_bytes += skipped_node.size
 
-                    self.dup_stats["files_skipped"] += skipped_count
-                    self.dup_stats["bytes_skipped"] += skipped_bytes
+                    stats["files_skipped"] += skipped_count
+                    stats["bytes_skipped"] += skipped_bytes
 
                     if progress_q:
                         progress_q.put((
                             "stats",
-                            dict(self.dup_stats),
+                            dict(stats),
                         ))
 
                     continue
@@ -154,23 +171,23 @@ class DuplicatesMixin:
                     # local disk — hashing one would force Windows to
                     # download it just to compare it. Skip them entirely.
                     if self._should_skip_duplicate_scan(node.path) or node.is_cloud_placeholder:
-                        self.dup_stats["files_skipped"] += 1
-                        self.dup_stats["bytes_skipped"] += node.size
+                        stats["files_skipped"] += 1
+                        stats["bytes_skipped"] += node.size
 
                         if progress_q:
                             progress_q.put((
                                 "stats",
-                                dict(self.dup_stats),
+                                dict(stats),
                             ))
                     else:
                         all_files.append(node)
 
-        self.dup_stats["files_checked"] = len(all_files)
+        stats["files_checked"] = len(all_files)
 
         if progress_q:
             progress_q.put((
                 "stats",
-                dict(self.dup_stats),
+                dict(stats),
             ))
 
         total_files = max(1, len(all_files))
@@ -254,7 +271,7 @@ class DuplicatesMixin:
                 node, digest = future.result()
                 completed += 1
 
-                self.dup_stats["partial_hashed"] = completed
+                stats["partial_hashed"] = completed
 
                 if digest:
                     by_partial_hash[(node.size, digest)].append(node)
@@ -313,7 +330,7 @@ class DuplicatesMixin:
                 node, digest = future.result()
                 completed += 1
 
-                self.dup_stats["full_hashed"] = completed
+                stats["full_hashed"] = completed
 
                 if digest:
                     by_full_hash[(node.size, digest)].append(node)
@@ -751,11 +768,13 @@ class DuplicatesMixin:
             node, parent = stack.pop()
 
             if node is target_node:
+                # Subtract size and count from ancestors before unlinking —
+                # the search below finds target_node by identity, walking
+                # from parent.children, so it must still be attached.
+                self._subtract_from_ancestors(self.root_node, target_node)
+
                 if parent and target_node in parent.children:
                     parent.children.remove(target_node)
-
-                # Subtract size and count from ancestors.
-                self._subtract_from_ancestors(self.root_node, target_node)
                 return
 
             if node.is_dir:

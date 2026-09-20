@@ -325,6 +325,80 @@ def test_corrupt_usa_check_is_skipped():
     assert parse_base_record(29, _single_record_source(29, record)) is None
 
 
+def test_fixups_use_the_record_sources_real_sector_size_not_a_hardcoded_512():
+    """A native 4Kn volume (BytesPerSector=4096, not the near-universal 512)
+    stamps its Update Sequence Array fixups at 4096-byte sector boundaries,
+    not 512-byte ones. Applying fixups at the wrong offset either corrupts
+    real record bytes or (as tested here, the more common outcome) makes
+    the per-sector USN check fail and the whole record gets silently
+    rejected as unparseable -- files vanishing from a 4Kn scan with no
+    error surfaced anywhere.
+
+    Built by hand here, independent of this file's SECTOR_SIZE=512-based
+    build_record()/_assemble_record() helpers, since a 4096-byte sector on
+    a 4096-byte record needs its own USA layout (2 entries: one USN plus
+    one original-bytes slot, vs. those helpers' fixed 3-entry/512 shape).
+    """
+    record_size = 4096
+    true_sector_size = 4096
+    usa_offset = 48
+    usa_size = record_size // true_sector_size + 1  # 2
+
+    std_info = _std_info_value(file_attributes=0x20)
+    file_name = _file_name_value(1, "hello.txt")
+    attrs = bytearray()
+    attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, std_info, 0)
+    attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, file_name, 1)
+    attrs += struct.pack("<I", mft_parser._ATTR_END_MARKER)
+
+    first_attr_offset = ((usa_offset + usa_size * 2) + 7) // 8 * 8
+    bytes_in_use = first_attr_offset + len(attrs)
+    header = struct.pack(
+        "<4sHHQHHHHIIQHHI",
+        b"FILE", usa_offset, usa_size, 0, 1, 1, first_attr_offset,
+        mft_parser._RECORD_FLAG_IN_USE, bytes_in_use, record_size, 0, 0, 0, 29,
+    )
+    buf = bytearray(record_size)
+    buf[0:len(header)] = header
+    buf[first_attr_offset:first_attr_offset + len(attrs)] = attrs
+
+    # Stamp fixups at the TRUE 4096-byte sector boundary, as real NTFS
+    # would on a native 4Kn volume.
+    usn = b"\x07\x00"
+    record = bytearray(buf)
+    record[usa_offset:usa_offset + 2] = usn
+    for i in range(1, usa_size):
+        sector_end = i * true_sector_size - 2
+        original = bytes(record[sector_end:sector_end + 2])
+        record[usa_offset + 2 * i:usa_offset + 2 * i + 2] = original
+        record[sector_end:sector_end + 2] = usn
+    record = bytes(record)
+
+    class _PlainSource:
+        """No bytes_per_sector attribute -- matches every fake elsewhere
+        in this file, and the historical (bugged) hardcoded-512 behavior."""
+        def __init__(self, rec):
+            self._rec = rec
+
+        def record_at(self, record_number):
+            return self._rec
+
+    class _FourKSource(_PlainSource):
+        bytes_per_sector = 4096
+
+    # Old behavior: sector_size silently defaults to 512, which is wrong
+    # for this record -- the USN check at the (wrong) 510 offset doesn't
+    # match, so the record is rejected outright.
+    assert parse_base_record(29, _PlainSource(record)) is None
+
+    # Fixed behavior: the record source exposes the volume's real sector
+    # size, fixups are applied at the correct 4094 offset, and the record
+    # parses normally.
+    parsed = parse_base_record(29, _FourKSource(record))
+    assert parsed is not None
+    assert parsed.names[0].name == "hello.txt"
+
+
 def test_missing_standard_information_is_skipped():
     record = build_record(
         31, std_info_value=None,
@@ -383,6 +457,81 @@ def test_attribute_list_entry_for_a_missing_extension_record_is_ignored():
         ]),
     )
     source = FakeRecordSource({base_record_number: base_record})
+    parsed = parse_base_record(base_record_number, source)
+
+    assert parsed is not None
+    assert len(parsed.names) == 1
+    assert parsed.names[0].name == "primary.txt"
+
+
+def test_attribute_list_entry_with_stale_sequence_number_is_ignored():
+    """The extension record's slot was freed and reused for a different
+    file since the $ATTRIBUTE_LIST entry was written -- the entry's FRN
+    still names the right record number, but its expected sequence number
+    (3) no longer matches what's actually stored there now (4), so it must
+    be treated like a missing extension record, not trusted and merged in.
+    """
+    base_record_number = 55
+    ext_record_number = 56
+    stale_ext_frn = _pack_frn(3, ext_record_number)  # entry expects sequence 3
+
+    base_record = build_record(
+        base_record_number,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(100, "primary.txt"), 1)],
+        attribute_list_value=_attribute_list_value([
+            (mft_parser._ATTR_FILE_NAME, 2, stale_ext_frn),
+        ]),
+    )
+    # The slot was reused: its ACTUAL on-disk sequence number is 4, not
+    # the 3 the base record's $ATTRIBUTE_LIST entry still expects.
+    reused_record = build_record(
+        ext_record_number,
+        base_frn=_pack_frn(1, base_record_number),
+        sequence_number=4,
+        std_info_value=None,
+        file_names=[(_file_name_value(999, "different_file.txt"), 2)],
+    )
+
+    source = FakeRecordSource(
+        {base_record_number: base_record, ext_record_number: reused_record}
+    )
+    parsed = parse_base_record(base_record_number, source)
+
+    assert parsed is not None
+    assert len(parsed.names) == 1
+    assert parsed.names[0].name == "primary.txt"  # the reused slot's name must not be merged in
+
+
+def test_attribute_list_entry_for_a_freed_not_reused_extension_record_is_ignored():
+    """The extension record's slot was freed and never reused -- IN_USE is
+    clear. Even with a sequence number that happens to still match, a
+    not-in-use record must never be trusted."""
+    base_record_number = 57
+    ext_record_number = 58
+    ext_sequence = 3
+    ext_frn = _pack_frn(ext_sequence, ext_record_number)
+
+    base_record = build_record(
+        base_record_number,
+        std_info_value=_std_info_value(),
+        file_names=[(_file_name_value(100, "primary.txt"), 1)],
+        attribute_list_value=_attribute_list_value([
+            (mft_parser._ATTR_FILE_NAME, 2, ext_frn),
+        ]),
+    )
+    freed_record = build_record(
+        ext_record_number,
+        in_use=False,
+        base_frn=_pack_frn(1, base_record_number),
+        sequence_number=ext_sequence,
+        std_info_value=None,
+        file_names=[(_file_name_value(999, "different_file.txt"), 2)],
+    )
+
+    source = FakeRecordSource(
+        {base_record_number: base_record, ext_record_number: freed_record}
+    )
     parsed = parse_base_record(base_record_number, source)
 
     assert parsed is not None

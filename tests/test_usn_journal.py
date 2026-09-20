@@ -289,3 +289,34 @@ def test_read_journal_changes_raises_on_journal_id_mismatch(monkeypatch):
 
     with pytest.raises(UsnJournalError):
         read_journal_changes(_FAKE_HANDLE, journal_id=999, start_usn=100)
+
+
+def test_read_journal_changes_raises_when_start_usn_is_below_lowest_valid(monkeypatch):
+    """Defense in depth: even though the sole caller (turbo_scan.
+    _try_incremental_refresh) already checks this itself before calling
+    in, read_journal_changes must refuse a start_usn the journal has
+    wrapped past on its own, rather than silently reading only the
+    surviving post-gap records and missing everything purged in between.
+    No DeviceIoControl call should even happen -- the fake kernel32 has
+    no read_responses configured, so a call would raise IndexError/error
+    on its own if this check didn't short-circuit first.
+    """
+    kernel32 = _FakeUsnKernel32(journal_id=1, read_responses=[])
+    _patch(monkeypatch, kernel32)
+
+    with pytest.raises(UsnJournalError):
+        read_journal_changes(_FAKE_HANDLE, journal_id=1, start_usn=100, lowest_valid_usn=200)
+
+
+def test_read_journal_changes_proceeds_when_start_usn_is_at_or_above_lowest_valid(monkeypatch):
+    kernel32 = _FakeUsnKernel32(journal_id=1, read_responses=[_read_response(next_usn=300)])
+    _patch(monkeypatch, kernel32)
+
+    dirty, new_next_usn = read_journal_changes(
+        _FAKE_HANDLE, journal_id=1, start_usn=200, lowest_valid_usn=200,
+    )
+
+    assert dirty == []
+    assert new_next_usn == 300
+
+

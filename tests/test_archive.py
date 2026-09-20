@@ -41,7 +41,10 @@ def test_archive_file_compresses_and_removes_original(tmp_path, monkeypatch):
     node = Node(str(target), "notes.txt", is_dir=False)
     node.size = target.stat().st_size
 
-    monkeypatch.setattr(archive, "recycle_and_log", lambda node, source, action: True)
+    monkeypatch.setattr(
+        archive, "recycle_and_log",
+        lambda node, source, action, extra_error_context=None: True,
+    )
 
     result = archive.archive_file(node, source="Cleanup Recommendations")
 
@@ -69,13 +72,17 @@ def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path, 
     node = Node(str(target), "notes.txt", is_dir=False)
     node.size = target.stat().st_size
 
-    monkeypatch.setattr(archive, "recycle_and_log", lambda node, source, action: False)
+    monkeypatch.setattr(
+        archive, "recycle_and_log",
+        lambda node, source, action, extra_error_context=None: False,
+    )
 
     result = archive.archive_file(node, source="Cleanup Recommendations")
 
     assert result.success is True  # the archive itself was created fine
     assert result.original_removed is False
     assert "both copies" in result.error
+    assert result.archive_path in result.error  # ledger must still point at the .zip
     # The zip must still exist even though the original removal failed.
     assert os.path.exists(result.archive_path)
 

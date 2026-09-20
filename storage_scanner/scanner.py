@@ -94,6 +94,14 @@ def _windows_alloc_size(path, fallback):
     """
     try:
         low = ctypes.windll.kernel32.GetCompressedFileSizeW(path, None)
+        # ctypes defaults a windll call's return type to signed c_int;
+        # GetCompressedFileSizeW's real return is an unsigned DWORD, so a
+        # low-DWORD value >= 0x80000000 (a compressed size with that bit
+        # set, or the INVALID_FILE_SIZE sentinel 0xFFFFFFFF itself) comes
+        # back here as a negative Python int -- fold it back into the
+        # correct unsigned 32-bit value before using it for anything.
+        if low < 0:
+            low &= 0xFFFFFFFF
         if low == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
             return fallback
         # High 32 bits aren't retrievable without a second out-param this
@@ -317,7 +325,19 @@ def scan(path, progress_q, cancel_event, workers=None):
 
 
 def _rollup(root):
-    """Sum child sizes/file counts into each directory, bottom-up."""
+    """Sum child sizes/file counts into each directory, bottom-up.
+
+    A directory also inherits `error=True` from any child that couldn't be
+    fully read (an unreadable subdirectory, or a file whose stat() failed)
+    -- without this, a permission-denied folder deep in the tree left every
+    ancestor's total silently understated by that whole subtree's size,
+    with the ⚠ warning icon (see main_window._insert_node) shown only on
+    the one row that actually failed, invisible unless a user happened to
+    have that exact row expanded. Post-order traversal means a grandchild's
+    error is already folded into its parent by the time the parent's own
+    children are summed into the grandparent, so this propagates all the
+    way to the root in one pass.
+    """
     stack = [(root, False)]
     while stack:
         node, processed = stack.pop()
@@ -328,6 +348,8 @@ def _rollup(root):
                 node.size += child.size
                 node.alloc_size += child.alloc_size
                 node.file_count += child.file_count
+                if child.error:
+                    node.error = True
         else:
             stack.append((node, True))
             for child in node.children:
