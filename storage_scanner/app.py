@@ -37,7 +37,7 @@ class StorageScannerApp(
     def __init__(self, root, initial_path=None):
         self.root = root
         self._initial_path = initial_path
-        root.title("Neural Storage Matrix — Elevated (Admin)" if IS_ROOT else "Neural Storage Matrix")
+        root.title("Storage Scanner — Elevated (Admin)" if IS_ROOT else "Storage Scanner")
         root.geometry("960x640")
         # Tkinter's default behavior for an exception raised inside a widget
         # callback (button command, bind, etc.) is to print a traceback to
@@ -78,6 +78,17 @@ class StorageScannerApp(
         self.dup_progress_q = queue.Queue()
         self.dup_thread = None
         self.dup_cancel_event = threading.Event()
+
+        # The last completed "Find Duplicate Files" result, kept around so
+        # Cleanup Recommendations (and a reopened Duplicate Files window)
+        # can reuse it instead of re-hashing every file a second time, and
+        # so results aren't lost just because that window was closed. Tied
+        # to the exact root_node it was computed from (see
+        # DuplicatesMixin._remove_from_duplicate_cache and start_scan's
+        # reset of both) so a rescan of a different path can't serve stale
+        # duplicate data.
+        self.duplicates = None
+        self._duplicates_scan_root = None
 
         
         self.dup_stats = {
@@ -170,5 +181,5 @@ def main():
     # resetting.
     initial_path = sys.argv[1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else None
     root = Tk()
-    StorageScannerApp(root, initial_path=initial_path)  # applies the dark cyber theme
+    StorageScannerApp(root, initial_path=initial_path)  # applies the Structural Light theme
     root.mainloop()

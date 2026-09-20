@@ -17,5 +17,11 @@ img.save(
         (256, 256)
     ]
 )
-
 print("Wrote icon.ico")
+
+# For the macOS .app bundle's own Finder icon (PyInstaller's --icon on
+# macOS wants .icns, not .ico). Pillow's ICNS writer needs no macOS-only
+# tool (no iconutil) -- it builds the whole multi-resolution bundle
+# itself, so this runs the same way on any build platform.
+img.save(BASE_DIR / "icon.icns", format="ICNS")
+print("Wrote icon.icns")

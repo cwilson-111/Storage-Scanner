@@ -100,6 +100,11 @@ def _windows_alloc_size(path, fallback):
         # set, or the INVALID_FILE_SIZE sentinel 0xFFFFFFFF itself) comes
         # back here as a negative Python int -- fold it back into the
         # correct unsigned 32-bit value before using it for anything.
+        # Correcting `low` itself (not just the comparison below) matters:
+        # it's also used for the cluster-rounding math and final return a
+        # few lines down, so a masked-only comparison would still hand
+        # back a corrupted negative alloc_size for a large compressed file
+        # that isn't actually the INVALID_FILE_SIZE failure case.
         if low < 0:
             low &= 0xFFFFFFFF
         if low == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
@@ -236,7 +241,18 @@ def scan(path, progress_q, cancel_event, workers=None):
             if cancel_event.is_set():
                 return
             try:
-                st_info = entry.stat(follow_symlinks=False)
+                if _IS_WINDOWS:
+                    # entry.stat() on Windows never populates real
+                    # st_ino/st_dev/st_nlink (always 0/0/1) -- it's built
+                    # from the cheap WIN32_FIND_DATA the directory listing
+                    # itself already returned, which carries no file-index
+                    # or link-count info at all. A real os.stat() call is
+                    # the only way to get accurate hard-link identity --
+                    # without it, hard-link dedup below silently never
+                    # triggers on Windows (every ino comes back 0).
+                    st_info = os.stat(entry.path, follow_symlinks=False)
+                else:
+                    st_info = entry.stat(follow_symlinks=False)
             except OSError:
                 st_info = None
 

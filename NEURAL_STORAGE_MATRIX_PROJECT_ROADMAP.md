@@ -8,15 +8,16 @@ extension tracking, duplicate-count history, an in-app auto-undo). Phase 4
 is partially done: everything buildable without a purchased certificate is
 in place; actual code-signing is still blocked on you obtaining one.
 
-Two things worth flagging honestly:
-- **Naming is still inconsistent.** The in-app window title is "Neural
-  Storage Matrix" while the repo, README, and executable name are all
-  "Storage Scanner" — the P1 naming-consistency item below was only
-  partially addressed (fixed a couple of leftover "TreeSize" references
-  from an even earlier name), not fully resolved.
-- **CI doesn't gate on tests.** `build.yml` builds and releases without
-  ever running `pytest`/`pyflakes` first — the automated-quality-gates
-  item below (P4/#10) was never wired into the release pipeline itself.
+Two gaps flagged in an earlier pass here are now closed:
+- **Naming consistency.** The in-app window title now reads "Storage
+  Scanner" (matching the repo, README, and executable name) instead of
+  the old "Neural Storage Matrix" — the P1 naming-consistency item below
+  is fully resolved.
+- **CI gates on tests.** `build.yml` now has a `test` job (`pytest` +
+  `pyflakes`, on `windows-latest` since several tests exercise Windows-only
+  code paths) that the `build`/release job depends on via `needs: test` —
+  a broken test or lint failure now blocks the release, closing out the
+  automated-quality-gates item below (P4/#10) as far as CI wiring goes.
 
 See the phase checklists further down for what's done vs. not, item by item.
 
@@ -115,7 +116,7 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 
 Several broad `except Exception: pass` blocks hide packaging and UI failures. Log diagnostic details to a rotating file in `%LOCALAPPDATA%` while keeping user-facing messages concise.
 
-### P1: Resolve naming consistency
+### P1: Resolve naming consistency — ✅ done (as "Storage Scanner", not "Neural Storage Matrix")
 
 Use one canonical entry point and product name everywhere. Recommended:
 
@@ -124,6 +125,12 @@ Use one canonical entry point and product name everywhere. Recommended:
 - Display name: `Neural Storage Matrix`
 
 Update module docstrings, build scripts, workflow commands, README instructions, icon metadata, and release names together.
+
+The project settled on **"Storage Scanner"** as the canonical name instead —
+repo, README, executable (`StorageScanner.exe`), and now the in-app window
+title all agree. "Neural Storage Matrix" survives only as this document's
+own title/filename, a relic of the earlier "cyber terminal" theme this app
+no longer has.
 
 ### P1: Split the monolith
 
@@ -186,6 +193,8 @@ Do not market automatic deletion as intelligence. Build explainable recommendati
 
 Every recommendation should show **why it was flagged**, estimated recoverable space, risk level, dependencies, and proposed action. Default to review queues, Recycle Bin, quarantine, or archive. Never silently delete user content.
 
+**Proposed, not yet built: persist recommendations across restarts.** Today, Cleanup Recommendations and "Find Duplicate Files" results only live in memory for the current session (the in-session duplicate-result cache added after this doc's last update at least stops Cleanup Recommendations from re-hashing everything a second time if you already ran a duplicate scan) — but closing and reopening the app always means starting from zero, even to re-review a list you already generated minutes ago. The target design is full cold-start recall: persist the last completed scan's Protected/Review/Duplicate recommendations to SQLite (same `%LOCALAPPDATA%` database convention as `history.py`/`turbo_cache.py`), keyed by scan path, so opening the app fresh and going straight to Tools ▸ Clean Up ▸ Cleanup Recommendations shows last run's results immediately for the last-scanned path — no scan required first — with a "last updated `<time>`" note and an explicit Rescan button to refresh. This needs more than just the duplicate hash groups: the Protected/Review categories are derived from the full scanned tree's per-file metadata (size, mtime, atime, cloud-placeholder flag), which today isn't saved anywhere beyond folder-level rollups ≥50 MB — that metadata would need its own persisted table, refreshed on every scan, expired/replaced (not merely appended to) so a rescan's results always fully supersede the previous run's.
+
 ### 4. Make duplicate cleanup genuinely safer
 
 Improve duplicate handling with:
@@ -238,6 +247,43 @@ Add a first-run explanation of safe deletion, permission limitations, cloud plac
 
 OneDrive and similar placeholders must be distinguished from fully local files. Show logical size, local allocated size, online-only state, and sync state when Windows exposes those attributes. Avoid accidentally downloading online-only content during hashing or preview. Offer safe actions such as “Free up local space” separately from deletion.
 
+### 9a. Ship packaged builds for macOS and Linux, not just Windows
+
+**Not yet built.** The app itself already runs cross-platform — `platform_support.py`'s
+`IS_MACOS`/`IS_LINUX` branches cover trash/recycle, elevated scanning, and
+drive listing on both — but `build.yml` only ever runs on `windows-latest`,
+so the only downloadable artifact anywhere is `StorageScanner.exe`. A macOS
+or Linux user who clicks the README's download button gets a Windows PE
+binary their OS categorically cannot run: macOS's Gatekeeper refuses it
+outright with an explicit "Microsoft Windows applications are not
+supported on macOS" dialog; Linux has no equivalent friendly message at
+all — depending on the desktop environment, double-clicking it typically
+does nothing (no application associated with a foreign PE binary), or
+running it from a terminal surfaces a bare kernel `Exec format error`.
+Today's README callout (see the "On macOS?" note near the top) papers
+over this by warning people before they click, but a warning isn't the
+same as a working download.
+
+To actually fix it:
+
+- Add a `macos-latest` job to `build.yml` that runs PyInstaller
+  (`--windowed --onedir`, since macOS `.app` bundles don't like
+  `--onefile`) to produce `StorageScanner.app`, then wraps it in a `.dmg`
+  (`hdiutil create` — stdlib-adjacent, no extra dependency) for release.
+  Unsigned/unnotarized, it'll hit Gatekeeper's "unidentified developer"
+  prompt (right-click → Open bypasses it) — the same class of trust
+  friction Windows SmartScreen already causes today, not a new problem,
+  and notarization has the same certificate/Apple Developer Program cost
+  blocker as Windows code-signing (see item 9 below).
+- Add a `ubuntu-latest` job producing a plain PyInstaller `--onefile`
+  binary (or an AppImage for a nicer double-click experience across
+  distros without a system Python/Tkinter already present).
+- Update the README's download section to link all three artifacts, and
+  update the "On macOS?" callout once a real macOS build exists — it
+  should point people at a `.dmg`, not just at running from source.
+- Extend `make_sbom.py`/checksum generation to cover both new artifacts,
+  matching what Windows already gets.
+
 ### 9. Treat trust as a product feature
 
 - Code-sign Windows releases.
@@ -266,6 +312,11 @@ Build tests for:
 
 Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test job that must pass before release. Create generated test trees so correctness and performance can be benchmarked across versions.
 
+**The GitHub Actions test-job-gating piece is done** — `build.yml` now runs
+`pytest`/`pyflakes` in a `test` job that `build` (and therefore the release)
+depends on via `needs:`. Ruff/Black/mypy, coverage thresholds, and clean-runner
+packaging smoke tests are still not in place.
+
 ## Recommended delivery sequence
 
 ### Phase 1: Reliability foundation — ✅ done
@@ -274,7 +325,7 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (116 and counting) — release smoke tests still not wired into CI (see Status update above).
+5. ✅ Add unit tests (335 and counting), and `build.yml` now runs them (plus `pyflakes`) in a `test` job the release build depends on — see Status update above. Packaging smoke tests on a clean runner are still not wired in.
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
 ### Phase 2: Competitive core — ✅ done except MFT
@@ -300,6 +351,7 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 3. ✅ Publish SHA-256 checksums and an SBOM.
 4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
+6. ❌ Ship packaged macOS (`.dmg`) and Linux builds — not started; see item 9a above. Today, clicking the README's download button on either OS gets you a Windows `.exe` that can't run there at all (Gatekeeper blocks it outright on macOS; Linux has no build or friendly error either).
 
 ## Product positioning
 
@@ -348,3 +400,6 @@ table = pv.read_csv('input.csv')
 
 # Write the Table to a Parquet file with specified compression
 pq.write_table(table, 'output.parquet', compression='snappy')
+
+
+# Fix Miscrosoft Wondpws Bug unsupported on Mac bug when downlaoding executable from git. Might have been changed during linux pathing

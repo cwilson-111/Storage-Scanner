@@ -16,6 +16,14 @@ APP_NAME = "NeuralStorageMatrix"
 
 if sys.platform == "darwin":
     _APP_DATA_BASE = Path.home() / "Library" / "Application Support"
+elif sys.platform.startswith("linux"):
+    # Matches file_ops.py's _xdg_trash_home() convention: the XDG Base
+    # Directory spec's per-user data location, not LOCALAPPDATA (a Windows-
+    # only env var that's never set on Linux, which used to make this fall
+    # straight through to Path.home() -- dumping storage_history.db and the
+    # log directory loose in the home directory instead of a proper,
+    # XDG-standard app-data folder).
+    _APP_DATA_BASE = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
 else:
     _APP_DATA_BASE = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
 
@@ -411,6 +419,33 @@ def get_scan_history(scan_path, limit=30):
     """, (scan_path, limit))
 
     rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+def get_scan_ids_by_created_at(scan_path, limit=30):
+    """{created_at: scan_id} for the same window get_scan_history(scan_path,
+    limit) returns. A separate lookup rather than adding an id column to
+    get_scan_history()'s own row shape, since several existing callers
+    (forecasting.py, anomaly_detection.py, the matplotlib chart) already
+    unpack its rows positionally and have no use for the id. Lets a caller
+    that already has anomaly_detection.Anomaly objects (keyed by
+    created_at) map one back to the scan ids whose comparison produced it,
+    e.g. to find which folder was most responsible via get_folder_growth().
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT created_at, id
+        FROM scans
+        WHERE scan_path = ?
+        ORDER BY created_at ASC
+        LIMIT ?
+    """, (scan_path, limit))
+
+    rows = dict(cur.fetchall())
     conn.close()
 
     return rows
