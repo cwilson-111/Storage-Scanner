@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import cleanup_cache
 from storage_scanner.cleanup_recommendations import (
-    CATEGORY_DUPLICATE, CATEGORY_PROTECTED, CATEGORY_REVIEW, Recommendation,
+    CATEGORY_DUPLICATE, CATEGORY_REVIEW, Recommendation,
 )
 from storage_scanner.models import Node
 
