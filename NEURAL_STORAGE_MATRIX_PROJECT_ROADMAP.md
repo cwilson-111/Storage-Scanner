@@ -2,13 +2,29 @@
 
 ## Status update
 
-Phases 1-3 below are complete except where noted (NTFS MFT fast scan, and
-a handful of items explicitly scoped out along the way — ransomware-style
-extension tracking, duplicate-count history, an in-app auto-undo). Phase 4
-is partially done: everything buildable without a purchased certificate is
-in place; actual code-signing is still blocked on you obtaining one.
+Phases 1-3 below are complete, including NTFS MFT fast scan (Turbo Scan),
+except a handful of items explicitly scoped out along the way —
+ransomware-style extension tracking, duplicate-count history, an in-app
+auto-undo. Phase 4 is partially done: everything buildable without a
+purchased certificate is in place; actual code-signing is still blocked on
+you obtaining one.
 
-Two things worth flagging honestly:
+Turbo Scan (item 1 below) went from "not started" to fully built, unit- and
+integration-tested, and validated across several real-hardware sessions —
+correctness bugs (fragmented `$MFT`, hard-link dedup scope, `alloc_size`
+rounding, non-resident `$ATTRIBUTE_LIST`, a chunk-cache perf bug, cloud-
+placeholder false positives, a reparse-point-as-root gap), a persistent
+cache with NTFS USN Journal incremental refresh, and a progress-reporting
+bug caught by a real user report after initial release. It ships off by
+default behind a "Turbo Scan (Experimental)" toggle — see the item's own
+section below for current status and what's still open.
+
+The app also gained a Linux port during this work (scan, Trash-based
+delete, and its own elevated-scan flow — same three-platform pattern as
+Windows/macOS), and a "Data Tools" menu (Compress CSV to Parquet, Convert
+CSV to Excel) — see the CSV-to-Parquet section near the end of this doc.
+
+Three things worth flagging honestly:
 - **Naming is still inconsistent.** The in-app window title is "Neural
   Storage Matrix" while the repo, README, and executable name are all
   "Storage Scanner" — the P1 naming-consistency item below was only
@@ -17,6 +33,12 @@ Two things worth flagging honestly:
 - **CI doesn't gate on tests.** `build.yml` builds and releases without
   ever running `pytest`/`pyflakes` first — the automated-quality-gates
   item below (P4/#10) was never wired into the release pipeline itself.
+- **The Data Tools optional dependencies (`pyarrow`, `openpyxl`) may not
+  be in the released `.exe`.** `requirements-dev.txt` — what the GitHub
+  Actions build environment installs from — doesn't currently list them,
+  so PyInstaller's build may not have them available to bundle even though
+  the app code supports them. Worth confirming before relying on those two
+  menu items in a downloaded release rather than a from-source run.
 
 See the phase checklists further down for what's done vs. not, item by item.
 
@@ -160,14 +182,27 @@ Explicitly define handling for:
 
 ## Market-leading product roadmap
 
-### 1. Add an NTFS Master File Table fast path
+### 1. Add an NTFS Master File Table fast path — ✅ done, ships as "Turbo Scan (Experimental)"
 
-This is the most important competitive improvement. Traditional recursive enumeration will struggle against tools that read the NTFS MFT. Build two engines:
+Built as originally scoped: two engines — **Turbo Scan** (raw MFT parsing,
+NTFS-only, `storage_scanner/mft_*.py`/`turbo_scan.py`) with automatic
+fallback to **Compatible Scan** (the existing directory-walking engine) for
+network shares, removable media, non-NTFS filesystems, or any Turbo Scan
+failure. A persistent on-disk cache plus NTFS USN Journal incremental
+refresh (`turbo_cache.py`/`usn_journal.py`) means a repeat scan of an
+unchanged volume reaches parity with Compatible's own speed instead of
+re-reading the whole MFT every time.
 
-- **Turbo Scan:** MFT-based, elevated when necessary, NTFS only.
-- **Compatible Scan:** current directory traversal for network shares, removable media, and non-NTFS file systems.
+Not built: the "achieved throughput / confidence-completeness indicators"
+UI polish from the original scope — the engine and its fallback are surfaced
+functionally (status text, automatic fallback with no user action needed)
+but there's no dedicated indicator panel.
 
-Show which engine was used, achieved throughput, elapsed time, skipped paths, and confidence/completeness indicators. Cache stable metadata and support incremental refresh using the NTFS USN Journal after the first scan.
+Off by default behind a "Turbo Scan (Experimental)" toggle (Tools ▸
+Settings) pending more real-world mileage before it's recommended broadly —
+see the "Status update" section above for what's been validated so far and
+what's still open (a small-subtree incremental-scan performance follow-up;
+not a correctness issue).
 
 ### 2. Build a synchronized treemap and sunburst explorer
 
@@ -186,7 +221,7 @@ Do not market automatic deletion as intelligence. Build explainable recommendati
 
 Every recommendation should show **why it was flagged**, estimated recoverable space, risk level, dependencies, and proposed action. Default to review queues, Recycle Bin, quarantine, or archive. Never silently delete user content.
 
-**Proposed, not yet built: persist recommendations across restarts.** Today, Cleanup Recommendations and "Find Duplicate Files" results only live in memory for the current session (the in-session duplicate-result cache added after this doc's last update at least stops Cleanup Recommendations from re-hashing everything a second time if you already ran a duplicate scan) — but closing and reopening the app always means starting from zero, even to re-review a list you already generated minutes ago. The target design is full cold-start recall: persist the last completed scan's Protected/Review/Duplicate recommendations to SQLite (same `%LOCALAPPDATA%` database convention as `history.py`/`turbo_cache.py`), keyed by scan path, so opening the app fresh and going straight to Tools ▸ Clean Up ▸ Cleanup Recommendations shows last run's results immediately for the last-scanned path — no scan required first — with a "last updated `<time>`" note and an explicit Rescan button to refresh. This needs more than just the duplicate hash groups: the Protected/Review categories are derived from the full scanned tree's per-file metadata (size, mtime, atime, cloud-placeholder flag), which today isn't saved anywhere beyond folder-level rollups ≥50 MB — that metadata would need its own persisted table, refreshed on every scan, expired/replaced (not merely appended to) so a rescan's results always fully supersede the previous run's.
+**✅ Done: persist recommendations across restarts.** Cleanup Recommendations now shows full cold-start recall: `storage_scanner/cleanup_cache.py` persists the last *computed* set of Protected/Review/Duplicate recommendations to SQLite (`cleanup_cache.db`, same `%LOCALAPPDATA%` convention as `history.py`/`turbo_cache.py`), keyed by scan path, each save fully replacing the previous one. Opening the app fresh and going straight to Tools ▸ Clean Up ▸ Cleanup Recommendations — with zero scans this session — shows the most recently cached run immediately, labeled with when it was computed and for which path, plus a **Rescan** button to refresh it for real. Deleting or archiving a row updates the persisted cache too, so a stale row for an already-removed file doesn't linger into the next cold start. Simpler than originally scoped here: rather than persisting the full per-file metadata needed to recompute recommendations from scratch, it persists the already-computed recommendation rows themselves — smaller, and a more direct match for "show me what I found last time," with Rescan covering the "get a truly fresh answer" case.
 
 ### 4. Make duplicate cleanup genuinely safer
 
@@ -279,12 +314,12 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 5. ✅ Add unit tests (116 and counting) — release smoke tests still not wired into CI (see Status update above).
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
-### Phase 2: Competitive core — ✅ done except MFT
+### Phase 2: Competitive core — ✅ done
 
 1. ✅ Add treemap visualization.
 2. ✅ Add search and advanced filters.
 3. ✅ Add allocated-size, hard-link, junction, and cloud-placeholder correctness.
-4. ⏭️ Add MFT fast scan with fallback — explicitly deferred until after MVP, not started.
+4. ✅ Add MFT fast scan with fallback — built and real-hardware validated as Turbo Scan; see item 1 above.
 5. ✅ Add snapshot comparison between arbitrary dates.
 
 ### Phase 3: Differentiation — ✅ done (CLI-only for #5)
@@ -341,7 +376,20 @@ A compelling next release would include:
 That release would materially improve reliability, usability, visual clarity, and trust instead of merely adding more menu items.
 
 
-## Compressing chosen csv files to parquet 
+## Compressing chosen csv files to parquet — ✅ done
+
+Shipped as a "Data Tools" menu (Tools ▸ Data Tools) with two actions:
+**Compress CSV to Parquet…** (`storage_scanner/csv_to_parquet.py`, using
+`pyarrow` as sketched below) and, added alongside it, **Convert CSV to
+Excel (.xlsx)…** (`storage_scanner/csv_to_xlsx.py`, using `openpyxl`).
+Both file pickers work on any CSV on disk, not just this app's own
+exports. Both packages are optional, lazily-imported runtime dependencies
+(same pattern as the existing optional `matplotlib` growth-history charts)
+— see the "Status update" section at the top of this doc for the open gap
+around whether they're actually bundled into the released `.exe` yet.
+
+Original note this was built from, kept for reference:
+
 2. Using PyArrow (Fastest & Memory Efficient)If you are dealing with larger datasets and want to bypass the overhead of creating a Pandas DataFrame, you can use pyarrow directly. It is highly optimized for the Apache Arrow format. [1] (https://www.confessionsofadataguy.com/converting-csvs-to-parquets-with-python-and-scala/)pythonimport pyarrow.csv as pv
 import pyarrow.parquet as pq
 

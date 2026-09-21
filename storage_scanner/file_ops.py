@@ -401,7 +401,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     project's own validation had exercised (earlier real-hardware
     validation of this same helper always invoked it directly from an
     already-elevated terminal, bypassing the actual ShellExecuteExW/UAC
-    GUI flow entirely -- see TURBO_SCAN_VALIDATION_STATUS.md).
+    GUI flow entirely).
 
     Polls with WaitForSingleObject in a short timeout loop rather than
     blocking outright, so `cancel_event` can be honored: if it's set

@@ -224,11 +224,12 @@ def load_all_records(volume_serial):
     build_tree()/find_subtree_node() still need the whole volume's record
     set to walk down to an arbitrary subtree (see find_subtree_node's own
     docstring). Measured at realistic ~1.15M-record scale (synthetic
-    benchmark, not real hardware -- see TURBO_SCAN_VALIDATION_STATUS.md):
-    this is why a tiny-subtree incremental scan was taking nearly as long
-    as scanning all of C:\\Windows -- both pay this same fixed cost. Pickle
-    (vs. the original json.dumps(dataclasses.asdict(...)) format) cut that
-    floor by roughly a third; it does not eliminate it."""
+    benchmark, not real hardware): this is why a tiny-subtree incremental
+    scan was taking nearly as long as scanning all of C:\\Windows -- both
+    pay this same fixed cost. Pickle (vs. the original
+    json.dumps(dataclasses.asdict(...)) format) cut that floor by roughly
+    a third; it does not eliminate it -- see the roadmap doc's Turbo Scan
+    status note for where this stands."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(

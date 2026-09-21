@@ -19,8 +19,8 @@ your machine.
 - **Scan history** (for the Growth History and forecasting features): a
   local SQLite database at
   `~/Library/Application Support/NeuralStorageMatrix/storage_history.db`
-  (macOS) or `%LOCALAPPDATA%\NeuralStorageMatrix\storage_history.db`
-  (Windows).
+  (macOS), `%LOCALAPPDATA%\NeuralStorageMatrix\storage_history.db`
+  (Windows), or `~/NeuralStorageMatrix/storage_history.db` (Linux).
 - **Diagnostic logs** (for troubleshooting crashes, since a windowed build
   has no console to print to): a rotating log file under `logs/` in that
   same app-data folder.
@@ -65,8 +65,12 @@ network activity," and exactly what it is limited to.
 
 ## Verifying this yourself
 
-Storage Scanner has zero third-party runtime dependencies (see `sbom.json`
-attached to each release) and is fully open source — every claim above is
+Storage Scanner needs no third-party runtime dependency for anything above
+(see `sbom.json` attached to each release) — the only exceptions are three
+optional, independently-imported packages (`matplotlib` for growth-history
+charts, `pyarrow`/`openpyxl` for the Data Tools CSV export menu), none of
+which read, write, or transmit anything beyond the local file you pick in
+their own file dialog. The app is fully open source — every claim above is
 checkable by reading the code, or by running the app inside a
 network-isolated sandbox/firewall and confirming the only outbound request
 is the update check described above (and that even that fails silently).

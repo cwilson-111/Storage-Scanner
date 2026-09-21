@@ -9,7 +9,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.scanner import scan
+from storage_scanner.models import Node
+from storage_scanner.scanner import find_inaccessible_paths, scan
 
 
 def _run_scan(path):
@@ -117,3 +118,68 @@ def test_progress_bytes_tracks_towards_the_final_rolled_up_size(tmp_path):
     assert byte_totals  # at least one was posted
     assert byte_totals[-1] == root.size == 300
     assert byte_totals == sorted(byte_totals)  # monotonically non-decreasing
+
+
+# -- find_inaccessible_paths ------------------------------------------------ #
+
+def test_find_inaccessible_paths_returns_empty_for_a_clean_tree():
+    root = Node("/root", "root", is_dir=True)
+    child = Node("/root/ok.bin", "ok.bin", is_dir=False)
+    root.children.append(child)
+
+    assert find_inaccessible_paths(root) == []
+
+
+def test_find_inaccessible_paths_finds_a_directory_that_could_not_be_listed():
+    root = Node("/root", "root", is_dir=True)
+    locked = Node("/root/System Volume Information", "System Volume Information", is_dir=True)
+    locked.error = True  # scandir() failed -- no children were ever discovered
+    root.children.append(locked)
+
+    assert find_inaccessible_paths(root) == [locked]
+
+
+def test_find_inaccessible_paths_finds_a_file_whose_metadata_could_not_be_read():
+    root = Node("/root", "root", is_dir=True)
+    ok = Node("/root/ok.bin", "ok.bin", is_dir=False)
+    bad = Node("/root/locked.bin", "locked.bin", is_dir=False)
+    bad.error = True
+    root.children.extend([ok, bad])
+
+    assert find_inaccessible_paths(root) == [bad]
+
+
+def test_find_inaccessible_paths_finds_errors_nested_several_levels_deep():
+    root = Node("/root", "root", is_dir=True)
+    sub = Node("/root/sub", "sub", is_dir=True)
+    deep = Node("/root/sub/deep", "deep", is_dir=True)
+    bad_file = Node("/root/sub/deep/locked.bin", "locked.bin", is_dir=False)
+    bad_file.error = True
+    root.children.append(sub)
+    sub.children.append(deep)
+    deep.children.append(bad_file)
+
+    assert find_inaccessible_paths(root) == [bad_file]
+
+
+def test_find_inaccessible_paths_collects_every_error_across_separate_branches():
+    root = Node("/root", "root", is_dir=True)
+    bad_a = Node("/root/a", "a", is_dir=True)
+    bad_a.error = True
+    bad_b = Node("/root/b.bin", "b.bin", is_dir=False)
+    bad_b.error = True
+    ok = Node("/root/c", "c", is_dir=True)
+    root.children.extend([bad_a, bad_b, ok])
+
+    found = find_inaccessible_paths(root)
+
+    assert set(found) == {bad_a, bad_b}
+
+
+def test_find_inaccessible_paths_includes_the_root_itself_when_it_errored():
+    # A single-file scan target whose own os.stat() failed (see scan()'s
+    # early-return path) -- the whole "tree" is just this one errored node.
+    root = Node("/solo.bin", "solo.bin", is_dir=False)
+    root.error = True
+
+    assert find_inaccessible_paths(root) == [root]

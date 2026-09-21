@@ -21,9 +21,8 @@ this process can't just post to the GUI's progress_q the way the
 in-process Turbo Scan path does (see turbo_scan._run_turbo_in_process).
 Before this existed, a scan running through this elevated-helper path
 posted zero progress of any kind for its entire duration -- often 15s to
-a minute-plus on a cold scan (real, measured, see
-TURBO_SCAN_VALIDATION_STATUS.md) -- indistinguishable from a hang. See
-_ProgressFileWriter below.
+a minute-plus on a cold scan (real, measured) -- indistinguishable from a
+hang. See _ProgressFileWriter below.
 """
 
 import argparse

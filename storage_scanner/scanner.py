@@ -316,6 +316,35 @@ def scan(path, progress_q, cancel_event, workers=None):
     return root
 
 
+def find_inaccessible_paths(root):
+    """Every node in `root`'s tree with node.error=True -- a directory
+    that couldn't be listed (permission denied, e.g. C:\\System Volume
+    Information, or a vendor backup tool's own locked-down snapshot
+    folder -- being an Administrator doesn't automatically grant access to
+    a folder whose ACL excludes the Administrators group entirely) or a
+    file whose metadata couldn't be read.
+
+    This is the only way to discover those paths after a scan: a directory
+    node with error=True has no children at all (scandir failed before any
+    were even discovered, see _scan_one above), so its entire subtree is
+    silently absent from the tree -- not sized as 0 by mistake, genuinely
+    never counted. Surfacing the *paths* lets a user recognize a familiar
+    culprit (System Volume Information, a backup tool's own storage) and
+    decide what to do about it themselves; there's no reliable way to
+    estimate how large an unreadable directory actually is without being
+    able to read it.
+    """
+    errors = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.error:
+            errors.append(node)
+        if node.is_dir:
+            stack.extend(node.children)
+    return errors
+
+
 def _rollup(root):
     """Sum child sizes/file counts into each directory, bottom-up."""
     stack = [(root, False)]

@@ -33,8 +33,19 @@ PyInstaller's `--onefile` mode embeds a full Python interpreter and the
 Tcl/Tk library Tkinter depends on into the executable, alongside this
 repo's own source — that's what makes it runnable with no separate Python
 install. `sbom.json`, attached to every release, records the exact CPython
-and Tcl/Tk versions embedded in that specific build. Storage Scanner's own
-code imports no third-party runtime package.
+and Tcl/Tk versions embedded in that specific build. Core scanning,
+duplicate detection, and cleanup import no third-party runtime package at
+all.
+
+Three features use an optional third-party package instead, imported only
+when that specific feature runs: `matplotlib` (growth-history charts),
+`pyarrow` (Compress CSV to Parquet), and `openpyxl` (Convert CSV to
+Excel). PyInstaller can only bundle a package that's actually installed in
+the build environment when it runs — i.e. one `pip install -r
+requirements-dev.txt` away — so whether a given release's `.exe` actually
+has one of these three working depends on whether that package was listed
+there at build time. Check the release's own `sbom.json` to confirm
+whether a specific one made it in, rather than assuming from this doc.
 
 ## Where to verify any of this yourself
 

@@ -208,11 +208,10 @@ def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
     incremental refresh showed zero progress of any kind, found via a
     real user report. Two phases can each take real, visible time even
     though the change set itself is usually small: reparsing the dirty
-    records themselves, and -- per this session's own earlier latency
-    investigation (see TURBO_SCAN_VALIDATION_STATUS.md's "Known
-    follow-up") -- load_all_records() re-deserializing the *entire*
-    cached volume afterward, unrelated to how few records actually
-    changed. A `("status", text)` message (new kind, main_window._poll_
+    records themselves, and -- per turbo_cache.load_all_records's own
+    docstring -- re-deserializing the *entire* cached volume afterward,
+    unrelated to how few records actually changed. A `("status", text)`
+    message (new kind, main_window._poll_
     progress just sets the status bar text verbatim) marks the start of
     each phase; `("progress", n)` during the reparse loop matches
     _full_scan_and_cache's own existing convention, at a finer interval

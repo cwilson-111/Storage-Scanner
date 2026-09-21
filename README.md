@@ -2,7 +2,7 @@
 
 # Storage Scanner
 
-A fast, free disk-usage analyzer for **Windows and macOS**. Pick a drive or
+A fast, free disk-usage analyzer for **Windows, macOS, and Linux**. Pick a drive or
 folder and Storage Scanner scans it concurrently, then shows every folder
 and file in a tree **sorted by size**, with a percentage bar so the space
 hogs jump right out — plus duplicate detection, review-first cleanup
@@ -38,9 +38,11 @@ Every release includes, alongside `StorageScanner.exe`:
 - **`StorageScanner-portable.zip`** — the same executable zipped, if you'd
   rather not have anything auto-registered by an installer-style download.
 - **`sbom.json`** — a software bill of materials (CycloneDX format) listing
-  exactly what's bundled into the executable: the frozen Python interpreter
-  and the Tcl/Tk library the GUI depends on. Storage Scanner itself imports
-  no third-party runtime package.
+  exactly what's bundled into the executable: the frozen Python interpreter,
+  the Tcl/Tk library the GUI depends on, and whichever of the optional
+  packages below (see **Features ▸ Automation**) were available at build
+  time. Core scanning, duplicate detection, and cleanup need no third-party
+  runtime package at all.
 - **`SHA256SUMS.txt`** — checksums for all of the above, so you can confirm
   what you downloaded matches what was actually built (`sha256sum -c
   SHA256SUMS.txt` on macOS/Linux, `Get-FileHash` on Windows).
@@ -51,12 +53,27 @@ as future work. See [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md) for exactly
 how a release is built and what these guarantees do and don't cover, and
 [PRIVACY.md](PRIVACY.md) for what the app does (and doesn't) do with your data.
 
-## Running on macOS
+### Which download do I want? (standard vs. Data build)
 
-There's no packaged macOS build yet — run it from source (see below). It's
-fully supported: native Finder integration, Trash-based deletion, and its
-own elevated-scan flow for folders your account can't fully read (see
-**Admin/elevated scanning** below).
+| | `StorageScanner.exe` (standard) | `StorageScanner-Data.exe` |
+|---|---|---|
+| Where | The [latest release](https://github.com/cwilson-111/Storage-Scanner/releases/latest) | A **pre-release** on the [Releases](https://github.com/cwilson-111/Storage-Scanner/releases) page, tagged `data-v…` |
+| Scanning, duplicates, cleanup, history | Yes | Yes |
+| Tools ▸ Data Tools (CSV → Parquet / Excel) | Not included | Included |
+| Size / startup | Smaller, faster to start | Much larger (bundles `pyarrow`), slower to start |
+| In-app update notice | Yes | No — a Data build never prompts you to update, so check the Releases page yourself |
+
+If you don't need the CSV conversion tools, use the standard build. The Data
+build is otherwise identical and ships with its own `sbom-data.json` and
+`SHA256SUMS-data.txt`, which list exactly which optional packages were bundled.
+
+## Running on macOS and Linux
+
+There's no packaged macOS or Linux build yet — run it from source (see
+below). Both are fully supported: native Trash-based deletion (Finder
+integration on macOS; `xdg-open`-based file-manager integration on Linux)
+and their own elevated-scan flow for folders your account can't fully read
+(see **Admin/elevated scanning** below).
 
 ## Features
 
@@ -72,6 +89,14 @@ own elevated-scan flow for folders your account can't fully read (see
   online-only placeholders don't inflate what's actually on disk.
 - **Sorted, heat-colored tree** — every level sorted largest-first, with a
   percentage bar and heat coloring so big consumers stand out immediately.
+- **Turbo Scan (Experimental, Windows only)** — an opt-in toggle (Tools ▸
+  Settings) that reads the NTFS Master File Table directly instead of
+  walking directories one at a time, with a persistent cache and NTFS USN
+  Journal incremental refresh so a repeat scan of an unchanged volume is
+  much faster than the first one. Falls back to the normal scan engine
+  automatically on anything it can't handle (non-NTFS volumes, network
+  shares, any failure). Off by default while it gets more real-world
+  mileage.
 
 ### Admin/elevated scanning
 - **Windows** — relaunches the whole app elevated via the standard UAC
@@ -81,6 +106,11 @@ own elevated-scan flow for folders your account can't fully read (see
   so instead only the *scan itself* runs elevated via the normal
   admin-password prompt — your window stays open and gets the results back
   directly, without restarting.
+- **Linux** — same headless-scan approach as macOS, via a PolicyKit
+  (`pkexec`) prompt instead of `sudo` (so it works under a normal desktop
+  session, not just a terminal). Root never gets a window of its own —
+  Wayland sessions refuse that outright as a security boundary, and this
+  works the same way whether you're on X11, Wayland, or SSH.
 
 ### Finding things
 - **Search & Filter** — filter the current scan by name, extension, size
@@ -136,6 +166,11 @@ own elevated-scan flow for folders your account can't fully read (see
 - **CLI mode** — `Storage-Scanner.py --cli <path> [--format json|csv]
   [--output FILE]` runs a headless scan and prints structured output with
   proper exit codes, for scripts, cron, or Task Scheduler.
+- **Data Tools (Data build only — see "Which download do I want?" above)** — Tools ▸ Data Tools lets you compress any CSV file (not
+  just this app's own exports) to Parquet, or convert it to an Excel
+  `.xlsx` workbook. Both use optional third-party packages (`pyarrow`,
+  `openpyxl` respectively) that aren't required for anything else in the
+  app — see **Privacy & trust** below.
 
 ### Staying current
 - **Update notice** — on launch, a quiet check (at most once a day) for a
@@ -143,7 +178,13 @@ own elevated-scan flow for folders your account can't fully read (see
   an auto-download or auto-run of anything. See [PRIVACY.md](PRIVACY.md)
   for exactly what this does and doesn't send.
 
-Pure Python standard library — **no third-party runtime dependencies**.
+Pure Python standard library for everything above — **no required
+third-party runtime dependencies**. Three features are the exceptions,
+each independently optional and only imported when actually used:
+`matplotlib` (growth-history charts), `pyarrow` (Compress CSV to Parquet),
+and `openpyxl` (Convert CSV to Excel). The app runs fully without any of
+them installed; those specific menu items just report that the package is
+missing instead.
 
 ## Run from source
 
