@@ -155,7 +155,7 @@ def _close_handle(handle):
         logger.debug("CloseHandle failed for an MFT volume handle", exc_info=True)
 
 
-def _resolve_mft_extents(handle, mft_start_lcn, bytes_per_cluster, record_size):
+def _resolve_mft_extents(handle, mft_start_lcn, bytes_per_cluster, record_size, bytes_per_sector):
     """Return every physical extent of the $MFT as a list of
     (start_record_number, record_count, lcn) tuples, in record-number
     order, decoded from record #0's ($MFT's own record) $DATA attribute.
@@ -175,7 +175,9 @@ def _resolve_mft_extents(handle, mft_start_lcn, bytes_per_cluster, record_size):
     record0_offset = mft_start_lcn * bytes_per_cluster
     record0_bytes = _read_bytes(handle, record0_offset, record_size)
 
-    runs_bytes = mft_parser.get_nonresident_data_runs_bytes(record0_bytes)
+    runs_bytes = mft_parser.get_nonresident_data_runs_bytes(
+        record0_bytes, sector_size=bytes_per_sector,
+    )
     if not runs_bytes:
         raise MftVolumeError(
             "Could not find $MFT's own non-resident $DATA run list on record #0 "
@@ -252,9 +254,13 @@ class RecordSource:
                     f"reported for {volume_root!r}"
                 )
             self._bytes_per_cluster = volume_data.BytesPerCluster
+            # Public: mft_parser.parse_base_record reads this off the
+            # record source to apply fixups at the volume's real sector
+            # size instead of assuming 512 -- see mft_parser._apply_fixups.
+            self.bytes_per_sector = volume_data.BytesPerSector
             self._extents = _resolve_mft_extents(
                 self._handle, volume_data.MftStartLcn,
-                self._bytes_per_cluster, self._record_size,
+                self._bytes_per_cluster, self._record_size, self.bytes_per_sector,
             )
         except MftVolumeError:
             _close_handle(self._handle)

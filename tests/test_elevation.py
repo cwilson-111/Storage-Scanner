@@ -28,6 +28,16 @@ def test_elevated_scan_builds_osascript_with_administrator_privileges(monkeypatc
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
+    # run_elevated_scan_macos only ever runs for real on macOS, where
+    # sys.executable is a forward-slash POSIX path -- pinned here so this
+    # test's own assertions hold regardless of which OS actually runs the
+    # test suite. Left to the real host's sys.executable, this test would
+    # fail on a Windows runner: a Windows sys.executable is backslash-
+    # heavy, and the AppleScript-string escaping below doubles every
+    # backslash (correct for an actual stray backslash in a real macOS
+    # path), so the literal, un-doubled sys.executable would no longer
+    # appear in the built script.
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
 
     ok, output = run_elevated_scan_macos("/Users/test/Documents")
 
@@ -66,6 +76,9 @@ def test_elevated_scan_uses_bare_executable_when_frozen(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    # See test_elevated_scan_builds_osascript_with_administrator_privileges
+    # for why this is pinned rather than left as the real host's own value.
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
 
     run_elevated_scan_macos("/Users/test")
 

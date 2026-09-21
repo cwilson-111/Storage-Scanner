@@ -50,7 +50,7 @@ def is_protected_path(path):
     already refuses to touch during duplicate scans — same list, reused
     here so "Protected" means the same thing everywhere in the app."""
     normalized = os.path.normcase(os.path.normpath(path))
-    return any(marker in normalized for marker in DEFAULT_DUPLICATE_EXCLUDES)
+    return any(os.path.normcase(marker) in normalized for marker in DEFAULT_DUPLICATE_EXCLUDES)
 
 
 def _last_touched(node):

@@ -94,6 +94,19 @@ def _windows_alloc_size(path, fallback):
     """
     try:
         low = ctypes.windll.kernel32.GetCompressedFileSizeW(path, None)
+        # ctypes defaults a windll call's return type to signed c_int;
+        # GetCompressedFileSizeW's real return is an unsigned DWORD, so a
+        # low-DWORD value >= 0x80000000 (a compressed size with that bit
+        # set, or the INVALID_FILE_SIZE sentinel 0xFFFFFFFF itself) comes
+        # back here as a negative Python int -- fold it back into the
+        # correct unsigned 32-bit value before using it for anything.
+        # Correcting `low` itself (not just the comparison below) matters:
+        # it's also used for the cluster-rounding math and final return a
+        # few lines down, so a masked-only comparison would still hand
+        # back a corrupted negative alloc_size for a large compressed file
+        # that isn't actually the INVALID_FILE_SIZE failure case.
+        if low < 0:
+            low &= 0xFFFFFFFF
         if low == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
             return fallback
         # High 32 bits aren't retrievable without a second out-param this
@@ -228,7 +241,18 @@ def scan(path, progress_q, cancel_event, workers=None):
             if cancel_event.is_set():
                 return
             try:
-                st_info = entry.stat(follow_symlinks=False)
+                if _IS_WINDOWS:
+                    # entry.stat() on Windows never populates real
+                    # st_ino/st_dev/st_nlink (always 0/0/1) -- it's built
+                    # from the cheap WIN32_FIND_DATA the directory listing
+                    # itself already returned, which carries no file-index
+                    # or link-count info at all. A real os.stat() call is
+                    # the only way to get accurate hard-link identity --
+                    # without it, hard-link dedup below silently never
+                    # triggers on Windows (every ino comes back 0).
+                    st_info = os.stat(entry.path, follow_symlinks=False)
+                else:
+                    st_info = entry.stat(follow_symlinks=False)
             except OSError:
                 st_info = None
 
@@ -316,8 +340,49 @@ def scan(path, progress_q, cancel_event, workers=None):
     return root
 
 
+def find_inaccessible_paths(root):
+    """Every node in `root`'s tree with node.error=True -- a directory
+    that couldn't be listed (permission denied, e.g. C:\\System Volume
+    Information, or a vendor backup tool's own locked-down snapshot
+    folder -- being an Administrator doesn't automatically grant access to
+    a folder whose ACL excludes the Administrators group entirely) or a
+    file whose metadata couldn't be read.
+
+    This is the only way to discover those paths after a scan: a directory
+    node with error=True has no children at all (scandir failed before any
+    were even discovered, see _scan_one above), so its entire subtree is
+    silently absent from the tree -- not sized as 0 by mistake, genuinely
+    never counted. Surfacing the *paths* lets a user recognize a familiar
+    culprit (System Volume Information, a backup tool's own storage) and
+    decide what to do about it themselves; there's no reliable way to
+    estimate how large an unreadable directory actually is without being
+    able to read it.
+    """
+    errors = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.error:
+            errors.append(node)
+        if node.is_dir:
+            stack.extend(node.children)
+    return errors
+
+
 def _rollup(root):
-    """Sum child sizes/file counts into each directory, bottom-up."""
+    """Sum child sizes/file counts into each directory, bottom-up.
+
+    A directory also inherits `error=True` from any child that couldn't be
+    fully read (an unreadable subdirectory, or a file whose stat() failed)
+    -- without this, a permission-denied folder deep in the tree left every
+    ancestor's total silently understated by that whole subtree's size,
+    with the ⚠ warning icon (see main_window._insert_node) shown only on
+    the one row that actually failed, invisible unless a user happened to
+    have that exact row expanded. Post-order traversal means a grandchild's
+    error is already folded into its parent by the time the parent's own
+    children are summed into the grandparent, so this propagates all the
+    way to the root in one pass.
+    """
     stack = [(root, False)]
     while stack:
         node, processed = stack.pop()
@@ -328,6 +393,8 @@ def _rollup(root):
                 node.size += child.size
                 node.alloc_size += child.alloc_size
                 node.file_count += child.file_count
+                if child.error:
+                    node.error = True
         else:
             stack.append((node, True))
             for child in node.children:

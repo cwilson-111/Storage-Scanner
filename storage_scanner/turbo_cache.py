@@ -97,12 +97,28 @@ def init_cache_db():
     conn.close()
 
 
+class TurboCacheCorruptError(Exception):
+    """A cached record's blob couldn't be deserialized -- a truncated
+    write, a disk error, or some other corrupt row. Distinct from a real
+    bug elsewhere so the caller can invalidate just this volume's cache
+    and fall back to a full scan: the same self-healing remedy already
+    used for a stale or wrapped USN journal (see turbo_scan.
+    get_records_using_cache), rather than repeating the same failure
+    (and Compatible-engine fallback) on every future scan of this volume
+    forever, with the cache never getting a chance to rebuild itself."""
+
+
 def _record_to_blob(record):
     return pickle.dumps(record, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def _record_from_blob(blob):
-    return pickle.loads(blob)
+    try:
+        return pickle.loads(blob)
+    except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, IndexError) as exc:
+        # pickle's own docs: malformed data can surface as any of these
+        # types, not just UnpicklingError.
+        raise TurboCacheCorruptError(f"Could not deserialize a cached record: {exc}") from exc
 
 
 def get_cached_volume(volume_serial):
@@ -224,11 +240,12 @@ def load_all_records(volume_serial):
     build_tree()/find_subtree_node() still need the whole volume's record
     set to walk down to an arbitrary subtree (see find_subtree_node's own
     docstring). Measured at realistic ~1.15M-record scale (synthetic
-    benchmark, not real hardware -- see TURBO_SCAN_VALIDATION_STATUS.md):
-    this is why a tiny-subtree incremental scan was taking nearly as long
-    as scanning all of C:\\Windows -- both pay this same fixed cost. Pickle
-    (vs. the original json.dumps(dataclasses.asdict(...)) format) cut that
-    floor by roughly a third; it does not eliminate it."""
+    benchmark, not real hardware): this is why a tiny-subtree incremental
+    scan was taking nearly as long as scanning all of C:\\Windows -- both
+    pay this same fixed cost. Pickle (vs. the original
+    json.dumps(dataclasses.asdict(...)) format) cut that floor by roughly
+    a third; it does not eliminate it -- see the roadmap doc's Turbo Scan
+    status note for where this stands."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(

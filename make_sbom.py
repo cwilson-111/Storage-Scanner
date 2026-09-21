@@ -25,6 +25,14 @@ from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 
 
+# Optional, lazily-imported runtime packages (see history.py's matplotlib
+# guard and storage_scanner/csv_to_*.py): PyInstaller only bundles one if
+# it was actually installed in the build environment, so the SBOM lists
+# exactly whichever of these were present -- never a fixed list that could
+# claim a package is in a build it isn't.
+_OPTIONAL_RUNTIME_PACKAGES = ("matplotlib", "pyarrow", "openpyxl")
+
+
 def _pkg(name):
     try:
         return pkg_version(name)
@@ -65,6 +73,17 @@ def build_sbom(app_version):
         },
     ]
 
+    for optional_package in _OPTIONAL_RUNTIME_PACKAGES:
+        found_version = _pkg(optional_package)
+        if found_version:
+            components.append({
+                "type": "library",
+                "name": optional_package,
+                "version": found_version,
+                "description": "Optional feature dependency, bundled because it was installed at build time.",
+                "scope": "optional",
+            })
+
     for build_tool in ("pyinstaller", "pillow"):
         found_version = _pkg(build_tool)
         if found_version:
@@ -87,11 +106,13 @@ def build_sbom(app_version):
         },
         "components": components,
         "_notes": (
-            "Storage Scanner itself has zero third-party runtime dependencies. "
+            "Storage Scanner has no required third-party runtime dependencies. "
             "The 'required' components above are bundled by PyInstaller's "
             "--onefile packaging (the Python interpreter and the Tcl/Tk "
             "library Tkinter depends on), not pip packages the app imports. "
-            "The 'excluded' components are build-time tooling only."
+            "The 'optional' components, if any, back individual optional "
+            "features and are only listed when they were installed at build "
+            "time. The 'excluded' components are build-time tooling only."
         ),
     }
 

@@ -172,17 +172,19 @@ def _read_header(raw):
     }
 
 
-def _apply_fixups(raw, header):
+def _apply_fixups(raw, header, sector_size=_SECTOR_SIZE):
     """Reverse the Update Sequence Array substitution, or None if the
     per-sector check fails (a torn/corrupt write).
 
-    NTFS stamps the last 2 bytes of every 512-byte sector in a multi-sector
-    record with a shared "USN" value and relocates the real bytes that used
-    to live there into the Update Sequence Array, so a partially-written
-    record can be detected (the stamped USN would then be missing from one
-    sector). Every other field in the record is untrustworthy until this
-    runs -- get it wrong and two real bytes every 512 bytes are silently
-    corrupted, which can land inside a size or name field on a large record.
+    NTFS stamps the last 2 bytes of every sector (the volume's real
+    BytesPerSector -- 512 on the overwhelming majority of drives, but 4096
+    on a native 4Kn volume) in a multi-sector record with a shared "USN"
+    value and relocates the real bytes that used to live there into the
+    Update Sequence Array, so a partially-written record can be detected
+    (the stamped USN would then be missing from one sector). Every other
+    field in the record is untrustworthy until this runs -- get the sector
+    size wrong and two real bytes every sector are silently corrupted,
+    which can land inside a size or name field on a large record.
     """
     usa_offset = header["usa_offset"]
     usa_count = header["usa_size"]
@@ -194,7 +196,7 @@ def _apply_fixups(raw, header):
     usn = bytes(raw[usa_offset:usn_end])
     fixed = bytearray(raw)
     for i in range(1, usa_count):
-        check_off = i * _SECTOR_SIZE - 2
+        check_off = i * sector_size - 2
         if check_off + 2 > len(raw):
             break  # record shorter than this sector -- nothing more to fix
         if bytes(raw[check_off:check_off + 2]) != usn:
@@ -206,11 +208,11 @@ def _apply_fixups(raw, header):
     return bytes(fixed)
 
 
-def _read_header_and_fixup(raw):
+def _read_header_and_fixup(raw, sector_size=_SECTOR_SIZE):
     header = _read_header(raw)
     if header is None:
         return None, None
-    fixed = _apply_fixups(raw, header)
+    fixed = _apply_fixups(raw, header, sector_size)
     if fixed is None:
         return None, None
     return header, fixed
@@ -401,8 +403,14 @@ def parse_base_record(record_number, record_source):
     has) -- all of these are "unreadable", never a raised exception, so a
     caller walking the whole MFT can just skip whatever comes back as None.
     """
+    # Real record sources (mft_volume.RecordSource) carry the volume's
+    # actual BytesPerSector; fakes/tests without one default to 512, the
+    # near-universal case, matching this module's previous hardcoded
+    # behavior.
+    sector_size = getattr(record_source, "bytes_per_sector", _SECTOR_SIZE)
+
     raw = record_source.record_at(record_number)
-    header, fixed = _read_header_and_fixup(raw)
+    header, fixed = _read_header_and_fixup(raw, sector_size)
     if header is None:
         return None
     if not (header["flags"] & _RECORD_FLAG_IN_USE):
@@ -423,8 +431,16 @@ def parse_base_record(record_number, record_source):
                 ext_raw = record_source.record_at(target_record_number)
             except (LookupError, OSError):
                 continue  # missing extension record -- best-effort, skip it
-            ext_header, ext_fixed = _read_header_and_fixup(ext_raw)
+            ext_header, ext_fixed = _read_header_and_fixup(ext_raw, sector_size)
             if ext_header is None:
+                continue
+            if not (ext_header["flags"] & _RECORD_FLAG_IN_USE):
+                continue  # slot was freed and not yet reused -- stale reference
+            expected_sequence = (entry.base_frn >> 48) & 0xFFFF
+            if ext_header["sequence_number"] != expected_sequence:
+                # NTFS reused this record slot for a different file since the
+                # $ATTRIBUTE_LIST entry was written -- trusting it here would
+                # merge that other file's attributes into this one.
                 continue
             for ext_attr in _iter_attributes(ext_fixed, ext_header):
                 if (ext_attr.attr_type == entry.attr_type
@@ -483,7 +499,7 @@ def parse_base_record(record_number, record_source):
     )
 
 
-def get_nonresident_data_runs_bytes(record_bytes, attr_type=_ATTR_DATA):
+def get_nonresident_data_runs_bytes(record_bytes, attr_type=_ATTR_DATA, sector_size=_SECTOR_SIZE):
     """Locate one raw MFT record's first non-resident, unnamed attribute
     of `attr_type` and return its still-encoded data-run bytes, or None if
     there's no such attribute (missing, resident, or named).
@@ -496,8 +512,13 @@ def get_nonresident_data_runs_bytes(record_bytes, attr_type=_ATTR_DATA):
     the $MFT's own record #0 $DATA runs to find every physical extent of a
     (possibly fragmented) $MFT -- decoding those bytes into (length, LCN)
     pairs happens there via decode_data_runs, not here.
+
+    `sector_size` defaults to 512 (the near-universal case); mft_volume
+    passes the volume's real BytesPerSector, since this is called to
+    bootstrap the $MFT's own layout before a RecordSource object (which
+    would otherwise carry that value) exists.
     """
-    header, fixed = _read_header_and_fixup(record_bytes)
+    header, fixed = _read_header_and_fixup(record_bytes, sector_size)
     if header is None:
         return None
     for attr in _iter_attributes(fixed, header):

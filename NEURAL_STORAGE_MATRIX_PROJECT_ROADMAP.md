@@ -2,21 +2,39 @@
 
 ## Status update
 
-Phases 1-3 below are complete except where noted (NTFS MFT fast scan, and
-a handful of items explicitly scoped out along the way — ransomware-style
-extension tracking, duplicate-count history, an in-app auto-undo). Phase 4
-is partially done: everything buildable without a purchased certificate is
-in place; actual code-signing is still blocked on you obtaining one.
+Phases 1-3 below are complete, including NTFS MFT fast scan (Turbo Scan),
+except a handful of items explicitly scoped out along the way —
+ransomware-style extension tracking, duplicate-count history, an in-app
+auto-undo. Phase 4 is partially done: everything buildable without a
+purchased certificate is in place; actual code-signing is still blocked on
+you obtaining one.
 
-Two things worth flagging honestly:
-- **Naming is still inconsistent.** The in-app window title is "Neural
-  Storage Matrix" while the repo, README, and executable name are all
-  "Storage Scanner" — the P1 naming-consistency item below was only
-  partially addressed (fixed a couple of leftover "TreeSize" references
-  from an even earlier name), not fully resolved.
-- **CI doesn't gate on tests.** `build.yml` builds and releases without
-  ever running `pytest`/`pyflakes` first — the automated-quality-gates
-  item below (P4/#10) was never wired into the release pipeline itself.
+Turbo Scan (item 1 below) went from "not started" to fully built, unit- and
+integration-tested, and validated across several real-hardware sessions —
+correctness bugs (fragmented `$MFT`, hard-link dedup scope, `alloc_size`
+rounding, non-resident `$ATTRIBUTE_LIST`, a chunk-cache perf bug, cloud-
+placeholder false positives, a reparse-point-as-root gap), a persistent
+cache with NTFS USN Journal incremental refresh, and a progress-reporting
+bug caught by a real user report after initial release. It ships off by
+default behind a "Turbo Scan (Experimental)" toggle — see the item's own
+section below for current status and what's still open.
+
+The app also gained a Linux port during this work (scan, Trash-based
+delete, and its own elevated-scan flow — same three-platform pattern as
+Windows/macOS), and a "Data Tools" menu (Compress CSV to Parquet, Convert
+CSV to Excel), shipped only in a separate Windows "Data build" — see the
+CSV-to-Parquet section near the end of this doc.
+
+Two gaps flagged in an earlier pass here are now closed:
+- **Naming consistency.** The in-app window title now reads "Storage
+  Scanner" (matching the repo, README, and executable name) instead of
+  the old "Neural Storage Matrix" — the P1 naming-consistency item below
+  is fully resolved.
+- **CI gates on tests.** `build.yml` now has a `test` job (`pytest` +
+  `pyflakes`, on `windows-latest` since several tests exercise Windows-only
+  code paths) that the `build`/release job depends on via `needs: test` —
+  a broken test or lint failure now blocks the release, closing out the
+  automated-quality-gates item below (P4/#10) as far as CI wiring goes.
 
 See the phase checklists further down for what's done vs. not, item by item.
 
@@ -115,7 +133,7 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 
 Several broad `except Exception: pass` blocks hide packaging and UI failures. Log diagnostic details to a rotating file in `%LOCALAPPDATA%` while keeping user-facing messages concise.
 
-### P1: Resolve naming consistency
+### P1: Resolve naming consistency — ✅ done (as "Storage Scanner", not "Neural Storage Matrix")
 
 Use one canonical entry point and product name everywhere. Recommended:
 
@@ -124,6 +142,12 @@ Use one canonical entry point and product name everywhere. Recommended:
 - Display name: `Neural Storage Matrix`
 
 Update module docstrings, build scripts, workflow commands, README instructions, icon metadata, and release names together.
+
+The project settled on **"Storage Scanner"** as the canonical name instead —
+repo, README, executable (`StorageScanner.exe`), and now the in-app window
+title all agree. "Neural Storage Matrix" survives only as this document's
+own title/filename, a relic of the earlier "cyber terminal" theme this app
+no longer has.
 
 ### P1: Split the monolith
 
@@ -160,14 +184,27 @@ Explicitly define handling for:
 
 ## Market-leading product roadmap
 
-### 1. Add an NTFS Master File Table fast path
+### 1. Add an NTFS Master File Table fast path — ✅ done, ships as "Turbo Scan (Experimental)"
 
-This is the most important competitive improvement. Traditional recursive enumeration will struggle against tools that read the NTFS MFT. Build two engines:
+Built as originally scoped: two engines — **Turbo Scan** (raw MFT parsing,
+NTFS-only, `storage_scanner/mft_*.py`/`turbo_scan.py`) with automatic
+fallback to **Compatible Scan** (the existing directory-walking engine) for
+network shares, removable media, non-NTFS filesystems, or any Turbo Scan
+failure. A persistent on-disk cache plus NTFS USN Journal incremental
+refresh (`turbo_cache.py`/`usn_journal.py`) means a repeat scan of an
+unchanged volume reaches parity with Compatible's own speed instead of
+re-reading the whole MFT every time.
 
-- **Turbo Scan:** MFT-based, elevated when necessary, NTFS only.
-- **Compatible Scan:** current directory traversal for network shares, removable media, and non-NTFS file systems.
+Not built: the "achieved throughput / confidence-completeness indicators"
+UI polish from the original scope — the engine and its fallback are surfaced
+functionally (status text, automatic fallback with no user action needed)
+but there's no dedicated indicator panel.
 
-Show which engine was used, achieved throughput, elapsed time, skipped paths, and confidence/completeness indicators. Cache stable metadata and support incremental refresh using the NTFS USN Journal after the first scan.
+Off by default behind a "Turbo Scan (Experimental)" toggle (Tools ▸
+Settings) pending more real-world mileage before it's recommended broadly —
+see the "Status update" section above for what's been validated so far and
+what's still open (a small-subtree incremental-scan performance follow-up;
+not a correctness issue).
 
 ### 2. Build a synchronized treemap and sunburst explorer
 
@@ -186,7 +223,7 @@ Do not market automatic deletion as intelligence. Build explainable recommendati
 
 Every recommendation should show **why it was flagged**, estimated recoverable space, risk level, dependencies, and proposed action. Default to review queues, Recycle Bin, quarantine, or archive. Never silently delete user content.
 
-**Proposed, not yet built: persist recommendations across restarts.** Today, Cleanup Recommendations and "Find Duplicate Files" results only live in memory for the current session (the in-session duplicate-result cache added after this doc's last update at least stops Cleanup Recommendations from re-hashing everything a second time if you already ran a duplicate scan) — but closing and reopening the app always means starting from zero, even to re-review a list you already generated minutes ago. The target design is full cold-start recall: persist the last completed scan's Protected/Review/Duplicate recommendations to SQLite (same `%LOCALAPPDATA%` database convention as `history.py`/`turbo_cache.py`), keyed by scan path, so opening the app fresh and going straight to Tools ▸ Clean Up ▸ Cleanup Recommendations shows last run's results immediately for the last-scanned path — no scan required first — with a "last updated `<time>`" note and an explicit Rescan button to refresh. This needs more than just the duplicate hash groups: the Protected/Review categories are derived from the full scanned tree's per-file metadata (size, mtime, atime, cloud-placeholder flag), which today isn't saved anywhere beyond folder-level rollups ≥50 MB — that metadata would need its own persisted table, refreshed on every scan, expired/replaced (not merely appended to) so a rescan's results always fully supersede the previous run's.
+**✅ Done: persist recommendations across restarts.** Cleanup Recommendations now shows full cold-start recall: `storage_scanner/cleanup_cache.py` persists the last *computed* set of Protected/Review/Duplicate recommendations to SQLite (`cleanup_cache.db`, same `%LOCALAPPDATA%` convention as `history.py`/`turbo_cache.py`), keyed by scan path, each save fully replacing the previous one. Opening the app fresh and going straight to Tools ▸ Clean Up ▸ Cleanup Recommendations — with zero scans this session — shows the most recently cached run immediately, labeled with when it was computed and for which path, plus a **Rescan** button to refresh it for real. Deleting or archiving a row updates the persisted cache too, so a stale row for an already-removed file doesn't linger into the next cold start. Simpler than originally scoped here: rather than persisting the full per-file metadata needed to recompute recommendations from scratch, it persists the already-computed recommendation rows themselves — smaller, and a more direct match for "show me what I found last time," with Rescan covering the "get a truly fresh answer" case.
 
 ### 4. Make duplicate cleanup genuinely safer
 
@@ -240,6 +277,43 @@ Add a first-run explanation of safe deletion, permission limitations, cloud plac
 
 OneDrive and similar placeholders must be distinguished from fully local files. Show logical size, local allocated size, online-only state, and sync state when Windows exposes those attributes. Avoid accidentally downloading online-only content during hashing or preview. Offer safe actions such as “Free up local space” separately from deletion.
 
+### 9a. Ship packaged builds for macOS and Linux, not just Windows
+
+**Not yet built.** The app itself already runs cross-platform — `platform_support.py`'s
+`IS_MACOS`/`IS_LINUX` branches cover trash/recycle, elevated scanning, and
+drive listing on both — but `build.yml` only ever runs on `windows-latest`,
+so the only downloadable artifact anywhere is `StorageScanner.exe`. A macOS
+or Linux user who clicks the README's download button gets a Windows PE
+binary their OS categorically cannot run: macOS's Gatekeeper refuses it
+outright with an explicit "Microsoft Windows applications are not
+supported on macOS" dialog; Linux has no equivalent friendly message at
+all — depending on the desktop environment, double-clicking it typically
+does nothing (no application associated with a foreign PE binary), or
+running it from a terminal surfaces a bare kernel `Exec format error`.
+Today's README callout (see the "On macOS?" note near the top) papers
+over this by warning people before they click, but a warning isn't the
+same as a working download.
+
+To actually fix it:
+
+- Add a `macos-latest` job to `build.yml` that runs PyInstaller
+  (`--windowed --onedir`, since macOS `.app` bundles don't like
+  `--onefile`) to produce `StorageScanner.app`, then wraps it in a `.dmg`
+  (`hdiutil create` — stdlib-adjacent, no extra dependency) for release.
+  Unsigned/unnotarized, it'll hit Gatekeeper's "unidentified developer"
+  prompt (right-click → Open bypasses it) — the same class of trust
+  friction Windows SmartScreen already causes today, not a new problem,
+  and notarization has the same certificate/Apple Developer Program cost
+  blocker as Windows code-signing (see item 9 below).
+- Add a `ubuntu-latest` job producing a plain PyInstaller `--onefile`
+  binary (or an AppImage for a nicer double-click experience across
+  distros without a system Python/Tkinter already present).
+- Update the README's download section to link all three artifacts, and
+  update the "On macOS?" callout once a real macOS build exists — it
+  should point people at a `.dmg`, not just at running from source.
+- Extend `make_sbom.py`/checksum generation to cover both new artifacts,
+  matching what Windows already gets.
+
 ### 9. Treat trust as a product feature
 
 - Code-sign Windows releases.
@@ -268,6 +342,11 @@ Build tests for:
 
 Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test job that must pass before release. Create generated test trees so correctness and performance can be benchmarked across versions.
 
+**The GitHub Actions test-job-gating piece is done** — `build.yml` now runs
+`pytest`/`pyflakes` in a `test` job that `build` (and therefore the release)
+depends on via `needs:`. Ruff/Black/mypy, coverage thresholds, and clean-runner
+packaging smoke tests are still not in place.
+
 ## Recommended delivery sequence
 
 ### Phase 1: Reliability foundation — ✅ done
@@ -276,15 +355,15 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (116 and counting) — release smoke tests still not wired into CI (see Status update above).
+5. ✅ Add unit tests (335 and counting), and `build.yml` now runs them (plus `pyflakes`) in a `test` job the release build depends on — see Status update above. Packaging smoke tests on a clean runner are still not wired in.
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
-### Phase 2: Competitive core — ✅ done except MFT
+### Phase 2: Competitive core — ✅ done
 
 1. ✅ Add treemap visualization.
 2. ✅ Add search and advanced filters.
 3. ✅ Add allocated-size, hard-link, junction, and cloud-placeholder correctness.
-4. ⏭️ Add MFT fast scan with fallback — explicitly deferred until after MVP, not started.
+4. ✅ Add MFT fast scan with fallback — built and real-hardware validated as Turbo Scan; see item 1 above.
 5. ✅ Add snapshot comparison between arbitrary dates.
 
 ### Phase 3: Differentiation — ✅ done (CLI-only for #5)
@@ -302,6 +381,7 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 3. ✅ Publish SHA-256 checksums and an SBOM.
 4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
+6. ❌ Ship packaged macOS (`.dmg`) and Linux builds — not started; see item 9a above. Today, clicking the README's download button on either OS gets you a Windows `.exe` that can't run there at all (Gatekeeper blocks it outright on macOS; Linux has no build or friendly error either).
 
 ## Product positioning
 
@@ -341,7 +421,22 @@ A compelling next release would include:
 That release would materially improve reliability, usability, visual clarity, and trust instead of merely adding more menu items.
 
 
-## Compressing chosen csv files to parquet 
+## Compressing chosen csv files to parquet — ✅ done
+
+Shipped as a "Data Tools" menu (Tools ▸ Data Tools) with two actions:
+**Compress CSV to Parquet…** (`storage_scanner/csv_to_parquet.py`, using
+`pyarrow` as sketched below) and, added alongside it, **Convert CSV to
+Excel (.xlsx)…** (`storage_scanner/csv_to_xlsx.py`, using `openpyxl`).
+Both file pickers work on any CSV on disk, not just this app's own
+exports. Both packages are optional, lazily-imported runtime dependencies
+(same pattern as the existing optional `matplotlib` growth-history charts)
+— which is why they ship only in a separate Windows "Data build"
+(`.github/workflows/build-data.yml`, tagged `data-v…`, published as a
+pre-release), not in the standard `.exe`, since `pyarrow` alone adds well
+over 100 MB.
+
+Original note this was built from, kept for reference:
+
 2. Using PyArrow (Fastest & Memory Efficient)If you are dealing with larger datasets and want to bypass the overhead of creating a Pandas DataFrame, you can use pyarrow directly. It is highly optimized for the Apache Arrow format. [1] (https://www.confessionsofadataguy.com/converting-csvs-to-parquets-with-python-and-scala/)pythonimport pyarrow.csv as pv
 import pyarrow.parquet as pq
 
@@ -350,3 +445,6 @@ table = pv.read_csv('input.csv')
 
 # Write the Table to a Parquet file with specified compression
 pq.write_table(table, 'output.parquet', compression='snappy')
+
+
+# Fix Miscrosoft Wondpws Bug unsupported on Mac bug when downlaoding executable from git. Might have been changed during linux pathing

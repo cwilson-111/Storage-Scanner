@@ -140,6 +140,33 @@ def test_save_full_scan_then_load_all_records_round_trips(tmp_path, monkeypatch)
     assert cached_volume["next_usn"] is None
 
 
+def test_load_all_records_raises_turbo_cache_corrupt_error_on_a_truncated_blob(tmp_path, monkeypatch):
+    """A truncated/corrupt record_blob (interrupted write, disk error)
+    must surface as TurboCacheCorruptError specifically, not an
+    unqualified pickle exception -- turbo_scan.get_records_using_cache
+    catches this exact type to invalidate the volume and self-heal on
+    the next scan, instead of repeating the same failure forever."""
+    db_path = _init_db(tmp_path, monkeypatch)
+    turbo_cache.save_full_scan(
+        VOLUME_SERIAL, "C:\\", ROOT_FRN, 1024, [_record(5, is_directory=True, names=[])],
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE cached_records SET record_blob = ? WHERE volume_serial = ?",
+        (b"not a valid pickle blob", VOLUME_SERIAL),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        turbo_cache.load_all_records(VOLUME_SERIAL)
+    except turbo_cache.TurboCacheCorruptError:
+        pass
+    else:
+        raise AssertionError("expected TurboCacheCorruptError for a corrupt record blob")
+
+
 def test_second_save_full_scan_replaces_the_previous_record_set(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
     first = [_record(5, is_directory=True, names=[]), _record(10, names=[_name(ROOT_FRN, "old.txt")])]

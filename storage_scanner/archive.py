@@ -74,8 +74,12 @@ def archive_file(node, source):
                 logger.warning("Could not clean up partial archive %r", archive_path, exc_info=True)
         return ArchiveResult(False, None, False, str(exc))
 
-    original_removed = recycle_and_log(node, source=source, action="archive")
+    original_removed = recycle_and_log(
+        node, source=source, action="archive",
+        extra_error_context=f"archive already written to {archive_path}",
+    )
     error = None if original_removed else (
-        "Archived successfully, but the original could not be removed — both copies now exist."
+        f"Archived to {archive_path}, but the original could not be removed — "
+        "both copies now exist."
     )
     return ArchiveResult(True, archive_path, original_removed, error)

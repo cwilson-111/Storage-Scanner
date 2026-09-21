@@ -10,6 +10,7 @@ import queue
 import threading
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, StringVar, TOP, Toplevel, X, messagebox, ttk
 
+from storage_scanner import cleanup_cache
 from storage_scanner.archive import archive_file, likely_compresses_well
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE, CATEGORY_PROTECTED, CATEGORY_REVIEW,
@@ -30,7 +31,24 @@ _CATEGORY_TAGS = {
 
 class CleanupMixin:
     def show_cleanup_recommendations(self):
-        if not self.root_node:
+        cleanup_cache.init_cleanup_cache_db()
+
+        # A live scan this session always wins -- otherwise fall back to
+        # whatever was last actually computed here (any path, any past
+        # session), so opening this straight after launch shows something
+        # useful instead of silently doing nothing (the old behavior when
+        # self.root_node was None). See cleanup_cache.py's own docstring
+        # for why this persists the *computed* recommendation rows, not
+        # the raw scanned tree.
+        live = self.root_node is not None
+        display_scan_path = (
+            self.root_node.path if live else cleanup_cache.get_most_recently_cached_scan_path()
+        )
+        if display_scan_path is None:
+            messagebox.showinfo(
+                "Cleanup Recommendations",
+                "Scan a folder first to see cleanup recommendations.",
+            )
             return
 
         existing = getattr(self, "_cleanup_win", None)
@@ -117,61 +135,78 @@ class CleanupMixin:
                 f"{suffix}"
             )
 
-        # Phase 1: Protected + Review candidates come straight from metadata
-        # already in the scanned tree — fast enough to run synchronously.
-        metadata_recs = find_protected_and_review_candidates(self.root_node)
-        populate(metadata_recs)
-        summarize(metadata_recs, suffix="  (scanning for duplicate files…)")
-
-        # Phase 2: Duplicate candidates need content hashing. If "Find
-        # Duplicate Files" has already been run for this exact scan, reuse
-        # that result instead of hashing every file a second time — and so
-        # those results are never lost just because that window got closed.
-        # self.duplicates persists across windows (see app.py/duplicate_
-        # window.py); _duplicates_scan_root guards against reusing a stale
-        # result left over from a since-replaced scan of a different path.
-        cached_duplicates = self.duplicates
-        cancel_event = threading.Event()
-
-        if cached_duplicates is not None and self._duplicates_scan_root is self.root_node:
-            all_recs = metadata_recs + build_duplicate_recommendations(cached_duplicates)
-            all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
-            populate(all_recs)
-            summarize(all_recs, suffix="  (duplicate results reused from Find Duplicate Files)")
+        if not live:
+            # Cold start: nothing scanned this session -- show whatever
+            # was last actually computed for display_scan_path, instantly,
+            # no scan and no re-hashing needed.
+            cached_recs = cleanup_cache.load_recommendations(display_scan_path)
+            computed_at = cleanup_cache.get_computed_at(display_scan_path)
+            when = computed_at.replace("T", " ") if computed_at else "an earlier session"
+            populate(cached_recs)
+            summarize(
+                cached_recs,
+                suffix=f"  (cached from {when} for {display_scan_path} — Rescan to refresh)",
+            )
             win.protocol("WM_DELETE_WINDOW", win.destroy)
         else:
-            result_q = queue.Queue()
+            # Phase 1: Protected + Review candidates come straight from
+            # metadata already in the scanned tree — fast enough to run
+            # synchronously.
+            metadata_recs = find_protected_and_review_candidates(self.root_node)
+            populate(metadata_recs)
+            summarize(metadata_recs, suffix="  (scanning for duplicate files…)")
 
-            def worker():
-                try:
-                    groups = self._find_duplicate_files(cancel_event=cancel_event)
-                    result_q.put(("done", groups))
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("Duplicate scan for cleanup recommendations failed")
-                    result_q.put(("error", str(exc)))
+            # Phase 2: Duplicate candidates need content hashing. If "Find
+            # Duplicate Files" has already been run for this exact scan, reuse
+            # that result instead of hashing every file a second time — and so
+            # those results are never lost just because that window got closed.
+            # self.duplicates persists across windows (see app.py/duplicate_
+            # window.py); _duplicates_scan_root guards against reusing a stale
+            # result left over from a since-replaced scan of a different path.
+            cached_duplicates = self.duplicates
+            cancel_event = threading.Event()
 
-            def poll():
-                if not win.winfo_exists():
-                    cancel_event.set()
-                    return
-                try:
-                    kind, payload = result_q.get_nowait()
-                except queue.Empty:
-                    win.after(150, poll)
-                    return
-                if kind == "done":
-                    self.duplicates = payload
-                    self._duplicates_scan_root = self.root_node
-                    all_recs = metadata_recs + build_duplicate_recommendations(payload)
-                    all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
-                    populate(all_recs)
-                    summarize(all_recs)
-                else:
-                    summarize(metadata_recs, suffix=f"  (duplicate scan failed: {payload})")
+            if cached_duplicates is not None and self._duplicates_scan_root is self.root_node:
+                all_recs = metadata_recs + build_duplicate_recommendations(cached_duplicates)
+                all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+                populate(all_recs)
+                summarize(all_recs, suffix="  (duplicate results reused from Find Duplicate Files)")
+                cleanup_cache.save_recommendations(display_scan_path, all_recs)
+                win.protocol("WM_DELETE_WINDOW", win.destroy)
+            else:
+                result_q = queue.Queue()
 
-            threading.Thread(target=worker, daemon=True).start()
-            win.after(150, poll)
-            win.protocol("WM_DELETE_WINDOW", lambda: (cancel_event.set(), win.destroy()))
+                def worker():
+                    try:
+                        groups = self._find_duplicate_files(cancel_event=cancel_event)
+                        result_q.put(("done", groups))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Duplicate scan for cleanup recommendations failed")
+                        result_q.put(("error", str(exc)))
+
+                def poll():
+                    if not win.winfo_exists():
+                        cancel_event.set()
+                        return
+                    try:
+                        kind, payload = result_q.get_nowait()
+                    except queue.Empty:
+                        win.after(150, poll)
+                        return
+                    if kind == "done":
+                        self.duplicates = payload
+                        self._duplicates_scan_root = self.root_node
+                        all_recs = metadata_recs + build_duplicate_recommendations(payload)
+                        all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+                        populate(all_recs)
+                        summarize(all_recs)
+                        cleanup_cache.save_recommendations(display_scan_path, all_recs)
+                    else:
+                        summarize(metadata_recs, suffix=f"  (duplicate scan failed: {payload})")
+
+                threading.Thread(target=worker, daemon=True).start()
+                win.after(150, poll)
+                win.protocol("WM_DELETE_WINDOW", lambda: (cancel_event.set(), win.destroy()))
 
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
         button_bar.pack(side=BOTTOM, fill=X)
@@ -181,6 +216,20 @@ class CleanupMixin:
             rec = iid_to_rec.get(sel)
             if rec:
                 self._reveal(rec.node.path, is_dir=rec.node.is_dir)
+
+        def resave_cache():
+            # Keep the persisted cache in sync with what's still actually
+            # shown after a delete/archive -- otherwise a cold-start reopen
+            # (or another session) would recommend deleting something
+            # that's already gone. See show_cleanup_recommendations'
+            # `not live` branch, which is the only consumer of this when
+            # there's no live scan at all to fall back on.
+            cleanup_cache.save_recommendations(display_scan_path, list(iid_to_rec.values()))
+
+        def do_rescan():
+            self.path_var.set(display_scan_path)
+            win.destroy()
+            self.start_scan()
 
         def delete_selected():
             selected = list(tv.selection())
@@ -218,6 +267,9 @@ class CleanupMixin:
                     tv.delete(iid)
                 else:
                     failed.append(rec.node.path)
+
+            if deleted:
+                resave_cache()
 
             self.status_var.set(f"Deleted {deleted:,} item(s) to {TRASH_NAME}.")
             if failed:
@@ -282,6 +334,9 @@ class CleanupMixin:
                 iid_to_rec.pop(iid, None)
                 tv.delete(iid)
 
+            if archived:
+                resave_cache()
+
             status_bits = [f"Archived {archived:,} file(s) (rescan to see the .zip files)."]
             if partial:
                 status_bits.append(f"{partial} kept both copies (original couldn't be removed).")
@@ -298,6 +353,7 @@ class CleanupMixin:
             text="Protected items can never be deleted from this window.",
             foreground=COLORS["muted"],
         ).pack(side=LEFT)
+        ttk.Button(button_bar, text="Rescan", command=do_rescan).pack(side=LEFT, padx=(10, 0))
         ttk.Button(
             button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
         ).pack(side=RIGHT, padx=(6, 0))

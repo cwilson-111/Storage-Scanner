@@ -13,8 +13,8 @@ import subprocess
 import threading
 import time
 from tkinter import (
-    BooleanVar, BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, W, X,
-    filedialog, messagebox, simpledialog, ttk,
+    BooleanVar, BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP,
+    Toplevel, W, X, filedialog, messagebox, simpledialog, ttk,
 )
 
 from history import get_app_metadata, set_app_metadata, set_budget
@@ -32,7 +32,9 @@ from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME, IS_LINUX, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
+    resource_path,
 )
+from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
@@ -625,6 +627,12 @@ class MainWindowMixin:
         else:
             self._dismiss_turbo_fallback_banner()
 
+        inaccessible = find_inaccessible_paths(node)
+        if inaccessible:
+            self._show_inaccessible_paths_banner(inaccessible)
+        else:
+            self._dismiss_inaccessible_paths_banner()
+
         self.status_var.set(
             f"{engine_prefix}{node.path}  —  {human_size(node.size)} in "
             f"{node.file_count:,} files | Saving history..."
@@ -735,6 +743,134 @@ class MainWindowMixin:
         if banner is not None:
             banner.destroy()
             self._turbo_fallback_banner = None
+
+    def _show_inaccessible_paths_banner(self, inaccessible_nodes):
+        """Dismissible banner listing how many paths this scan couldn't
+        read at all -- a directory that failed to list has no children in
+        the tree, so its entire subtree is silently missing from the
+        total, not just underestimated. Being an Administrator doesn't
+        guarantee access to every folder (System Volume Information is the
+        classic example: its ACL excludes the Administrators group
+        outright), so this can happen even on an elevated scan. Same
+        dismissible-banner pattern as _show_turbo_fallback_banner, but the
+        list itself only ever comes from this specific scan's own results
+        -- see _show_inaccessible_paths_window."""
+        self._dismiss_inaccessible_paths_banner()
+
+        self._last_inaccessible_paths = inaccessible_nodes
+
+        banner = ttk.Frame(self.root, padding=(10, 6))
+        self._inaccessible_paths_banner = banner
+
+        count = len(inaccessible_nodes)
+        noun = "path" if count == 1 else "paths"
+
+        def dismiss():
+            self._dismiss_inaccessible_paths_banner()
+
+        ttk.Label(
+            banner, style="Accent.TLabel",
+            text=(
+                f"⚠ {count} {noun} couldn't be read (permissions) — "
+                f"the total above may be missing whatever they contain."
+            ),
+        ).pack(side=LEFT)
+        ttk.Button(
+            banner, text="View List", command=self._show_inaccessible_paths_window,
+        ).pack(side=LEFT, padx=(10, 0))
+        ttk.Button(banner, text="✕", width=3, command=dismiss).pack(side=RIGHT)
+
+        banner.pack(side=TOP, fill=X, before=self.toolbar_frame)
+
+    def _dismiss_inaccessible_paths_banner(self):
+        banner = getattr(self, "_inaccessible_paths_banner", None)
+        if banner is not None:
+            banner.destroy()
+            self._inaccessible_paths_banner = None
+
+    def _show_inaccessible_paths_window(self):
+        inaccessible_nodes = getattr(self, "_last_inaccessible_paths", [])
+
+        existing = getattr(self, "_inaccessible_paths_win", None)
+        if existing is not None and existing.winfo_exists():
+            existing.destroy()
+
+        win = Toplevel(self.root)
+        self._inaccessible_paths_win = win
+        win.configure(bg=COLORS["bg"])
+        win.title(f"Couldn't Be Read — {len(inaccessible_nodes)} path(s)")
+        win.geometry("780x420")
+        try:
+            win.iconbitmap(resource_path("icon.ico"))
+        except Exception:  # noqa: BLE001
+            logger.debug("Inaccessible Paths window iconbitmap failed", exc_info=True)
+
+        ttk.Label(
+            win, padding=(10, 8), style="Accent.TLabel",
+            text=(
+                "These paths returned a permission error during the last scan, so "
+                "they (and anything inside them, for a folder) were counted as 0 "
+                "bytes rather than skipped from the total silently. A common cause: "
+                "a folder's permissions exclude even Administrators (e.g. "
+                "C:\\System Volume Information, or a backup tool's own storage) — "
+                "running this app elevated doesn't override that."
+            ),
+            wraplength=740, justify=LEFT,
+        ).pack(side=TOP, fill=X)
+
+        frame = ttk.Frame(win, padding=(10, 0, 10, 10))
+        frame.pack(fill=BOTH, expand=True)
+
+        cols = ("path", "type")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+        tv.heading("path", text="Path")
+        tv.heading("type", text="Type")
+        tv.column("path", width=620, anchor=W, stretch=True)
+        tv.column("type", width=80, anchor=W, stretch=False)
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+
+        iid_to_node = {}
+        for index, inaccessible_node in enumerate(sorted(inaccessible_nodes, key=lambda n: n.path.lower())):
+            iid = tv.insert(
+                "", END,
+                values=(inaccessible_node.path, "Folder" if inaccessible_node.is_dir else "File"),
+                tags=("odd" if index % 2 else "even",),
+            )
+            iid_to_node[iid] = inaccessible_node
+
+        button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
+        button_bar.pack(side=BOTTOM, fill=X)
+
+        def reveal_selected():
+            sel = tv.focus()
+            inaccessible_node = iid_to_node.get(sel)
+            if inaccessible_node:
+                self._reveal(inaccessible_node.path, is_dir=inaccessible_node.is_dir)
+
+        def copy_selected_path():
+            sel = tv.focus()
+            inaccessible_node = iid_to_node.get(sel)
+            if inaccessible_node:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(inaccessible_node.path)
+
+        ttk.Button(
+            button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
+        ).pack(side=LEFT)
+        ttk.Button(button_bar, text="Copy Path", command=copy_selected_path).pack(
+            side=LEFT, padx=6
+        )
+
+        tv.bind("<Double-1>", lambda _e: reveal_selected())
 
     def cancel_scan(self):
         self.cancel_event.set()

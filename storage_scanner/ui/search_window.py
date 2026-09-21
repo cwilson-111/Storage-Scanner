@@ -245,9 +245,12 @@ class SearchMixin:
         while stack:
             node, parent = stack.pop()
             if node is target_node:
+                # Subtract size and count from ancestors before unlinking —
+                # the search finds target_node by identity, walking from
+                # parent.children, so it must still be attached.
+                self._subtract_from_ancestors(self.root_node, target_node)
                 if parent and target_node in parent.children:
                     parent.children.remove(target_node)
-                self._subtract_from_ancestors(self.root_node, target_node)
                 return
             if node.is_dir:
                 for child in node.children:

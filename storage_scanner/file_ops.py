@@ -21,6 +21,7 @@ _FOF_SILENT = 0x0004
 _FOF_NOCONFIRMATION = 0x0010
 _FOF_ALLOWUNDO = 0x0040          # the bit that routes deletes to the Recycle Bin
 _FOF_NOERRORUI = 0x0400
+_FOF_NORECURSEREPARSE = 0x8000   # don't follow into a junction/symlink's target
 
 _SEE_MASK_NOCLOSEPROCESS = 0x00000040
 _SW_HIDE = 0
@@ -76,7 +77,10 @@ def _recycle_windows(path):
     op.wFunc = _FO_DELETE
     op.pFrom = os.path.abspath(path) + "\x00\x00"
     op.pTo = None
-    op.fFlags = _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI
+    op.fFlags = (
+        _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI
+        | _FOF_NORECURSEREPARSE
+    )
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
 
@@ -401,7 +405,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     project's own validation had exercised (earlier real-hardware
     validation of this same helper always invoked it directly from an
     already-elevated terminal, bypassing the actual ShellExecuteExW/UAC
-    GUI flow entirely -- see TURBO_SCAN_VALIDATION_STATUS.md).
+    GUI flow entirely).
 
     Polls with WaitForSingleObject in a short timeout loop rather than
     blocking outright, so `cancel_event` can be honored: if it's set
