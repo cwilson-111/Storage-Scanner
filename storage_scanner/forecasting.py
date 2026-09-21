@@ -23,8 +23,8 @@ Forecast = namedtuple(
     [
         "status",         # "ok" | "not_growing" | "insufficient_data"
         "days_estimate",  # point estimate, or None
-        "days_optimistic",   # soonest plausible fill date, or None
-        "days_pessimistic",  # latest plausible fill date, or None
+        "days_optimistic",   # latest plausible fill date (most days remaining), or None
+        "days_pessimistic",  # soonest plausible fill date (fewest days remaining), or None
         "confidence",     # "low" | "medium" | "high" | None
         "r_squared",      # fit quality, 0..1, or None
         "data_points",
@@ -133,13 +133,16 @@ def forecast_days_until_full(history, drive_capacity_bytes, now=None):
 
     slope_se = _slope_standard_error(xs, sizes, slope, intercept)
     # A rough +/-1-standard-error band on the slope, translated into a
-    # range of fill dates: a steeper slope fills sooner (optimistic bound
-    # on time remaining), a shallower one fills later (pessimistic bound).
+    # range of fill dates. "Optimistic"/"pessimistic" describe days
+    # *remaining*, not the slope: a shallower (slower-growing) slope
+    # fills later, which is the optimistic (more time left) bound; a
+    # steeper (faster-growing) slope fills sooner, the pessimistic
+    # (less time left) bound.
     fast_slope = slope + slope_se
     slow_slope = slope - slope_se
 
-    days_optimistic = remaining_bytes / fast_slope if fast_slope > 0 else days_estimate
-    days_pessimistic = remaining_bytes / slow_slope if slow_slope > 0 else None
+    days_pessimistic = remaining_bytes / fast_slope if fast_slope > 0 else days_estimate
+    days_optimistic = remaining_bytes / slow_slope if slow_slope > 0 else None
 
     return Forecast(
         status="ok",

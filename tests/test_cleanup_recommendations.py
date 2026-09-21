@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from pathlib import Path
@@ -5,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner import cleanup_recommendations
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE, CATEGORY_PROTECTED, CATEGORY_REVIEW,
     build_duplicate_recommendations, find_protected_and_review_candidates,
@@ -32,9 +34,28 @@ def _dir(parent, name):
     return node
 
 
-def test_protected_path_matches_known_os_markers():
-    assert is_protected_path("/System/Library/CoreServices/foo") is True
-    assert is_protected_path("/Users/me/Documents/report.pdf") is False
+def _protected_marker():
+    """A "/System"-style marker, put through the exact same
+    normcase(normpath(...)) pipeline is_protected_path() itself applies --
+    needed because is_protected_path() reads DEFAULT_DUPLICATE_EXCLUDES,
+    which is a *different, platform-specific* list on each OS (see
+    settings.py) — real Windows/Linux excludes lists never contain
+    "/System" at all, and even if they did, os.path.normpath/normcase
+    rewrite "/System" into a backslash-lowercased form on Windows. These
+    two tests monkeypatch that list directly so they verify is_protected_
+    path()'s own matching logic without depending on which platform's
+    real exclude list happens to be active."""
+    return os.path.normcase(os.path.normpath(os.path.join(os.sep, "System")))
+
+
+def test_protected_path_matches_known_os_markers(monkeypatch):
+    monkeypatch.setattr(
+        cleanup_recommendations, "DEFAULT_DUPLICATE_EXCLUDES", (_protected_marker(),),
+    )
+    system_path = os.path.join(os.sep, "System", "Library", "CoreServices", "foo")
+    other_path = os.path.join(os.sep, "Users", "me", "Documents", "report.pdf")
+    assert is_protected_path(system_path) is True
+    assert is_protected_path(other_path) is False
 
 
 def test_large_old_file_is_flagged_as_review_candidate():
@@ -83,8 +104,11 @@ def test_recent_atime_prevents_review_flag_even_with_old_mtime():
     assert recs == []
 
 
-def test_system_path_is_protected_not_reviewed():
-    root = Node("/System", "System", is_dir=True)
+def test_system_path_is_protected_not_reviewed(monkeypatch):
+    monkeypatch.setattr(
+        cleanup_recommendations, "DEFAULT_DUPLICATE_EXCLUDES", (_protected_marker(),),
+    )
+    root = Node(os.path.join(os.sep, "System"), "System", is_dir=True)
     _file(root, "big.bin", size=500 * 1024 * 1024, mtime=NOW - 400 * DAY)
 
     recs = find_protected_and_review_candidates(root, now=NOW)

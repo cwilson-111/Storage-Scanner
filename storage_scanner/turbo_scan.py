@@ -112,12 +112,17 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
     the cache for next time). `progress_q` may be None (the headless
     mft_scan_cli.py elevated-helper path has no progress reporting).
 
-    Never raises: any cache/journal-layer problem (no cache yet, a locked
-    or corrupt cache DB, no USN journal on this volume, a journal ID
-    mismatch or wrapped journal since the cache was built) falls straight
-    through to a full scan -- caching is a pure optimization layered on
-    top of the exact full-read behavior this module always had, not a
-    prerequisite for a scan to succeed.
+    Never raises for a cache/journal-layer problem specifically: no cache
+    yet, a locked or corrupt cache DB, no USN journal on this volume, a
+    journal ID mismatch or wrapped journal since the cache was built all
+    fall straight through to a full scan -- caching is a pure optimization
+    layered on top of the exact full-read behavior this module always had,
+    not a prerequisite for a scan to succeed.
+
+    Does raise if `cancel_event` is set mid-scan (via _full_scan_and_cache
+    or _try_incremental_refresh) -- that's a caller-driven abort, not a
+    cache fault, and is meant to propagate up to scan_with_best_engine's
+    broad except, which treats it the same as any other Turbo failure.
     """
     volume_serial = record_source.volume_serial
     cached = None
@@ -138,7 +143,7 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
     if cached is not None and cached["record_size"] == record_source.record_size:
         try:
             records = _try_incremental_refresh(record_source, cached, progress_q, cancel_event)
-        except usn_journal.UsnJournalError as exc:
+        except (usn_journal.UsnJournalError, turbo_cache.TurboCacheCorruptError) as exc:
             logger.info(
                 "Turbo Scan cache for %r could not be refreshed incrementally, "
                 "falling back to a full scan: %s", volume_root, exc,
@@ -160,15 +165,17 @@ def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, 
     records = []
     for record_number in range(record_source.record_count):
         if cancel_event.is_set():
-            break
+            # Raise rather than return the partial list built so far --
+            # this module's contract (see scan_with_best_engine's
+            # docstring) is that Turbo Scan never hands back a partial
+            # tree; the caller's broad except already treats any Turbo
+            # failure, cancellation included, as "fall back to Compatible."
+            raise RuntimeError("Turbo Scan was cancelled")
         parsed = mft_parser.parse_base_record(record_number, record_source)
         if parsed is not None:
             records.append(parsed)
             if progress_q is not None and len(records) % 5000 == 0:
                 progress_q.put(("progress", len(records)))
-
-    if cancel_event.is_set():
-        return records
 
     root_frn = next(
         (r.frn for r in records if (r.frn & _FRN_RECORD_NUMBER_MASK) == _ROOT_RECORD_NUMBER),
@@ -229,6 +236,7 @@ def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
 
     dirty, new_next_usn = usn_journal.read_journal_changes(
         handle, state.journal_id, cached["next_usn"],
+        lowest_valid_usn=state.lowest_valid_usn,
     )
 
     if progress_q is not None and dirty:
@@ -237,7 +245,12 @@ def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
     upserts, deletes = [], []
     for i, dirty_record in enumerate(dirty, start=1):
         if cancel_event.is_set():
-            return None
+            # As in _full_scan_and_cache: raise rather than return None,
+            # which this function's own contract reserves for "no usable
+            # cursor" -- conflating that with "cancelled" would send a
+            # cancelled scan straight into a full, wasted volume rescan
+            # instead of aborting the whole Turbo attempt immediately.
+            raise RuntimeError("Turbo Scan was cancelled")
         parsed = mft_parser.parse_base_record(dirty_record.record_number, record_source)
         if parsed is None:
             deletes.append(dirty_record.record_number)

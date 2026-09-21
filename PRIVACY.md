@@ -20,7 +20,8 @@ your machine.
   local SQLite database at
   `~/Library/Application Support/NeuralStorageMatrix/storage_history.db`
   (macOS), `%LOCALAPPDATA%\NeuralStorageMatrix\storage_history.db`
-  (Windows), or `~/NeuralStorageMatrix/storage_history.db` (Linux).
+  (Windows), or `~/.local/share/NeuralStorageMatrix/storage_history.db`
+  (Linux, following the XDG Base Directory spec).
 - **Diagnostic logs** (for troubleshooting crashes, since a windowed build
   has no console to print to): a rotating log file under `logs/` in that
   same app-data folder.

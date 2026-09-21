@@ -55,6 +55,23 @@ def test_perfect_linear_growth_gives_exact_estimate_and_full_confidence():
     assert abs(forecast.days_optimistic - forecast.days_pessimistic) < 5
 
 
+def test_optimistic_bound_gives_more_days_than_pessimistic():
+    """'Optimistic' describes days *remaining*, not slope steepness: more
+    days before the drive fills is the good-news/optimistic bound, fewer
+    days is the bad-news/pessimistic one -- days_optimistic must always be
+    the larger of the two whenever noisy history gives them a real spread."""
+    points = [(0, 1000), (5, 1300), (10, 1250), (15, 1800), (20, 1700), (25, 2200)]
+    history = _history(points)
+
+    forecast = forecast_days_until_full(history, drive_capacity_bytes=10_000)
+
+    assert forecast.status == "ok"
+    assert forecast.days_optimistic is not None
+    assert forecast.days_pessimistic is not None
+    assert forecast.days_optimistic > forecast.days_pessimistic
+    assert forecast.days_pessimistic < forecast.days_estimate < forecast.days_optimistic
+
+
 def test_already_over_capacity_returns_zero_days():
     history = _history([(0, 100), (10, 500), (20, 900), (30, 1300)])
     forecast = forecast_days_until_full(history, drive_capacity_bytes=1000)

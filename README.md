@@ -2,25 +2,28 @@
 
 # Storage Scanner
 
-A fast, free disk-usage analyzer for **Windows, macOS, and Linux**. Pick a drive or
-folder and Storage Scanner scans it concurrently, then shows every folder
-and file in a tree **sorted by size**, with a percentage bar so the space
-hogs jump right out — plus duplicate detection, review-first cleanup
+A fast, free disk-usage analyzer for **Windows, macOS, and Linux**. Pick a
+drive or folder and Storage Scanner scans it concurrently, then shows every
+folder and file in a tree **sorted by size**, with a percentage bar so the
+space hogs jump right out — plus duplicate detection, review-first cleanup
 recommendations, a treemap explorer, growth history with capacity
 forecasting, and an audit log of everything it's ever deleted.
 
 <br clear="left" />
 
-### [⬇ Download StorageScanner.exe (Windows)](https://github.com/cwilson-111/Storage-Scanner/releases/latest/download/StorageScanner.exe)
+### Download
 
-[![Download](https://img.shields.io/badge/Download-StorageScanner.exe-2563eb?style=for-the-badge&logo=windows)](https://github.com/cwilson-111/Storage-Scanner/releases/latest/download/StorageScanner.exe)
+[![Download for Windows](https://img.shields.io/badge/Windows-StorageScanner.exe-2563eb?style=for-the-badge&logo=windows)](https://github.com/cwilson-111/Storage-Scanner/releases/latest/download/StorageScanner.exe)
+[![Download for macOS](https://img.shields.io/badge/macOS-StorageScanner.dmg-2563eb?style=for-the-badge&logo=apple)](https://github.com/cwilson-111/Storage-Scanner/releases/latest/download/StorageScanner.dmg)
+[![Download for Linux](https://img.shields.io/badge/Linux-StorageScanner.tar.gz-2563eb?style=for-the-badge&logo=linux)](https://github.com/cwilson-111/Storage-Scanner/releases/latest/download/StorageScanner-linux-x86_64.tar.gz)
+
 [![Latest release](https://img.shields.io/github/v/release/cwilson-111/Storage-Scanner?style=for-the-badge)](https://github.com/cwilson-111/Storage-Scanner/releases/latest)
 
-## Download & run (Windows, no Python needed)
+Or grab any of these straight from the [Releases](https://github.com/cwilson-111/Storage-Scanner/releases/latest) page.
 
-1. Click the **Download** button above (or grab it from the
-   [Releases](https://github.com/cwilson-111/Storage-Scanner/releases/latest) page).
-2. Double-click `StorageScanner.exe`. That's it — no installer, no dependencies.
+## Download & run
+
+**Windows** — double-click `StorageScanner.exe`. No installer, no dependencies.
 
 > Windows SmartScreen may warn about an unsigned app the first time. Click
 > **More info → Run anyway**. (The app is open source — you can read every line here.)
@@ -32,28 +35,46 @@ forecasting, and an audit log of everything it's ever deleted.
 > instead (same binary, zipped — usually avoids the same trigger), or try a
 > different browser. Verify against `SHA256SUMS.txt` either way.
 
+**macOS** — open `StorageScanner.dmg` and drag Storage Scanner into
+Applications.
+
+> The app isn't notarized (that needs a paid Apple Developer account — same
+> class of cost blocker as Windows code-signing), so Gatekeeper will refuse
+> to open it the first time with an "unidentified developer" warning.
+> Right-click (or Control-click) the app in Applications → **Open** → confirm
+> **Open** in the dialog. You only need to do this once.
+
+**Linux** — extract `StorageScanner-linux-x86_64.tar.gz`, then run
+`./StorageScanner` (mark it executable first if needed: `chmod +x StorageScanner`).
+Built and tested against `ubuntu-latest`; needs glibc, so distros noticeably
+older than that release may not run it — build from source there instead
+(see below).
+
 ### Verifying a release
 
-Every release includes, alongside `StorageScanner.exe`:
-- **`StorageScanner-portable.zip`** — the same executable zipped, if you'd
-  rather not have anything auto-registered by an installer-style download.
-- **`sbom.json`** — a software bill of materials (CycloneDX format) listing
-  exactly what's bundled into the executable: the frozen Python interpreter,
-  the Tcl/Tk library the GUI depends on, and whichever of the optional
-  packages below (see **Features ▸ Automation**) were available at build
+Every release includes, per platform:
+- **`StorageScanner.exe`** / **`StorageScanner-portable.zip`** (Windows) —
+  the same executable, zipped as an alternative if you'd rather not have
+  anything auto-registered by an installer-style download.
+- **`StorageScanner.dmg`** (macOS).
+- **`StorageScanner-linux-x86_64.tar.gz`** (Linux).
+- **`sbom*.json`** — a software bill of materials (CycloneDX format, one
+  per platform) listing exactly what's bundled into that executable: the
+  frozen Python interpreter, the Tcl/Tk library the GUI depends on, and
+  whichever optional packages (see **Features**) were installed at build
   time. Core scanning, duplicate detection, and cleanup need no third-party
   runtime package at all.
-- **`SHA256SUMS.txt`** — checksums for all of the above, so you can confirm
-  what you downloaded matches what was actually built (`sha256sum -c
-  SHA256SUMS.txt` on macOS/Linux, `Get-FileHash` on Windows).
+- **`SHA256SUMS*.txt`** — checksums for that platform's files, so you can
+  confirm what you downloaded matches what was actually built
+  (`sha256sum -c SHA256SUMS*.txt` on macOS/Linux, `Get-FileHash` on Windows).
 
-The release isn't code-signed yet — checksums let you verify integrity, but
-don't establish who built it, which is what signing is for. That's tracked
-as future work. See [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md) for exactly
-how a release is built and what these guarantees do and don't cover, and
-[PRIVACY.md](PRIVACY.md) for what the app does (and doesn't) do with your data.
+No release is code-signed or notarized yet — checksums let you verify
+integrity, but don't establish who built it, which is what signing/notarization
+is for. That's tracked as future work. See [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md)
+for exactly how a release is built and what these guarantees do and don't cover,
+and [PRIVACY.md](PRIVACY.md) for what the app does (and doesn't) do with your data.
 
-### Which download do I want? (standard vs. Data build)
+### Which Windows download do I want? (standard vs. Data build)
 
 | | `StorageScanner.exe` (standard) | `StorageScanner-Data.exe` |
 |---|---|---|
@@ -64,16 +85,9 @@ how a release is built and what these guarantees do and don't cover, and
 | In-app update notice | Yes | No — a Data build never prompts you to update, so check the Releases page yourself |
 
 If you don't need the CSV conversion tools, use the standard build. The Data
-build is otherwise identical and ships with its own `sbom-data.json` and
-`SHA256SUMS-data.txt`, which list exactly which optional packages were bundled.
-
-## Running on macOS and Linux
-
-There's no packaged macOS or Linux build yet — run it from source (see
-below). Both are fully supported: native Trash-based deletion (Finder
-integration on macOS; `xdg-open`-based file-manager integration on Linux)
-and their own elevated-scan flow for folders your account can't fully read
-(see **Admin/elevated scanning** below).
+build is Windows-only and otherwise identical; it ships with its own
+`sbom-data.json` and `SHA256SUMS-data.txt`, which list exactly which optional
+packages were bundled.
 
 ## Features
 
@@ -106,11 +120,13 @@ and their own elevated-scan flow for folders your account can't fully read
   so instead only the *scan itself* runs elevated via the normal
   admin-password prompt — your window stays open and gets the results back
   directly, without restarting.
-- **Linux** — same headless-scan approach as macOS, via a PolicyKit
-  (`pkexec`) prompt instead of `sudo` (so it works under a normal desktop
-  session, not just a terminal). Root never gets a window of its own —
-  Wayland sessions refuse that outright as a security boundary, and this
-  works the same way whether you're on X11, Wayland, or SSH.
+- **Linux** — same only-the-scan-runs-elevated approach as macOS, via a
+  PolicyKit (`pkexec`) prompt instead: a full relaunch-as-root can show a
+  window on a traditional X11 session, but Wayland compositors generally
+  refuse a root process a connection to your session outright, so the
+  headless approach works the same regardless of which one you're running.
+  Needs a PolicyKit authentication agent running for your desktop (ships by
+  default with GNOME/KDE and most desktop distros).
 
 ### Finding things
 - **Search & Filter** — filter the current scan by name, extension, size
@@ -166,11 +182,11 @@ and their own elevated-scan flow for folders your account can't fully read
 - **CLI mode** — `Storage-Scanner.py --cli <path> [--format json|csv]
   [--output FILE]` runs a headless scan and prints structured output with
   proper exit codes, for scripts, cron, or Task Scheduler.
-- **Data Tools (Data build only — see "Which download do I want?" above)** — Tools ▸ Data Tools lets you compress any CSV file (not
-  just this app's own exports) to Parquet, or convert it to an Excel
-  `.xlsx` workbook. Both use optional third-party packages (`pyarrow`,
-  `openpyxl` respectively) that aren't required for anything else in the
-  app — see **Privacy & trust** below.
+- **Data Tools (Data build only — see "Which download do I want?" above)** —
+  Tools ▸ Data Tools lets you compress any CSV file (not just this app's own
+  exports) to Parquet, or convert it to an Excel `.xlsx` workbook. Both use
+  optional third-party packages (`pyarrow`, `openpyxl` respectively) that
+  aren't required for anything else in the app.
 
 ### Staying current
 - **Update notice** — on launch, a quiet check (at most once a day) for a
@@ -189,24 +205,29 @@ missing instead.
 ## Run from source
 
 Requires Python 3.9+ (Tkinter ships with the standard Windows and macOS
-Python installers).
+Python installers; on Linux install your distro's Tk package first, e.g.
+`sudo apt install python3-tk` on Debian/Ubuntu).
 
 ```bash
 python Storage-Scanner.py
 ```
 
-## Build the Windows .exe yourself
+## Build it yourself
 
 ```bash
 pip install -r requirements-dev.txt
-build.bat
+build.bat          # Windows: StorageScanner.exe + portable ZIP
 ```
 
-The standalone executable, a portable ZIP, an SBOM, and a checksums file
-all land in `dist/`.
+On macOS or Linux, run the same PyInstaller commands `build.yml` uses
+(there's no `build.bat`-equivalent script for those yet — see
+`.github/workflows/build.yml`'s `build-macos`/`build-linux` jobs for the
+exact commands). Either way, the executable, an SBOM, and a checksums file
+land in `dist/`.
 
 Releases are also built automatically by GitHub Actions — push a tag like
-`v1.0.0` and the `.exe` is attached to the release (see `.github/workflows/build.yml`).
+`v1.0.0` and `StorageScanner.exe`, `StorageScanner.dmg`, and
+`StorageScanner-linux-x86_64.tar.gz` are all attached to the release.
 
 ## Running the test suite
 
