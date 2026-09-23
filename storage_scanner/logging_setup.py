@@ -11,8 +11,11 @@ import logging.handlers
 import os
 import sys
 import threading
+from pathlib import Path
 
 from history import APP_DATA_DIR
+
+LOG_DIR_ENV_VAR = "STORAGE_SCANNER_LOG_DIR"
 
 
 def setup_logging():
@@ -21,7 +24,11 @@ def setup_logging():
         return logger
     logger.setLevel(logging.DEBUG)
 
-    log_dir = APP_DATA_DIR / "logs"
+    # STORAGE_SCANNER_LOG_DIR overrides where logs go. The test suite sets it
+    # (tests/conftest.py) so test runs never write into the real app log;
+    # this handler is attached at import time, before any fixture could
+    # redirect it.
+    log_dir = Path(os.environ.get(LOG_DIR_ENV_VAR) or APP_DATA_DIR / "logs")
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         handler = logging.handlers.RotatingFileHandler(

@@ -179,9 +179,23 @@ packages were bundled.
   only fire when you scan or open the app, never continuously.
 
 ### Automation
-- **CLI mode** — `Storage-Scanner.py --cli <path> [--format json|csv]
-  [--output FILE]` runs a headless scan and prints structured output with
-  proper exit codes, for scripts, cron, or Task Scheduler.
+- **CLI mode** — `Storage-Scanner.py --cli <path> [--format json|csv|none]
+  [--output FILE] [--save-history]` runs a headless scan and prints
+  structured output with proper exit codes, for scripts, cron, or Task
+  Scheduler. `--save-history` records the scan in scan history exactly like
+  a scan run from the app, so Growth History, forecasts, anomaly detection
+  and budgets all include it.
+- **Scheduled scans** — Tools ▸ History & Trust ▸ Schedule Scans… scans a
+  folder daily or weekly and saves each run to scan history, so growth
+  tracking keeps working without you remembering to rescan. On Windows it
+  creates a Task Scheduler task for you (as your own user, no admin rights
+  needed; a missed run happens as soon as the PC is back on). On macOS and
+  Linux it gives you the line to add with `crontab -e`. Scheduled scans run
+  without admin rights, so folders only an administrator can read are
+  skipped, and the app doesn't need to be open.
+- **Export Results** — Tools ▸ Export Results… saves the current scan as
+  CSV (one row per file and folder, for Excel) or JSON (the nested folder
+  tree), the same formats the CLI writes.
 - **Data Tools (Data build only — see "Which download do I want?" above)** —
   Tools ▸ Data Tools lets you compress any CSV file (not just this app's own
   exports) to Parquet, or convert it to an Excel `.xlsx` workbook. Both use

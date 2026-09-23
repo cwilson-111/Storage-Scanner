@@ -277,9 +277,19 @@ Add a first-run explanation of safe deletion, permission limitations, cloud plac
 
 OneDrive and similar placeholders must be distinguished from fully local files. Show logical size, local allocated size, online-only state, and sync state when Windows exposes those attributes. Avoid accidentally downloading online-only content during hashing or preview. Offer safe actions such as “Free up local space” separately from deletion.
 
-### 9a. Ship packaged builds for macOS and Linux, not just Windows
+### 9a. Ship packaged builds for macOS and Linux, not just Windows — ✅ done
 
-**Not yet built.** The app itself already runs cross-platform — `platform_support.py`'s
+**Done (verified 2026-09-23):** `build.yml` now has `build-macos` (a
+`StorageScanner.dmg` from a `--windowed --onedir` `.app`) and `build-linux`
+(`StorageScanner-linux-x86_64.tar.gz`) jobs alongside Windows, each with its
+own SBOM and SHA-256 checksums. The v1.5.0 release carries all three, and
+the README's download badges link each platform's own file, so a Mac user no
+longer gets a Windows `.exe`. The in-app update notice links the Releases
+page, not a specific file, so it can't hand anyone the wrong platform's
+build either. Everything below is the original problem statement, kept for
+reference.
+
+**Not yet built (original note).** The app itself already runs cross-platform — `platform_support.py`'s
 `IS_MACOS`/`IS_LINUX` branches cover trash/recycle, elevated scanning, and
 drive listing on both — but `build.yml` only ever runs on `windows-latest`,
 so the only downloadable artifact anywhere is `StorageScanner.exe`. A macOS
@@ -344,8 +354,22 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
 
 **The GitHub Actions test-job-gating piece is done** — `build.yml` now runs
 `pytest`/`pyflakes` in a `test` job that `build` (and therefore the release)
-depends on via `needs:`. Ruff/Black/mypy, coverage thresholds, and clean-runner
-packaging smoke tests are still not in place.
+depends on via `needs:`. Ruff/Black/mypy and coverage thresholds are still
+not in place.
+
+**Packaging smoke tests are done (2026-09-23).** `smoke_test_build.py` launches
+the real frozen binary in headless `--cli --save-history` mode against a small
+folder of known files, with the app-data folder redirected to a temp
+directory, and checks the exit code, the JSON totals, and that exactly one
+history row was saved to a newly created database. It runs right after
+PyInstaller in every build job (`build`, `build-macos`, `build-linux`, and
+`build-data.yml`), before anything is uploaded or released, and in `build.bat`
+for local builds. It goes through Python's `subprocess` rather than calling
+the binary from the CI shell because PowerShell doesn't wait for a windowed
+`.exe`, so a direct call would always pass. Verified locally against a real
+PyInstaller build of the `.exe` (passes in about 15 s), and against a
+non-app binary and a missing one (both fail, exit 1). The macOS and Linux
+steps haven't run yet; they run on the next push to `main`.
 
 ## Recommended delivery sequence
 
@@ -355,7 +379,7 @@ packaging smoke tests are still not in place.
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (335 and counting), and `build.yml` now runs them (plus `pyflakes`) in a `test` job the release build depends on — see Status update above. Packaging smoke tests on a clean runner are still not wired in.
+5. ✅ Add unit tests (335 and counting), and `build.yml` now runs them (plus `pyflakes`) in a `test` job the release build depends on — see Status update above. Every build job now also smoke-tests the packaged binary before release (see item 10).
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
 ### Phase 2: Competitive core — ✅ done
@@ -366,13 +390,13 @@ packaging smoke tests are still not in place.
 4. ✅ Add MFT fast scan with fallback — built and real-hardware validated as Turbo Scan; see item 1 above.
 5. ✅ Add snapshot comparison between arbitrary dates.
 
-### Phase 3: Differentiation — ✅ done (CLI-only for #5)
+### Phase 3: Differentiation — ✅ done
 
 1. ✅ Build review-first cleanup recommendations (Protected / Review / Duplicate candidates, plus an Archive-to-.zip action added afterward).
 2. ✅ Add a protected keeper workflow for duplicate groups (auto keeper pick + reasoning + manual override; the keeper can't be deleted even via select-all).
 3. ✅ Add anomaly detection and forecast confidence (regression-based range + confidence level; spike/drop detection).
 4. ✅ Add reversible cleanup plans and audit history (every delete/recycle/archive logged; no auto-undo — see Status update above for why).
-5. 🚧 Add CLI, scheduling, and export features — CLI mode with JSON/CSV output and exit codes is done; a scheduled-scan helper and GUI export were scoped for this item but not built.
+5. ✅ Add CLI, scheduling, and export features — CLI mode with JSON/CSV output and exit codes; `--save-history` so a headless scan lands in scan history like a GUI scan; **Schedule Scans…** (Tools ▸ History & Trust) creating a Windows Task Scheduler task, or giving the crontab line on macOS/Linux; and **Export Results…** (Tools) writing the current scan as CSV or JSON with the same writers as the CLI (`storage_scanner/export.py`). See "Scheduled scans and export" below.
 
 ### Phase 4: Distribution and trust — 🚧 partial, blocked on a certificate
 
@@ -381,7 +405,7 @@ packaging smoke tests are still not in place.
 3. ✅ Publish SHA-256 checksums and an SBOM.
 4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
-6. ❌ Ship packaged macOS (`.dmg`) and Linux builds — not started; see item 9a above. Today, clicking the README's download button on either OS gets you a Windows `.exe` that can't run there at all (Gatekeeper blocks it outright on macOS; Linux has no build or friendly error either).
+6. ✅ Ship packaged macOS (`.dmg`) and Linux builds — see item 9a above; v1.5.0 ships all three platforms.
 
 ## Product positioning
 
@@ -447,4 +471,37 @@ table = pv.read_csv('input.csv')
 pq.write_table(table, 'output.parquet', compression='snappy')
 
 
-# Fix Miscrosoft Wondpws Bug unsupported on Mac bug when downlaoding executable from git. Might have been changed during linux pathing
+## Scheduled scans and export — ✅ done (2026-09-23)
+
+Closes out Phase 3 #5.
+
+- **Shared history recording.** Saving a finished scan to history moved out
+  of the Tk mixin into `storage_scanner/scan_history.py` (`record_scan()`),
+  which the GUI and the CLI both call. It creates the history tables itself
+  (idempotent), because `--cli` exits before the GUI's startup that normally
+  does it; otherwise the very first scheduled scan on a fresh install would
+  have failed with "no such table".
+- **CLI.** `--save-history`, plus `--format none` for a scheduled run that
+  only needs the history row.
+- **Schedule Scans…** (`storage_scanner/schedule.py`, UI in
+  `ui/automation_window.py`). On Windows the task is registered from a Task
+  Scheduler XML definition (`schtasks /Create /XML`), not `/TR`: `/TR` caps
+  the whole command at 261 characters, and a source checkout under a
+  OneDrive folder was already at 279 before any long folder path. The XML
+  also sets "run a missed scan when the PC is back on" and "don't skip on
+  battery". Runs as the current user without elevation. One task per folder
+  (named after the folder plus a short path fingerprint), so scheduling a
+  folder again replaces its task. macOS/Linux get a crontab line to copy.
+- **Export Results…** writes the current scan as CSV or JSON through
+  `storage_scanner/export.py`, the same writers the CLI uses.
+
+Verified: unit tests for every command and XML field; the real CLI run twice
+with `--save-history` against a brand-new app-data folder (two history rows,
+exit 0); the Schedule and Export windows opened in the real app. **Not yet
+verified:** registering a real task with `schtasks` on this machine (it
+would create a real scheduled task, so left for a deliberate manual test),
+and whether FortiClient objects to task creation or to the scheduled run.
+
+Not built: a list of existing scheduled scans inside the app (they're
+visible in Task Scheduler under "Storage Scanner scan - …"), and scheduling
+elevated scans (a scheduled scan never runs as admin).

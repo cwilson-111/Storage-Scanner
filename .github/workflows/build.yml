@@ -34,7 +34,7 @@ jobs:
         run: pytest tests/
 
       - name: Lint
-        run: python -m pyflakes storage_scanner/ tests/
+        run: python -m pyflakes storage_scanner/ tests/ smoke_test_build.py
 
   build:
     needs: test
@@ -67,6 +67,14 @@ jobs:
 
       - name: Build executable
         run: pyinstaller --onefile --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." Storage-Scanner.py
+
+      - name: Smoke-test the built executable
+        # Launches the real frozen .exe in headless --cli mode (what a
+        # scheduled scan runs) and checks its exit code, JSON output and
+        # history save, before anything is uploaded or released. Goes through
+        # a Python script, not a direct call: PowerShell doesn't wait for a
+        # windowed .exe, so calling it here would always "succeed".
+        run: python smoke_test_build.py dist/StorageScanner.exe
 
       - name: Generate software bill of materials
         run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom.json
@@ -133,6 +141,11 @@ jobs:
           pyinstaller --windowed --name StorageScanner --icon icon.icns \
             --add-data "icon.ico:." --add-data "icon.icns:." Storage-Scanner.py
 
+      - name: Smoke-test the built app
+        # Same check as the Windows job, against the executable inside the
+        # .app bundle, before it's packed into the DMG.
+        run: python smoke_test_build.py dist/StorageScanner.app/Contents/MacOS/StorageScanner
+
       - name: Create DMG
         # A DMG containing the .app plus an /Applications symlink is the
         # conventional macOS "drag to install" distribution format --
@@ -197,6 +210,11 @@ jobs:
         # choice, and needs no extra packaging tool (no fpm/appimagetool)
         # to stay inside this project's zero-extra-dependency policy.
         run: pyinstaller --onefile --name StorageScanner --add-data "icon.ico:." Storage-Scanner.py
+
+      - name: Smoke-test the built executable
+        # Same check as the Windows job. --cli never opens a window, so no
+        # display server is needed on the runner.
+        run: python smoke_test_build.py dist/StorageScanner
 
       - name: Generate software bill of materials
         run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom-linux.json

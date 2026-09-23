@@ -1,10 +1,11 @@
 """The Storage Scanner Tkinter application.
 
-StorageScannerApp itself is composed from eight mixins, each living in its
+StorageScannerApp itself is composed from ten mixins, each living in its
 own file under storage_scanner/ui/ — split out so the toolbar/tree, history
 saving, duplicate detection, search/filter, the treemap, cleanup
-recommendations, the audit log, and the largest-files/file-types windows
-can each be read, changed, and tested without wading through the others.
+recommendations, the audit log, budgets, export and scheduled scans, and the
+largest-files/file-types windows can each be read, changed, and tested
+without wading through the others.
 """
 
 import os
@@ -20,6 +21,7 @@ from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
 from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
 from storage_scanner.ui.audit_window import AuditMixin
+from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
@@ -33,6 +35,7 @@ from storage_scanner.ui.treemap_window import TreemapMixin
 class StorageScannerApp(
     MainWindowMixin, HistoryMixin, DuplicatesMixin, FileWindowsMixin,
     SearchMixin, TreemapMixin, CleanupMixin, AuditMixin, BudgetMixin,
+    AutomationMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root

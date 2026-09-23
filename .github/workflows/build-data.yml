@@ -52,6 +52,11 @@ jobs:
         # not always -- follows.
         run: pyinstaller --onefile --windowed --name StorageScanner-Data --icon icon.ico --add-data "icon.ico;." --hidden-import pyarrow.csv --hidden-import pyarrow.parquet --hidden-import openpyxl Storage-Scanner.py
 
+      - name: Smoke-test the built executable
+        # Same headless --cli check as build.yml's Windows job (see the
+        # comment there for why it goes through a Python script).
+        run: python smoke_test_build.py dist/StorageScanner-Data.exe
+
       - name: Generate software bill of materials
         run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom-data.json
 

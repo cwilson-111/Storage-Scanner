@@ -8,7 +8,6 @@ window/feature area can be read and tested on its own.
 import json
 import os
 import queue
-import shutil
 import subprocess
 import threading
 import time
@@ -30,6 +29,7 @@ from storage_scanner.platform_support import (
     FILE_MANAGER_NAME, IS_LINUX, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
     resource_path,
 )
+from storage_scanner.scan_history import drive_capacity_bytes
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
@@ -98,7 +98,10 @@ class MainWindowMixin:
         history_menu.add_command(label="Growth History", command=self.show_growth_history)
         history_menu.add_command(label="Audit Log", command=self.show_audit_log)
         history_menu.add_command(label="Storage Budgets", command=self.show_budgets)
+        history_menu.add_command(label="Schedule Scans…", command=self.show_schedule_scans)
         self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
+
+        self.tools_menu.add_command(label="Export Results…", command=self.export_results)
 
         # Turbo Scan (NTFS MFT fast path) is Windows-only and off by
         # default — persisted the same way as the schema_version key, via
@@ -342,28 +345,32 @@ class MainWindowMixin:
         """
         Returns total capacity of the drive containing the scanned path.
         """
-        try:
-            usage = shutil.disk_usage(path)
-            return usage.total
-        except Exception:
-            logger.warning("disk_usage(%r) failed", path, exc_info=True)
-            return 0
+        return drive_capacity_bytes(path)
 
     # -- Scan lifecycle ---------------------------------------------------- #
     def _on_toggle_turbo_scan(self):
         set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
 
+    # What _ask_turbo_scan_mode returns.
+    TURBO_RESTART_AS_ADMIN = "restart"
+    TURBO_THIS_SCAN_ONLY = "once"
+    TURBO_REGULAR_SCAN = "regular"
+
     def _resolve_turbo_scan_consent(self, target):
-        """Whether Turbo Scan should be attempted for this specific scan.
+        """Whether Turbo Scan should be attempted for this specific scan, or
+        None if the app is restarting elevated instead (the caller must not
+        start a scan).
 
         False if the toggle is off, or the drive isn't a local fixed NTFS
         volume (scan_with_best_engine would fall back on its own either
         way, but this skips popping a prompt for a scan that was never
         going to use Turbo Scan). If already elevated, there's no new UAC
         prompt about to happen, so nothing needs consenting to. Otherwise
-        asks fresh every time (matches the macOS elevation prompt's own
-        not-cached precedent in _request_elevation) — declining falls back
-        to the Compatible engine for just this scan, the toggle stays on.
+        asks every time which way to go: restart elevated (one UAC prompt
+        covers every later scan in the session), elevate just this scan
+        through the headless helper (a UAC prompt per scan, which on
+        machines whose policy demands credentials means typing a password
+        each time), or a regular scan. The toggle stays on either way.
         """
         if not IS_WINDOWS or not self.turbo_scan_var.get():
             return False
@@ -371,23 +378,88 @@ class MainWindowMixin:
             return True
         if not is_ntfs_fixed_drive(target):
             return True
-        return messagebox.askyesno(
-            "Turbo Scan (Experimental)",
-            "Turbo Scan reads the NTFS Master File Table directly instead "
-            "of walking folders one at a time, which can be dramatically "
-            "faster on large drives.\n\n"
-            "This needs a one-time administrator prompt (UAC) for this "
-            "scan. A few notes:\n"
-            "• This window stays open throughout — unlike \"Run as "
-            "Admin\", nothing restarts.\n"
-            "• It only reads the volume; nothing is ever written or "
-            "modified.\n"
-            "• If anything about it fails, this scan automatically falls "
-            "back to the regular scan — you'll still get a result either "
-            "way.\n\n"
-            "Continue with Turbo Scan?",
-            icon="question",
-        )
+
+        choice = self._ask_turbo_scan_mode()
+
+        if choice == self.TURBO_RESTART_AS_ADMIN:
+            if relaunch_elevated_windows(target if os.path.isdir(target) else None):
+                self.root.destroy()
+                return None
+            messagebox.showerror(
+                "Storage Scanner",
+                "Elevation was cancelled or not accepted. Scanning with the "
+                "regular scan instead.",
+            )
+            return False
+
+        return choice == self.TURBO_THIS_SCAN_ONLY
+
+    def _ask_turbo_scan_mode(self):
+        """Modal three-way choice for a Turbo Scan while not elevated.
+        Closing the dialog counts as a regular scan."""
+        dialog = Toplevel(self.root)
+        dialog.title("Turbo Scan (Experimental)")
+        dialog.configure(bg=COLORS["bg"])
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        try:
+            dialog.iconbitmap(resource_path("icon.ico"))
+        except Exception:  # noqa: BLE001 - icon is cosmetic
+            logger.debug("Turbo Scan dialog iconbitmap failed", exc_info=True)
+
+        choice = {"value": self.TURBO_REGULAR_SCAN}
+
+        ttk.Label(
+            dialog, padding=(16, 14, 16, 4), wraplength=470, justify=LEFT,
+            text=(
+                "Turbo Scan reads the NTFS Master File Table directly instead "
+                "of walking folders one at a time, which can be dramatically "
+                "faster on large drives. It needs administrator access, and "
+                "this window isn't running as administrator."
+            ),
+        ).pack(side=TOP, fill=X)
+        ttk.Label(
+            dialog, padding=(16, 4, 16, 10), wraplength=470, justify=LEFT,
+            foreground=COLORS["muted"],
+            text=(
+                "• Restart as Admin: one Windows prompt now, then every scan "
+                "in the restarted window uses Turbo Scan with no more "
+                "prompts. The folder stays selected; click Scan again once it "
+                "reopens.\n"
+                "• Just This Scan: this window stays open, but Windows asks "
+                "again on every Turbo Scan (on some work PCs that means "
+                "typing your password each time).\n"
+                "• Either way it only reads the drive; nothing is written, and "
+                "if Turbo Scan fails the regular scan runs instead."
+            ),
+        ).pack(side=TOP, fill=X)
+
+        buttons = ttk.Frame(dialog, padding=(16, 0, 16, 14))
+        buttons.pack(side=BOTTOM, fill=X)
+
+        def pick(value):
+            choice["value"] = value
+            dialog.destroy()
+
+        ttk.Button(
+            buttons, text="Restart as Admin", style="Primary.TButton",
+            command=lambda: pick(self.TURBO_RESTART_AS_ADMIN),
+        ).pack(side=LEFT)
+        ttk.Button(
+            buttons, text="Just This Scan",
+            command=lambda: pick(self.TURBO_THIS_SCAN_ONLY),
+        ).pack(side=LEFT, padx=6)
+        ttk.Button(
+            buttons, text="Regular Scan",
+            command=lambda: pick(self.TURBO_REGULAR_SCAN),
+        ).pack(side=RIGHT)
+
+        dialog.bind("<Escape>", lambda _e: pick(self.TURBO_REGULAR_SCAN))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: pick(self.TURBO_REGULAR_SCAN))
+        dialog.grab_set()
+        dialog.focus_set()
+        self.root.wait_window(dialog)
+        return choice["value"]
 
     def start_scan(self):
         if self.scan_thread and self.scan_thread.is_alive():
@@ -398,6 +470,8 @@ class MainWindowMixin:
             return
 
         turbo_enabled = self._resolve_turbo_scan_consent(target)
+        if turbo_enabled is None:  # restarting elevated; this window is gone
+            return
 
         # Reset state.
         self.cancel_event.clear()
