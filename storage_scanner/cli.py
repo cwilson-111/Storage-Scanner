@@ -12,23 +12,16 @@ itself failing.
 """
 
 import argparse
-import csv
-import json
 import os
 import queue
 import sys
 import threading
 
+from storage_scanner.export import FORMATS, export_to_file, write_csv, write_json
 from storage_scanner.scanner import scan
-from storage_scanner.serialization import node_to_dict
 
 EXIT_OK = 0
 EXIT_SCAN_ERROR = 1
-
-_CSV_FIELDS = (
-    "path", "name", "is_dir", "size", "alloc_size", "file_count", "mtime",
-    "is_link", "hardlink_dup", "is_cloud_placeholder", "error",
-)
 
 
 def build_arg_parser():
@@ -38,34 +31,20 @@ def build_arg_parser():
     )
     parser.add_argument("path", help="Folder or file to scan")
     parser.add_argument(
-        "--format", choices=("json", "csv"), default="json",
-        help="Output format (default: json)",
+        "--format", choices=FORMATS + ("none",), default="json",
+        help="Output format (default: json). 'none' writes no data, for a "
+             "scheduled scan that only needs --save-history",
     )
     parser.add_argument(
         "--output", metavar="FILE",
         help="Write output to FILE instead of stdout",
     )
+    parser.add_argument(
+        "--save-history", action="store_true",
+        help="Also record this scan in scan history, exactly like a scan run "
+             "from the app, so growth, forecasts, anomalies and budgets see it",
+    )
     return parser
-
-
-def _flatten(node, rows):
-    rows.append(node)
-    for child in node.children:
-        _flatten(child, rows)
-
-
-def _write_json(node, out):
-    json.dump(node_to_dict(node), out)
-    out.write("\n")
-
-
-def _write_csv(node, out):
-    rows = []
-    _flatten(node, rows)
-    writer = csv.writer(out)
-    writer.writerow(_CSV_FIELDS)
-    for n in rows:
-        writer.writerow([getattr(n, field) for field in _CSV_FIELDS])
 
 
 def run_cli(argv):
@@ -92,17 +71,37 @@ def run_cli(argv):
         file=sys.stderr,
     )
 
-    write = _write_json if args.format == "json" else _write_csv
+    if args.save_history:
+        # Imported here: history.py creates its app-data folder at import
+        # time, which a plain `--cli` export has no reason to do.
+        from storage_scanner.scan_history import record_scan
+
+        try:
+            recorded = record_scan(node)
+        except Exception as exc:  # noqa: BLE001 - report to the caller
+            print(f"Could not save scan history: {exc}", file=sys.stderr)
+            return EXIT_SCAN_ERROR
+
+        print(f"Saved to scan history (scan #{recorded.scan_id})", file=sys.stderr)
+
+        if recorded.budget_breach:
+            print(
+                f"Over budget: {recorded.budget_breach.current_size_bytes:,} bytes "
+                f"(budget {recorded.budget_breach.threshold_bytes:,})",
+                file=sys.stderr,
+            )
+
+    if args.format == "none":
+        return EXIT_OK
 
     if args.output:
-        newline = "" if args.format == "csv" else None
         try:
-            with open(args.output, "w", newline=newline, encoding="utf-8") as f:
-                write(node, f)
+            export_to_file(node, args.output, args.format)
         except OSError as exc:
             print(f"Could not write output file: {exc}", file=sys.stderr)
             return EXIT_SCAN_ERROR
     else:
+        write = write_json if args.format == "json" else write_csv
         write(node, sys.stdout)
 
     return EXIT_OK

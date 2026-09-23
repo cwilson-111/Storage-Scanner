@@ -11,18 +11,16 @@ from tkinter import (
 from history import (
     get_folder_growth,
     get_growth_summary,
-    get_previous_scan_id,
     get_scan_history,
     get_scan_ids_by_created_at,
     list_scans_for_path,
-    save_scan_snapshot,
 )
 from storage_scanner.anomaly_detection import detect_size_anomalies
-from storage_scanner.budgets import check_budget_for_path
 from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
+from storage_scanner.scan_history import collect_folder_sizes, record_scan
 from storage_scanner.settings import COLORS, FONT_BOLD
 
 
@@ -57,43 +55,15 @@ class HistoryMixin:
         Saves scan history in a background thread so the Tkinter UI does not freeze.
         """
         try:
-            folder_sizes, folder_count = self._collect_folder_sizes_for_history(node)
-            drive_capacity = self._get_drive_capacity_bytes(node.path)
-
-            scan_path = os.path.normcase(os.path.normpath(node.path))
-
-            current_scan_id = save_scan_snapshot(
-                scan_path=scan_path,
-                total_size=node.size,
-                drive_capacity=drive_capacity,
-                file_count=node.file_count,
-                folder_count=folder_count,
-                folder_sizes=folder_sizes,
-            )
-
-            previous_scan_id = get_previous_scan_id(
-                scan_path=scan_path,
-                current_scan_id=current_scan_id,
-            )
-
-            growth_rows = []
-
-            if previous_scan_id:
-                growth_rows = get_folder_growth(
-                    current_scan_id=current_scan_id,
-                    previous_scan_id=previous_scan_id,
-                    limit=50,
-                )
-
-            budget_breach = check_budget_for_path(scan_path, node.size)
+            recorded = record_scan(node)
 
             self.root.after(
                 0,
                 lambda: self._finish_history_save(
-                    current_scan_id,
-                    previous_scan_id,
-                    growth_rows,
-                    budget_breach,
+                    recorded.scan_id,
+                    recorded.previous_scan_id,
+                    recorded.growth_rows,
+                    recorded.budget_breach,
                 )
             )
 
@@ -580,31 +550,5 @@ class HistoryMixin:
 
     # -- Duplicate file finder --------------------------------------------- #
     def _collect_folder_sizes_for_history(self, root_node):
-        """
-        Convert the scanned Node tree into folder history records.
-
-        To avoid freezing/slowing large scans, only save folders >= 50 MB,
-        plus the root folder.
-        """
-        folder_sizes = {}
-        folder_count = 0
-
-        min_size = 50 * 1024 * 1024  # 50 MB
-
-        stack = [root_node]
-
-        while stack:
-            node = stack.pop()
-
-            if node.is_dir:
-                folder_count += 1
-
-                if node.size >= min_size or node is root_node:
-                    folder_sizes[node.path] = {
-                        "size": node.size,
-                        "file_count": node.file_count,
-                    }
-
-                stack.extend(node.children)
-
-        return folder_sizes, folder_count
+        """Folders worth a history row — see scan_history.collect_folder_sizes."""
+        return collect_folder_sizes(root_node)

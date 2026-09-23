@@ -86,3 +86,43 @@ def test_unwritable_output_path_returns_scan_error(tmp_path, capsys):
     assert code == EXIT_SCAN_ERROR
     captured = capsys.readouterr()
     assert "Could not write output file" in captured.err
+
+
+def test_format_none_writes_no_data(tmp_path, capsys):
+    (tmp_path / "a.txt").write_text("hello")
+
+    code = run_cli([str(tmp_path), "--format", "none"])
+
+    assert code == EXIT_OK
+    assert capsys.readouterr().out == ""
+
+
+def test_save_history_records_the_scan_even_on_a_fresh_database(tmp_path, monkeypatch, capsys):
+    import history
+    from storage_scanner.scan_history import normalize_scan_path
+
+    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    scanned = tmp_path / "scanned"
+    scanned.mkdir()
+    (scanned / "a.txt").write_text("hello")
+
+    code = run_cli([str(scanned), "--save-history", "--format", "none"])
+
+    assert code == EXIT_OK
+    assert "Saved to scan history" in capsys.readouterr().err
+    assert history.get_latest_scan_id(normalize_scan_path(str(scanned))) is not None
+
+
+def test_save_history_failure_returns_scan_error(tmp_path, monkeypatch, capsys):
+    from storage_scanner import scan_history
+
+    def broken(_node):
+        raise OSError("disk is full")
+
+    monkeypatch.setattr(scan_history, "record_scan", broken)
+    (tmp_path / "a.txt").write_text("hello")
+
+    code = run_cli([str(tmp_path), "--save-history", "--format", "none"])
+
+    assert code == EXIT_SCAN_ERROR
+    assert "disk is full" in capsys.readouterr().err

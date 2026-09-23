@@ -14,6 +14,16 @@ pyinstaller ^
  --add-data "icon.ico;." ^
  Storage-Scanner.py
 
+rem Launch the built .exe headlessly and check it actually works before
+rem packaging it (see smoke_test_build.py).
+python smoke_test_build.py dist\StorageScanner.exe
+if errorlevel 1 (
+    echo.
+    echo Smoke test FAILED - the built StorageScanner.exe does not work. See above.
+    pause
+    exit /b 1
+)
+
 python make_sbom.py --app-version local-build --output dist\sbom.json
 
 powershell -NoProfile -Command "Compress-Archive -Force -Path dist\StorageScanner.exe -DestinationPath dist\StorageScanner-portable.zip"
