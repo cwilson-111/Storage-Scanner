@@ -8,25 +8,35 @@ updates:
   # Actions are pinned to immutable commit SHAs (see build.yml). Dependabot
   # understands that pinning style and bumps both the SHA and the trailing
   # "# vN" comment, which is the only practical way to keep SHA pins current.
+  #
+  # Everything lands in ONE grouped PR per week. Ungrouped, the first run
+  # opened five separate PRs for what was really a single change (every
+  # first-party action moving to the Node 24 runtime at once), and each one
+  # burns a full three-platform build to validate.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"
 
+  # pip: security updates only. `open-pull-requests-limit: 0` disables routine
+  # version updates while leaving security advisories enabled.
+  #
+  # requirements-dev.txt deliberately pins floors (`pyinstaller>=6.0`), not
+  # exact versions, and every CI job installs the latest matching release, so
+  # a routine "raise the floor to the newest version" PR changes nothing about
+  # what actually gets built — it is pure review overhead. A real advisory
+  # still gets a PR, which is the part that matters, because PyInstaller
+  # bundles whatever is installed at build time into the shipped executable.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "build"
-    # Lint/format/type tooling moves fast and a minor bump can introduce new
-    # rules that fail the gate; group those so one PR carries them together.
-    groups:
-      quality-tooling:
-        patterns:
-          - "ruff"
-          - "black"
-          - "mypy"
-          - "pytest*"
