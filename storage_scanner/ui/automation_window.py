@@ -9,8 +9,20 @@ storage_scanner/schedule.py — this file is only the windows around them.
 
 import os
 from tkinter import (
-    BOTH, BOTTOM, END, LEFT, RIGHT, TOP, StringVar, Text, Toplevel, W, X,
-    filedialog, messagebox, ttk,
+    BOTH,
+    BOTTOM,
+    END,
+    LEFT,
+    RIGHT,
+    TOP,
+    StringVar,
+    Text,
+    Toplevel,
+    W,
+    X,
+    filedialog,
+    messagebox,
+    ttk,
 )
 
 from storage_scanner import schedule
@@ -80,13 +92,18 @@ class AutomationMixin:
             logger.debug("Schedule Scans window iconbitmap failed", exc_info=True)
 
         ttk.Label(
-            win, padding=(10, 8), style="Accent.TLabel",
+            win,
+            padding=(10, 8),
+            style="Accent.TLabel",
             text="Scan a folder automatically and keep its growth history up to date",
         ).pack(side=TOP, fill=X)
 
         scheduler = "Windows Task Scheduler" if IS_WINDOWS else "cron"
         ttk.Label(
-            win, padding=(10, 0, 10, 8), foreground=COLORS["muted"], wraplength=720,
+            win,
+            padding=(10, 0, 10, 8),
+            foreground=COLORS["muted"],
+            wraplength=720,
             justify=LEFT,
             text=(
                 f"Runs a headless scan through {scheduler} and saves it to scan history, "
@@ -107,7 +124,9 @@ class AutomationMixin:
         time_var = StringVar(value="09:00")
 
         ttk.Label(form, text="Folder").grid(row=0, column=0, sticky=W, pady=3)
-        ttk.Entry(form, textvariable=path_var).grid(row=0, column=1, columnspan=4, sticky="ew", padx=6)
+        ttk.Entry(form, textvariable=path_var).grid(
+            row=0, column=1, columnspan=4, sticky="ew", padx=6
+        )
 
         def browse():
             chosen = filedialog.askdirectory(parent=win, initialdir=path_var.get() or None)
@@ -118,13 +137,19 @@ class AutomationMixin:
 
         ttk.Label(form, text="Every").grid(row=1, column=0, sticky=W, pady=3)
         ttk.Combobox(
-            form, textvariable=frequency_var, values=schedule.FREQUENCIES,
-            state="readonly", width=8,
+            form,
+            textvariable=frequency_var,
+            values=schedule.FREQUENCIES,
+            state="readonly",
+            width=8,
         ).grid(row=1, column=1, sticky=W, padx=6)
         ttk.Label(form, text="on").grid(row=1, column=2, sticky=W)
         weekday_combo = ttk.Combobox(
-            form, textvariable=weekday_var, values=schedule.WEEKDAYS,
-            state="readonly", width=6,
+            form,
+            textvariable=weekday_var,
+            values=schedule.WEEKDAYS,
+            state="readonly",
+            width=6,
         )
         weekday_combo.grid(row=1, column=3, sticky=W, padx=6)
         ttk.Label(form, text="at (HH:MM, 24-hour)").grid(row=2, column=0, sticky=W, pady=3)
@@ -132,19 +157,27 @@ class AutomationMixin:
         form.columnconfigure(4, weight=1)
 
         ttk.Label(
-            win, padding=(10, 6, 10, 2),
+            win,
+            padding=(10, 6, 10, 2),
             text="Scheduled task" if IS_WINDOWS else "Crontab line (add it with `crontab -e`)",
         ).pack(side=TOP, fill=X)
 
         preview = Text(
-            win, height=5, wrap="word", bg=COLORS["panel"], fg=COLORS["fg"],
-            relief="flat", padx=8, pady=6,
+            win,
+            height=5,
+            wrap="word",
+            bg=COLORS["panel"],
+            fg=COLORS["fg"],
+            relief="flat",
+            padx=8,
+            pady=6,
         )
         preview.pack(side=TOP, fill=BOTH, expand=True, padx=10)
 
         status_var = StringVar()
         ttk.Label(win, textvariable=status_var, padding=(10, 4), wraplength=720, justify=LEFT).pack(
-            side=TOP, fill=X,
+            side=TOP,
+            fill=X,
         )
 
         def current_schedule():
@@ -161,7 +194,8 @@ class AutomationMixin:
 
             scheduled.validate()
             when = (
-                "Every day" if scheduled.frequency == "daily"
+                "Every day"
+                if scheduled.frequency == "daily"
                 else f"Every {scheduled.weekday.title()}"
             )
             return (
@@ -179,7 +213,9 @@ class AutomationMixin:
             return schedule.display_command(schedule.scan_command(scheduled))
 
         def refresh(*_):
-            weekday_combo.config(state="readonly" if frequency_var.get() == "weekly" else "disabled")
+            weekday_combo.config(
+                state="readonly" if frequency_var.get() == "weekly" else "disabled"
+            )
             preview.config(state="normal")
             preview.delete("1.0", END)
 
@@ -216,13 +252,15 @@ class AutomationMixin:
 
             if ok:
                 status_var.set(
-                    f"Scheduled \"{schedule.task_name(scheduled)}\". It appears in Task "
+                    f'Scheduled "{schedule.task_name(scheduled)}". It appears in Task '
                     "Scheduler under that name; scheduling this folder again replaces it."
                 )
             else:
                 logger.warning("schtasks /Create failed: %s", message)
                 messagebox.showerror(
-                    "Schedule Scans", f"Task Scheduler refused the task:\n{message}", parent=win,
+                    "Schedule Scans",
+                    f"Task Scheduler refused the task:\n{message}",
+                    parent=win,
                 )
 
         def remove_task():
@@ -230,14 +268,15 @@ class AutomationMixin:
 
             if not messagebox.askyesno(
                 "Schedule Scans",
-                f"Remove the scheduled scan \"{schedule.task_name(scheduled)}\"?",
+                f'Remove the scheduled scan "{schedule.task_name(scheduled)}"?',
                 parent=win,
             ):
                 return
 
             ok, message = schedule.delete_windows_task(scheduled)
             status_var.set(
-                "Scheduled scan removed." if ok
+                "Scheduled scan removed."
+                if ok
                 else f"Nothing removed: {message or 'no scheduled scan for this folder'}"
             )
 
@@ -246,16 +285,22 @@ class AutomationMixin:
 
         if IS_WINDOWS:
             ttk.Button(
-                button_bar, text="Create Scheduled Task", style="Primary.TButton",
+                button_bar,
+                text="Create Scheduled Task",
+                style="Primary.TButton",
                 command=create_task,
             ).pack(side=LEFT)
             ttk.Button(button_bar, text="Remove for This Folder", command=remove_task).pack(
-                side=LEFT, padx=6,
+                side=LEFT,
+                padx=6,
             )
             ttk.Button(button_bar, text="Copy Command", command=copy_entry).pack(side=RIGHT)
         else:
             ttk.Button(
-                button_bar, text="Copy Crontab Line", style="Primary.TButton", command=copy_entry,
+                button_bar,
+                text="Copy Crontab Line",
+                style="Primary.TButton",
+                command=copy_entry,
             ).pack(side=LEFT)
 
         refresh()

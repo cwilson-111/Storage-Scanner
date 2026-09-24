@@ -14,17 +14,37 @@ from storage_scanner.audit import recycle_and_log
 from storage_scanner.logging_setup import logger
 
 ArchiveResult = namedtuple(
-    "ArchiveResult", ["success", "archive_path", "original_removed", "error"],
+    "ArchiveResult",
+    ["success", "archive_path", "original_removed", "error"],
 )
 
 # Already-compressed or already-dense formats barely shrink further — this
 # is a UI hint to set expectations, not a gate; archiving still works on
 # any file type regardless.
 _POOR_COMPRESSION_EXTENSIONS = {
-    ".zip", ".7z", ".rar", ".gz", ".bz2", ".xz", ".tar",
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
-    ".mp4", ".mov", ".mkv", ".avi", ".webm",
-    ".mp3", ".aac", ".flac", ".ogg", ".m4a",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".tar",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".heic",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".webm",
+    ".mp3",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".m4a",
     ".pdf",
 }
 
@@ -75,11 +95,17 @@ def archive_file(node, source):
         return ArchiveResult(False, None, False, str(exc))
 
     original_removed = recycle_and_log(
-        node, source=source, action="archive",
+        node,
+        source=source,
+        action="archive",
         extra_error_context=f"archive already written to {archive_path}",
     )
-    error = None if original_removed else (
-        f"Archived to {archive_path}, but the original could not be removed — "
-        "both copies now exist."
+    error = (
+        None
+        if original_removed
+        else (
+            f"Archived to {archive_path}, but the original could not be removed — "
+            "both copies now exist."
+        )
     )
     return ArchiveResult(True, archive_path, original_removed, error)

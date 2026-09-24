@@ -23,8 +23,9 @@ the commit a release was tagged from. Nothing else is added at build time.
 Every release is built by [`.github/workflows/build.yml`](.github/workflows/build.yml),
 as three separate jobs (`build`, `build-macos`, `build-linux`) on GitHub's
 hosted `windows-latest`, `macos-latest`, and `ubuntu-latest` runners
-respectively, each gated on a `test` job (`pytest` + `pyflakes`) passing
-first. The core commands, in order:
+respectively, each gated on a `test` job (`ruff`, `black --check`, `mypy`,
+and `pytest` with a coverage floor) passing first. The core commands, in
+order:
 
 **Windows:**
 ```
@@ -80,6 +81,25 @@ the build environment when it runs, so the standard release doesn't include
 installs them explicitly and bundles them. Each release's own `sbom*.json`
 lists exactly which optional packages made it in — check that rather than
 assuming from this doc.
+
+## Continuous scanning of the source itself
+
+Separate from the release build, [`.github/workflows/security.yml`](.github/workflows/security.yml)
+runs on every push and pull request to `main`, plus weekly (so a CVE
+published against a dependency that hasn't changed still gets found):
+
+- **CodeQL** (`security-extended` query pack) statically analyses the Python
+  source; findings land in the repo's Security tab.
+- **`pip-audit --strict`** checks `requirements-dev.txt` — PyInstaller,
+  Pillow and the test toolchain — against the Python advisory database.
+  That file is the entire dependency surface, and PyInstaller's output
+  embeds what's installed at build time, so a vulnerable build dependency
+  is a shipped one.
+- **gitleaks** scans the full commit history, not just the current tip, for
+  committed credentials.
+
+Dependency updates for both the toolchain and the pinned Actions SHAs are
+raised automatically by Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)).
 
 ## Where to verify any of this yourself
 

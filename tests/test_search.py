@@ -85,9 +85,9 @@ def test_combined_filters_use_and_logic(tree):
         ("100", 100),
         ("1kb", 1024),
         ("1 KB", 1024),
-        ("2.5mb", int(2.5 * 1024 ** 2)),
-        ("1gb", 1024 ** 3),
-        ("1tb", 1024 ** 4),
+        ("2.5mb", int(2.5 * 1024**2)),
+        ("1gb", 1024**3),
+        ("1tb", 1024**4),
     ],
 )
 def test_parse_size_valid(text, expected):

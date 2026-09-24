@@ -77,6 +77,7 @@ class CachedNode:
     .children, no .error, no .mtime -- this never participates in (or gets
     inserted into) a live scan tree.
     """
+
     __slots__ = ("path", "name", "is_dir", "size")
 
     def __init__(self, path, name, is_dir, size):
@@ -95,11 +96,14 @@ def save_recommendations(scan_path, recommendations):
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO cached_cleanup_runs (scan_path, computed_at)
         VALUES (?, ?)
         ON CONFLICT(scan_path) DO UPDATE SET computed_at = excluded.computed_at
-    """, (scan_path, now))
+    """,
+        (scan_path, now),
+    )
 
     cur.execute("DELETE FROM cached_recommendations WHERE scan_path = ?", (scan_path,))
     cur.executemany(
@@ -109,9 +113,17 @@ def save_recommendations(scan_path, recommendations):
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             (
-                scan_path, row_id, rec.category, rec.node.path, rec.node.name,
-                int(rec.node.is_dir), rec.node.size, rec.reason, rec.risk,
-                rec.recoverable_bytes, rec.action,
+                scan_path,
+                row_id,
+                rec.category,
+                rec.node.path,
+                rec.node.name,
+                int(rec.node.is_dir),
+                rec.node.size,
+                rec.reason,
+                rec.risk,
+                rec.recoverable_bytes,
+                rec.action,
             )
             for row_id, rec in enumerate(recommendations)
         ),
@@ -120,7 +132,9 @@ def save_recommendations(scan_path, recommendations):
     conn.commit()
     conn.close()
     logger.debug(
-        "cleanup_cache: saved %d recommendation(s) for %r", len(recommendations), scan_path,
+        "cleanup_cache: saved %d recommendation(s) for %r",
+        len(recommendations),
+        scan_path,
     )
 
 
@@ -128,25 +142,38 @@ def load_recommendations(scan_path):
     """[] if nothing's cached yet for this exact scan_path."""
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT category, node_path, node_name, node_is_dir, node_size,
                reason, risk, recoverable_bytes, action
         FROM cached_recommendations
         WHERE scan_path = ?
         ORDER BY row_id
-    """, (scan_path,))
+    """,
+        (scan_path,),
+    )
     rows = cur.fetchall()
     conn.close()
 
     return [
         Recommendation(
             node=CachedNode(node_path, node_name, bool(node_is_dir), node_size),
-            category=category, reason=reason, risk=risk,
-            recoverable_bytes=recoverable_bytes, action=action,
+            category=category,
+            reason=reason,
+            risk=risk,
+            recoverable_bytes=recoverable_bytes,
+            action=action,
         )
         for (
-            category, node_path, node_name, node_is_dir, node_size,
-            reason, risk, recoverable_bytes, action,
+            category,
+            node_path,
+            node_name,
+            node_is_dir,
+            node_size,
+            reason,
+            risk,
+            recoverable_bytes,
+            action,
         ) in rows
     ]
 
@@ -156,9 +183,7 @@ def get_computed_at(scan_path):
     None if nothing's cached for it."""
     conn = _connect()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT computed_at FROM cached_cleanup_runs WHERE scan_path = ?", (scan_path,)
-    )
+    cur.execute("SELECT computed_at FROM cached_cleanup_runs WHERE scan_path = ?", (scan_path,))
     row = cur.fetchone()
     conn.close()
     return row[0] if row else None

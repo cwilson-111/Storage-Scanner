@@ -50,7 +50,10 @@ def test_csv_has_the_header_then_one_row_per_node():
 
     assert tuple(rows[0].keys()) == CSV_FIELDS
     assert [(r["name"], r["size"]) for r in rows] == [
-        ("data", "12"), ("a.txt", "5"), ("sub", "7"), ("b.txt", "7"),
+        ("data", "12"),
+        ("a.txt", "5"),
+        ("sub", "7"),
+        ("b.txt", "7"),
     ]
 
 

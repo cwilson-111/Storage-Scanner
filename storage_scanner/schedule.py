@@ -19,6 +19,7 @@ only side effects are create_windows_task()/delete_windows_task(), which
 call schtasks.exe for the current user (no admin needed).
 """
 
+import contextlib
 import hashlib
 import os
 import posixpath
@@ -39,12 +40,18 @@ TASK_NAME_PREFIX = "Storage Scanner scan"
 
 # Storage-Scanner.py, beside this package: what a source checkout runs.
 ENTRY_SCRIPT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Storage-Scanner.py",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "Storage-Scanner.py",
 )
 
 _WEEKDAY_ELEMENTS = {
-    "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
-    "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday",
+    "MON": "Monday",
+    "TUE": "Tuesday",
+    "WED": "Wednesday",
+    "THU": "Thursday",
+    "FRI": "Friday",
+    "SAT": "Saturday",
+    "SUN": "Sunday",
 }
 # A scan that somehow hangs is stopped rather than left running forever.
 TASK_TIME_LIMIT = "PT4H"
@@ -57,9 +64,9 @@ _UNSAFE_TASK_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 @dataclass(frozen=True)
 class ScheduledScan:
     path: str
-    frequency: str = "daily"   # "daily" | "weekly"
-    time: str = "09:00"        # 24-hour HH:MM, local time
-    weekday: str = "MON"       # weekly only
+    frequency: str = "daily"  # "daily" | "weekly"
+    time: str = "09:00"  # 24-hour HH:MM, local time
+    weekday: str = "MON"  # weekly only
 
     def validate(self):
         """Raises ValueError with a message fit to show the user."""
@@ -132,7 +139,10 @@ def windows_task_xml(scheduled, command=None, today=None):
     command = command if command is not None else scan_command(scheduled)
     hour, minute = scheduled.hour_minute
     start = (today or datetime.now()).replace(
-        hour=hour, minute=minute, second=0, microsecond=0,
+        hour=hour,
+        minute=minute,
+        second=0,
+        microsecond=0,
     )
 
     if scheduled.frequency == "daily":
@@ -144,10 +154,12 @@ def windows_task_xml(scheduled, command=None, today=None):
             "</DaysOfWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek>"
         )
 
+    description = escape(f"Storage Scanner: scans {scheduled.path} and saves it to scan history.")
+
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>{escape(f"Storage Scanner: scans {scheduled.path} and saves it to scan history.")}</Description>
+    <Description>{description}</Description>
   </RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
@@ -195,8 +207,10 @@ def cron_line(scheduled, command=None):
     scheduled.validate()
     command = command if command is not None else scan_command(scheduled)
     hour, minute = scheduled.hour_minute
-    day_of_week = "*" if scheduled.frequency == "daily" else str(
-        (WEEKDAYS.index(scheduled.weekday) + 1) % 7  # cron: 0 = Sunday
+    day_of_week = (
+        "*"
+        if scheduled.frequency == "daily"
+        else str((WEEKDAYS.index(scheduled.weekday) + 1) % 7)  # cron: 0 = Sunday
     )
     return f"{minute} {hour} * * {day_of_week} {shlex.join(command)}"
 
@@ -210,7 +224,10 @@ def _run_schtasks(args):
     """Runs schtasks.exe. Returns (ok, message)."""
     try:
         result = subprocess.run(
-            args, capture_output=True, text=True, timeout=30,
+            args,
+            capture_output=True,
+            text=True,
+            timeout=30,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -235,10 +252,8 @@ def create_windows_task(scheduled):
 
         return _run_schtasks(windows_create_args(scheduled, xml_path))
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(xml_path)
-        except OSError:
-            pass
 
 
 def delete_windows_task(scheduled):

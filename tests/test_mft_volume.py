@@ -52,6 +52,7 @@ _BYTES_PER_CLUSTER = _RECORD_SIZE
 
 # -- fixture-building: a genuinely valid $MFT record #0 --------------------- #
 
+
 def _minimal_unsigned_bytes(value):
     n = 1
     while True:
@@ -94,12 +95,12 @@ def _encode_runs(extents):
 def _stamp_fixups(record):
     record = bytearray(record)
     usn = b"\x01\x00"
-    record[_USA_OFFSET:_USA_OFFSET + 2] = usn
+    record[_USA_OFFSET : _USA_OFFSET + 2] = usn
     for i in range(1, _USA_SIZE):
         sector_end = i * _SECTOR_SIZE - 2
-        original = bytes(record[sector_end:sector_end + 2])
-        record[_USA_OFFSET + 2 * i:_USA_OFFSET + 2 * i + 2] = original
-        record[sector_end:sector_end + 2] = usn
+        original = bytes(record[sector_end : sector_end + 2])
+        record[_USA_OFFSET + 2 * i : _USA_OFFSET + 2 * i + 2] = original
+        record[sector_end : sector_end + 2] = usn
     return bytes(record)
 
 
@@ -130,13 +131,24 @@ def _build_record0(extents, record_size=_RECORD_SIZE):
     bytes_in_use = _FIRST_ATTR_OFFSET + len(attrs)
     header = struct.pack(
         "<4sHHQHHHHIIQHHI",
-        b"FILE", _USA_OFFSET, _USA_SIZE, 0, 1, 1,
-        _FIRST_ATTR_OFFSET, 0x0001, bytes_in_use, record_size,
-        0, 0, 0, 0,
+        b"FILE",
+        _USA_OFFSET,
+        _USA_SIZE,
+        0,
+        1,
+        1,
+        _FIRST_ATTR_OFFSET,
+        0x0001,
+        bytes_in_use,
+        record_size,
+        0,
+        0,
+        0,
+        0,
     )
     buf = bytearray(record_size)
-    buf[0:len(header)] = header
-    buf[_FIRST_ATTR_OFFSET:_FIRST_ATTR_OFFSET + len(attrs)] = attrs
+    buf[0 : len(header)] = header
+    buf[_FIRST_ATTR_OFFSET : _FIRST_ATTR_OFFSET + len(attrs)] = attrs
     return _stamp_fixups(bytes(buf))
 
 
@@ -146,17 +158,17 @@ def _make_single_extent_volume(record_count, lcn=8, bytes_per_cluster=_BYTES_PER
     with a byte equal to their own record number (mod 256), so content
     reads can be checked, not just lengths."""
     records_per_cluster = bytes_per_cluster // _RECORD_SIZE
-    assert record_count % records_per_cluster == 0, "record_count must be a whole number of clusters"
+    assert (
+        record_count % records_per_cluster == 0
+    ), "record_count must be a whole number of clusters"
     length_clusters = record_count // records_per_cluster
     record0 = _build_record0([(length_clusters, lcn)], record_size=_RECORD_SIZE)
-    other_records = b"".join(
-        bytes([i % 256]) * _RECORD_SIZE for i in range(1, record_count)
-    )
+    other_records = b"".join(bytes([i % 256]) * _RECORD_SIZE for i in range(1, record_count))
     mft_bytes = record0 + other_records
 
     start_offset = lcn * bytes_per_cluster
     volume = bytearray(start_offset + len(mft_bytes))
-    volume[start_offset:start_offset + len(mft_bytes)] = mft_bytes
+    volume[start_offset : start_offset + len(mft_bytes)] = mft_bytes
     return bytes(volume)
 
 
@@ -168,9 +180,9 @@ def _make_two_extent_volume(count1, lcn1, count2, lcn2, bytes_per_cluster=_BYTES
     single-contiguous-span assumption would read wrong/garbage data for
     every record in extent 2, not just land slightly off."""
     records_per_cluster = bytes_per_cluster // _RECORD_SIZE
-    assert count1 % records_per_cluster == 0 and count2 % records_per_cluster == 0, (
-        "count1/count2 must each be a whole number of clusters"
-    )
+    assert (
+        count1 % records_per_cluster == 0 and count2 % records_per_cluster == 0
+    ), "count1/count2 must each be a whole number of clusters"
     record0 = _build_record0(
         [(count1 // records_per_cluster, lcn1), (count2 // records_per_cluster, lcn2)],
         record_size=_RECORD_SIZE,
@@ -182,20 +194,21 @@ def _make_two_extent_volume(count1, lcn1, count2, lcn2, bytes_per_cluster=_BYTES
     end2 = offset2 + count2 * _RECORD_SIZE
     volume = bytearray(max(end1, end2))
 
-    volume[offset1:offset1 + _RECORD_SIZE] = record0
+    volume[offset1 : offset1 + _RECORD_SIZE] = record0
     for i in range(1, count1):
         off = offset1 + i * _RECORD_SIZE
-        volume[off:off + _RECORD_SIZE] = bytes([i % 256]) * _RECORD_SIZE
+        volume[off : off + _RECORD_SIZE] = bytes([i % 256]) * _RECORD_SIZE
 
     for i in range(count2):
         record_number = count1 + i
         off = offset2 + i * _RECORD_SIZE
-        volume[off:off + _RECORD_SIZE] = bytes([record_number % 256]) * _RECORD_SIZE
+        volume[off : off + _RECORD_SIZE] = bytes([record_number % 256]) * _RECORD_SIZE
 
     return bytes(volume)
 
 
 # -- faked ctypes.windll.kernel32 -------------------------------------------- #
+
 
 class _FakeCreateFileW:
     def __init__(self, fails=False):
@@ -257,7 +270,7 @@ class _FakeReadFile:
             return 0
         offset = self.pointer.last_offset
         self.calls.append((offset, length))
-        available = self.volume_bytes[offset:offset + length]
+        available = self.volume_bytes[offset : offset + length]
         actual_length = length - 1 if self.short_read else length
         data = available[:actual_length].ljust(length, b"\x00")
         buffer.raw = data
@@ -276,19 +289,32 @@ class _FakeCloseHandle:
 
 class _FakeKernel32:
     def __init__(
-        self, volume_bytes, *, mft_start_lcn, bytes_per_cluster=_BYTES_PER_CLUSTER,
-        record_size=_RECORD_SIZE, create_file_fails=False,
-        device_io_control_fails=False, read_file_fails=False, short_read=False,
+        self,
+        volume_bytes,
+        *,
+        mft_start_lcn,
+        bytes_per_cluster=_BYTES_PER_CLUSTER,
+        record_size=_RECORD_SIZE,
+        create_file_fails=False,
+        device_io_control_fails=False,
+        read_file_fails=False,
+        short_read=False,
         volume_serial=0,
     ):
         self.CreateFileW = _FakeCreateFileW(fails=create_file_fails)
         self.DeviceIoControl = _FakeDeviceIoControl(
-            mft_start_lcn, bytes_per_cluster, record_size,
-            fails=device_io_control_fails, volume_serial=volume_serial,
+            mft_start_lcn,
+            bytes_per_cluster,
+            record_size,
+            fails=device_io_control_fails,
+            volume_serial=volume_serial,
         )
         self.SetFilePointerEx = _FakeSetFilePointerEx()
         self.ReadFile = _FakeReadFile(
-            volume_bytes, self.SetFilePointerEx, fails=read_file_fails, short_read=short_read,
+            volume_bytes,
+            self.SetFilePointerEx,
+            fails=read_file_fails,
+            short_read=short_read,
         )
         self.CloseHandle = _FakeCloseHandle()
 
@@ -303,6 +329,7 @@ def _patch(monkeypatch, kernel32):
 
 
 # -- tests -------------------------------------------------------------------- #
+
 
 def test_opens_volume_and_reports_record_count_from_decoded_extents(monkeypatch):
     volume_bytes = _make_single_extent_volume(record_count=10, lcn=8)
@@ -517,7 +544,7 @@ def test_unreadable_record0_raises_and_closes_the_handle(monkeypatch):
     # record #0 can be "read" fine (ReadFile succeeds) but doesn't decode
     # to a usable $DATA run list -- e.g. corrupt/torn on a damaged volume.
     volume_bytes = bytearray(_make_single_extent_volume(record_count=3, lcn=8))
-    volume_bytes[8 * _BYTES_PER_CLUSTER:8 * _BYTES_PER_CLUSTER + 4] = b"BAAD"
+    volume_bytes[8 * _BYTES_PER_CLUSTER : 8 * _BYTES_PER_CLUSTER + 4] = b"BAAD"
     kernel32 = _FakeKernel32(bytes(volume_bytes), mft_start_lcn=8)
     _patch(monkeypatch, kernel32)
 
@@ -569,6 +596,7 @@ def test_context_manager_closes_on_exit(monkeypatch):
 
 # -- multi-extent: the actual regression test for the real bug -------------- #
 
+
 def test_fragmented_mft_with_two_non_adjacent_extents_reads_correctly(monkeypatch):
     # Extent 1: records [0, 5) at lcn=8. Extent 2: records [5, 10) at
     # lcn=1000 -- far away, with a large gap of zero bytes in between that
@@ -609,6 +637,7 @@ def test_chunk_reads_never_cross_an_extent_boundary(monkeypatch):
 
 # -- read_clusters (for non-resident $ATTRIBUTE_LIST reassembly) ------------ #
 
+
 def test_read_clusters_reads_the_right_offset_and_length(monkeypatch):
     volume_bytes = _make_single_extent_volume(record_count=5, lcn=8)
     kernel32 = _FakeKernel32(volume_bytes, mft_start_lcn=8)
@@ -623,7 +652,10 @@ def test_read_clusters_reads_the_right_offset_and_length(monkeypatch):
     offset, length = kernel32.ReadFile.calls[-1]
     assert offset == 8 * _BYTES_PER_CLUSTER
     assert length == 2 * _BYTES_PER_CLUSTER
-    assert data == volume_bytes[8 * _BYTES_PER_CLUSTER:8 * _BYTES_PER_CLUSTER + 2 * _BYTES_PER_CLUSTER]
+    assert (
+        data
+        == volume_bytes[8 * _BYTES_PER_CLUSTER : 8 * _BYTES_PER_CLUSTER + 2 * _BYTES_PER_CLUSTER]
+    )
 
 
 def test_records_per_cluster_greater_than_one_is_handled(monkeypatch):
@@ -634,10 +666,14 @@ def test_records_per_cluster_greater_than_one_is_handled(monkeypatch):
     record_count = 3 * records_per_cluster
     lcn = 2
     volume_bytes = _make_single_extent_volume(
-        record_count=record_count, lcn=lcn, bytes_per_cluster=bytes_per_cluster,
+        record_count=record_count,
+        lcn=lcn,
+        bytes_per_cluster=bytes_per_cluster,
     )
     kernel32 = _FakeKernel32(
-        volume_bytes, mft_start_lcn=lcn, bytes_per_cluster=bytes_per_cluster,
+        volume_bytes,
+        mft_start_lcn=lcn,
+        bytes_per_cluster=bytes_per_cluster,
     )
     _patch(monkeypatch, kernel32)
 

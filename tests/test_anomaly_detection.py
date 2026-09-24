@@ -12,10 +12,7 @@ BASE = datetime(2024, 1, 1)
 
 def _history(sizes):
     """sizes: [total_size, ...], one per day starting at BASE."""
-    return [
-        ((BASE + timedelta(days=i)).isoformat(), size, 0, 0)
-        for i, size in enumerate(sizes)
-    ]
+    return [((BASE + timedelta(days=i)).isoformat(), size, 0, 0) for i, size in enumerate(sizes)]
 
 
 def test_too_few_deltas_returns_no_anomalies():
@@ -71,7 +68,7 @@ def test_unusually_slow_growth_is_a_drop_not_a_spike():
 
     assert len(anomalies) == 1
     assert anomalies[0].growth_bytes == 50  # still positive: this scan really did grow
-    assert anomalies[0].kind == "drop"      # but far slower than usual -> a "drop" vs. baseline
+    assert anomalies[0].kind == "drop"  # but far slower than usual -> a "drop" vs. baseline
     assert anomalies[0].z_score < 0
     assert "Grew by" in anomalies[0].message
     assert "Shrank" not in anomalies[0].message
@@ -90,7 +87,7 @@ def test_unusually_small_shrink_is_a_spike_not_a_drop():
 
     assert len(anomalies) == 1
     assert anomalies[0].growth_bytes == -50  # still negative: this scan really did shrink
-    assert anomalies[0].kind == "spike"      # but far less than usual -> a "spike" vs. baseline
+    assert anomalies[0].kind == "spike"  # but far less than usual -> a "spike" vs. baseline
     assert anomalies[0].z_score > 0
     assert "Shrank by" in anomalies[0].message
     assert "Grew" not in anomalies[0].message

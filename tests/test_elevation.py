@@ -8,7 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.file_ops import (
-    relaunch_elevated_windows, run_elevated_scan_linux, run_elevated_scan_macos,
+    relaunch_elevated_windows,
+    run_elevated_scan_linux,
+    run_elevated_scan_macos,
 )
 
 
@@ -59,7 +61,8 @@ def test_elevated_scan_builds_osascript_with_administrator_privileges(monkeypatc
 
 def test_elevated_scan_returns_false_when_authorization_is_cancelled(monkeypatch):
     monkeypatch.setattr(
-        subprocess, "run",
+        subprocess,
+        "run",
         lambda *a, **k: _FakeCompletedProcess(1, stderr="128:User canceled."),
     )
     ok, output = run_elevated_scan_macos("/Users/test")
@@ -238,7 +241,8 @@ def test_elevated_scan_linux_uses_bare_executable_when_frozen(monkeypatch):
 
 def test_elevated_scan_linux_returns_false_when_authorization_is_cancelled(monkeypatch):
     monkeypatch.setattr(
-        subprocess, "run",
+        subprocess,
+        "run",
         lambda *a, **k: _FakeCompletedProcess(127, stderr="Not authorized"),
     )
     ok, output = run_elevated_scan_linux("/home/test")

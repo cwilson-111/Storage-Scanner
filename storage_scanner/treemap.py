@@ -63,15 +63,14 @@ def _layout_row(row_areas, row_indices, result, rect):
             result[idx] = (rx, cy, col_w, item_h)
             cy += item_h
         return (rx + col_w, ry, rw - col_w, rh)
-    else:
-        # A horizontal row of fixed height, items side by side filling width.
-        row_h = total / rw if rw else 0.0
-        cx = rx
-        for idx, area in zip(row_indices, row_areas):
-            item_w = area / row_h if row_h else 0.0
-            result[idx] = (cx, ry, item_w, row_h)
-            cx += item_w
-        return (rx, ry + row_h, rw, rh - row_h)
+    # A horizontal row of fixed height, items side by side filling width.
+    row_h = total / rw if rw else 0.0
+    cx = rx
+    for idx, area in zip(row_indices, row_areas):
+        item_w = area / row_h if row_h else 0.0
+        result[idx] = (cx, ry, item_w, row_h)
+        cx += item_w
+    return (rx, ry + row_h, rw, rh - row_h)
 
 
 def _squarify(areas, x, y, width, height):

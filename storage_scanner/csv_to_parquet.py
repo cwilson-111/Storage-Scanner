@@ -23,7 +23,8 @@ except ImportError:  # pragma: no cover - optional runtime dependency
 from storage_scanner.logging_setup import logger
 
 ParquetResult = namedtuple(
-    "ParquetResult", ["success", "output_path", "error"],
+    "ParquetResult",
+    ["success", "output_path", "error"],
 )
 
 _INSTALL_HINT = (
@@ -73,7 +74,9 @@ def compress_csv_to_parquet(csv_path, output_path=None, compression="snappy"):
             try:
                 os.remove(output_path)
             except OSError:
-                logger.warning("Could not clean up partial Parquet file %r", output_path, exc_info=True)
+                logger.warning(
+                    "Could not clean up partial Parquet file %r", output_path, exc_info=True
+                )
         return ParquetResult(False, None, str(exc))
 
     return ParquetResult(True, output_path, None)

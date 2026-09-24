@@ -30,11 +30,23 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run test suite
-        run: pytest tests/
+      # Gates, in cheapest-first order so an obvious lint break fails in
+      # seconds instead of after the whole suite. All four read their config
+      # from pyproject.toml, so these commands match a local run exactly.
+      # `.` rather than an explicit file list: PowerShell does not expand
+      # `*.py` for a native command, and both tools recurse the repo while
+      # honouring pyproject.toml's exclusions anyway.
+      - name: Lint (ruff)
+        run: ruff check .
 
-      - name: Lint
-        run: python -m pyflakes storage_scanner/ tests/ smoke_test_build.py
+      - name: Format check (black)
+        run: black --check .
+
+      - name: Type check (mypy)
+        run: mypy storage_scanner/
+
+      - name: Run test suite with coverage
+        run: pytest tests/
 
   build:
     needs: test

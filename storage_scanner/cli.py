@@ -31,18 +31,22 @@ def build_arg_parser():
     )
     parser.add_argument("path", help="Folder or file to scan")
     parser.add_argument(
-        "--format", choices=FORMATS + ("none",), default="json",
+        "--format",
+        choices=FORMATS + ("none",),
+        default="json",
         help="Output format (default: json). 'none' writes no data, for a "
-             "scheduled scan that only needs --save-history",
+        "scheduled scan that only needs --save-history",
     )
     parser.add_argument(
-        "--output", metavar="FILE",
+        "--output",
+        metavar="FILE",
         help="Write output to FILE instead of stdout",
     )
     parser.add_argument(
-        "--save-history", action="store_true",
+        "--save-history",
+        action="store_true",
         help="Also record this scan in scan history, exactly like a scan run "
-             "from the app, so growth, forecasts, anomalies and budgets see it",
+        "from the app, so growth, forecasts, anomalies and budgets see it",
     )
     return parser
 

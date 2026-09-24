@@ -100,6 +100,11 @@ def recycle_and_log(node, source, action="recycle", extra_error_context=None):
             "Failed to record audit log entry (source=%r action=%r path=%r "
             "is_dir=%r size_bytes=%r success=%r) — recorded here only, "
             "missing from the Audit Log window",
-            source, action, node.path, node.is_dir, node.size, success,
+            source,
+            action,
+            node.path,
+            node.is_dir,
+            node.size,
+            success,
         )
     return success

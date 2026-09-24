@@ -33,9 +33,7 @@ def _classify_orphans(records, root_frn):
         if record.frn == root_frn:
             continue
         for name_attr in record.names:
-            children_by_parent.setdefault(name_attr.parent_frn, []).append(
-                (record, name_attr)
-            )
+            children_by_parent.setdefault(name_attr.parent_frn, []).append((record, name_attr))
 
     attached = set()
     visited_dir_frns = {root_frn}
@@ -75,9 +73,14 @@ def _classify_orphans(records, root_frn):
     print("\nOrphan breakdown (why each unattached occurrence wasn't reachable):")
     descriptions = {
         "missing_parent": "parent record missing entirely",
-        "parent_is_reparse_point": "parent is a reparse point (expected leaf -- matches the Compatible engine's own behavior, not a bug)",
+        "parent_is_reparse_point": (
+            "parent is a reparse point (expected leaf -- matches the "
+            "Compatible engine's own behavior, not a bug)"
+        ),
         "parent_not_a_directory": "parent record exists but isn't a directory (corrupt link?)",
-        "cascading_unreachable_parent": "parent exists and is a real directory, but IT was never reached either (cascading)",
+        "cascading_unreachable_parent": (
+            "parent exists and is a real directory, but IT was never " "reached either (cascading)"
+        ),
     }
     for key, names in buckets.items():
         print(f"  {descriptions[key]}: {len(names):,}")
@@ -161,12 +164,12 @@ def main(drive):
         print(f"  'danet' found under Users: {danet_node is not None}")
         if danet_node is not None:
             print(f"    danet.children count: {len(danet_node.children)}")
-            docs_node = next((c for c in danet_node.children if c.name.lower() == "documents"), None)
+            docs_node = next(
+                (c for c in danet_node.children if c.name.lower() == "documents"), None
+            )
             print(f"    'Documents' found under danet: {docs_node is not None}")
 
-    root_record = next(
-        (r for r in records if (r.frn & _FRN_RECORD_NUMBER_MASK) == 5), None
-    )
+    root_record = next((r for r in records if (r.frn & _FRN_RECORD_NUMBER_MASK) == 5), None)
     if root_record is not None:
         _classify_orphans(records, root_record.frn)
 

@@ -26,8 +26,15 @@ class _FakeGetVolumeInformationW:
         self.calls = []
 
     def __call__(
-        self, root_path, _vol_name_buf, _vol_name_size, _vol_serial,
-        _max_component_len, _fs_flags, fs_name_buffer, _fs_name_size,
+        self,
+        root_path,
+        _vol_name_buf,
+        _vol_name_size,
+        _vol_serial,
+        _max_component_len,
+        _fs_flags,
+        fs_name_buffer,
+        _fs_name_size,
     ):
         self.calls.append(root_path)
         if not self.succeed:
@@ -72,7 +79,9 @@ def test_fixed_ntfs_drive_is_eligible(monkeypatch):
 
 
 def test_removable_drive_is_not_eligible(monkeypatch):
-    _patch_windll(monkeypatch, _FakeKernel32(drive_type=drive_info._DRIVE_REMOVABLE, fs_name="NTFS"))
+    _patch_windll(
+        monkeypatch, _FakeKernel32(drive_type=drive_info._DRIVE_REMOVABLE, fs_name="NTFS")
+    )
     monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
 
     assert is_ntfs_fixed_drive("E:\\") is False

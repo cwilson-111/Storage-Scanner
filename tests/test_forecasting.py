@@ -12,10 +12,7 @@ BASE = datetime(2024, 1, 1)
 
 def _history(points):
     """points: [(day_offset, total_size), ...] -> get_scan_history() shape."""
-    return [
-        ((BASE + timedelta(days=day)).isoformat(), size, 0, 0)
-        for day, size in points
-    ]
+    return [((BASE + timedelta(days=day)).isoformat(), size, 0, 0) for day, size in points]
 
 
 def test_insufficient_data_below_minimum_points():

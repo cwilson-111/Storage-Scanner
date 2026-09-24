@@ -247,9 +247,14 @@ Releases are also built automatically by GitHub Actions — push a tag like
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests/
-python -m pyflakes storage_scanner/ tests/
+pytest tests/          # also enforces the coverage floor
+ruff check .           # lint + import order
+black --check .        # formatting (drop --check to apply)
+mypy storage_scanner/  # type checking
 ```
+
+All four read their settings from `pyproject.toml`, and CI runs the same
+four commands as the `test` job every release build depends on.
 
 ## Privacy & trust
 

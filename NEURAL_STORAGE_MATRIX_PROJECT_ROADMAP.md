@@ -30,11 +30,15 @@ Two gaps flagged in an earlier pass here are now closed:
   Scanner" (matching the repo, README, and executable name) instead of
   the old "Neural Storage Matrix" — the P1 naming-consistency item below
   is fully resolved.
-- **CI gates on tests.** `build.yml` now has a `test` job (`pytest` +
-  `pyflakes`, on `windows-latest` since several tests exercise Windows-only
-  code paths) that the `build`/release job depends on via `needs: test` —
-  a broken test or lint failure now blocks the release, closing out the
-  automated-quality-gates item below (P4/#10) as far as CI wiring goes.
+- **CI gates on tests.** `build.yml`'s `test` job (on `windows-latest`,
+  since several tests exercise Windows-only code paths) now runs `ruff`,
+  `black --check`, `mypy`, and `pytest` with a coverage floor, and the
+  `build`/release jobs depend on it via `needs: test` — a lint, format,
+  type or coverage regression now blocks the release. See item 10 below.
+- **Dependency and secret scanning.** `.github/workflows/security.yml`
+  adds CodeQL, `pip-audit`, and gitleaks (full history) on every push/PR
+  and weekly; `.github/dependabot.yml` keeps the toolchain and the pinned
+  Action SHAs current. See item 9 below.
 
 See the phase checklists further down for what's done vs. not, item by item.
 
@@ -326,14 +330,28 @@ To actually fix it:
 
 ### 9. Treat trust as a product feature
 
-- Code-sign Windows releases.
-- Publish checksums for every release.
-- Generate an SBOM.
-- Pin GitHub Action versions to immutable commit SHAs.
-- Run dependency and secret scanning.
-- Add reproducible build notes.
-- Publish a privacy statement stating that scanning is local unless the user opts into remote features.
-- Add crash-report opt-in rather than silent telemetry.
+- ❌ Code-sign Windows releases — still blocked on a purchased certificate.
+- ✅ Publish checksums for every release.
+- ✅ Generate an SBOM.
+- ✅ Pin GitHub Action versions to immutable commit SHAs.
+- ✅ Run dependency and secret scanning — `.github/workflows/security.yml`
+  (2026-09-23): CodeQL `security-extended` on the Python source, `pip-audit
+  --strict` against `requirements-dev.txt` (the entire dependency surface,
+  and PyInstaller bundles whatever is installed at build time), and
+  gitleaks over the full commit history — on every push/PR to `main` plus a
+  weekly cron, so a newly published CVE against an unchanged dependency is
+  still caught. `.github/dependabot.yml` raises weekly updates for the
+  pip toolchain and the pinned Action SHAs. It is a separate workflow from
+  `build.yml` on purpose: a CodeQL queue backlog must never hold up
+  shipping a binary. Verified locally: `pip-audit --strict -r
+  requirements-dev.txt` → "No known vulnerabilities found"; `gitleaks git`
+  → "34 commits scanned … no leaks found". CodeQL itself only runs on
+  GitHub, so it is unverified until the next push.
+- ✅ Add reproducible build notes — `BUILD_PROVENANCE.md`, including an
+  explicit "this is *not* a reproducible build" section.
+- ✅ Publish a privacy statement stating that scanning is local unless the user opts into remote features.
+- ❌ Add crash-report opt-in rather than silent telemetry — not started;
+  `logging_setup.py` writes local rotating logs and nothing leaves the machine.
 
 Unsigned executables face reputation warnings. Packaging alone will not solve this. Signing, transparent builds, and a stable release process are the long-term answer.
 
@@ -352,10 +370,34 @@ Build tests for:
 
 Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test job that must pass before release. Create generated test trees so correctness and performance can be benchmarked across versions.
 
-**The GitHub Actions test-job-gating piece is done** — `build.yml` now runs
-`pytest`/`pyflakes` in a `test` job that `build` (and therefore the release)
-depends on via `needs:`. Ruff/Black/mypy and coverage thresholds are still
-not in place.
+**Done (2026-09-23).** `pyproject.toml` now configures all four tools, and
+`build.yml`'s `test` job runs them in cheapest-first order — `ruff check .`,
+`black --check .`, `mypy storage_scanner/`, then `pytest tests/` — with
+`build`/`build-macos`/`build-linux` gated on it via `needs: test`.
+
+- **Ruff** replaces pyflakes: `E,W,F,I,UP,B,C4,SIM,RET` at line length 100,
+  `target-version = "py39"` (the oldest interpreter this runs on locally).
+  `PTH` is deliberately off — the scan hot loop uses `os.scandir`/`os.path`
+  on purpose, and a `Path` object per directory entry is exactly the
+  allocation a disk scanner cannot afford. Tests are exempt from `E402`
+  because each one bootstraps `sys.path` before importing the package.
+- **Black** at the same line length; the adoption reformatted 78 files. The
+  full suite was run before and after: 396 passed / 36 failed on macOS both
+  times (the 36 are the Windows-only NTFS, schedule and drive-letter suites,
+  which cannot pass off Windows — CI runs them on `windows-latest`).
+- **mypy** (not `--strict`, on an unannotated Tkinter codebase) is clean
+  across all 45 modules after five real fixes: a `dict[str, Optional[int]]`
+  cluster-size cache that genuinely caches `None`, `ScanReport.fallback_reason`
+  typed `Optional[str]` instead of `str = None`, and loose `tuple`
+  annotations for the per-platform font specs and duplicate-exclude lists,
+  whose branches have different shapes.
+- **Coverage** is enforced by `--cov-fail-under` in `pyproject.toml`. A full
+  macOS run measures 49% *with* those 36 Windows tests failing; the floor is
+  deliberately set below that at 45% and should be raised to just under
+  whatever the first green Windows CI run reports.
+
+Still not done from this item: generated test trees for cross-version
+correctness/performance benchmarking.
 
 **Packaging smoke tests are done (2026-09-23).** `smoke_test_build.py` launches
 the real frozen binary in headless `--cli --save-history` mode against a small
@@ -379,7 +421,7 @@ steps haven't run yet; they run on the next push to `main`.
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (335 and counting), and `build.yml` now runs them (plus `pyflakes`) in a `test` job the release build depends on — see Status update above. Every build job now also smoke-tests the packaged binary before release (see item 10).
+5. ✅ Add unit tests (432 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release.
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
 ### Phase 2: Competitive core — ✅ done

@@ -10,6 +10,7 @@ real Linux machine, but not here (this project's dev/CI machine is
 Windows, where os.path.normpath would mangle these forward-slash paths
 into backslashes and make every assertion below meaningless).
 """
+
 import posixpath
 import sys
 from pathlib import Path
@@ -18,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.settings import (
-    _LINUX_DUPLICATE_EXCLUDES, _MACOS_DUPLICATE_EXCLUDES, _WINDOWS_DUPLICATE_EXCLUDES,
+    _LINUX_DUPLICATE_EXCLUDES,
+    _MACOS_DUPLICATE_EXCLUDES,
+    _WINDOWS_DUPLICATE_EXCLUDES,
 )
 
 
@@ -29,9 +32,15 @@ def _matches_on_linux(path, excludes=_LINUX_DUPLICATE_EXCLUDES):
 
 def test_linux_excludes_match_known_system_paths():
     for path in [
-        "/etc/passwd", "/usr/bin/python3", "/proc/1/status", "/sys/class/net",
-        "/boot/vmlinuz", "/var/cache/apt/archives", "/var/lib/docker",
-        "/lib/systemd", "/lib64/ld-linux.so.2",
+        "/etc/passwd",
+        "/usr/bin/python3",
+        "/proc/1/status",
+        "/sys/class/net",
+        "/boot/vmlinuz",
+        "/var/cache/apt/archives",
+        "/var/lib/docker",
+        "/lib/systemd",
+        "/lib64/ld-linux.so.2",
         "/home/user/.local/share/Trash/files/deleted.txt",
         "/home/user/.Trash/old.bin",
     ]:

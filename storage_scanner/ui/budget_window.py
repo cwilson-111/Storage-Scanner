@@ -41,12 +41,11 @@ class BudgetMixin:
             self._budget_banner = None
 
         ttk.Label(
-            banner, style="Accent.TLabel",
+            banner,
+            style="Accent.TLabel",
             text=f"⚠ {count} storage {noun} exceeded.",
         ).pack(side=LEFT)
-        ttk.Button(banner, text="View Details", command=view_details).pack(
-            side=LEFT, padx=(10, 0)
-        )
+        ttk.Button(banner, text="View Details", command=view_details).pack(side=LEFT, padx=(10, 0))
         ttk.Button(banner, text="✕", width=3, command=dismiss).pack(side=RIGHT)
 
         banner.pack(side=TOP, fill=X, before=self.toolbar_frame)
@@ -67,7 +66,9 @@ class BudgetMixin:
             logger.debug("Storage Budgets window iconbitmap failed", exc_info=True)
 
         ttk.Label(
-            win, padding=(10, 8), style="Accent.TLabel",
+            win,
+            padding=(10, 8),
+            style="Accent.TLabel",
             text=(
                 "Alerts fire when you scan a budgeted folder or launch the "
                 "app — not continuously in the background."
@@ -110,12 +111,27 @@ class BudgetMixin:
             id_by_iid.clear()
             rows = list_budgets()
             if not rows:
-                tv.insert("", END, values=("No budgets set yet — right-click a folder in the main tree.", "", "", "", ""))
+                tv.insert(
+                    "",
+                    END,
+                    values=(
+                        "No budgets set yet — right-click a folder in the main tree.",
+                        "",
+                        "",
+                        "",
+                        "",
+                    ),
+                )
                 return
             for index, (budget_id, path, threshold_bytes, _created_at) in enumerate(rows):
                 snapshot = get_latest_scan_snapshot(path)
                 if snapshot is None:
-                    current_text, status, as_of_text, tag = "—", "Unknown", "never scanned", "unknown"
+                    current_text, status, as_of_text, tag = (
+                        "—",
+                        "Unknown",
+                        "never scanned",
+                        "unknown",
+                    )
                 else:
                     scanned_at, total_size, _file_count, _folder_count = snapshot
                     current_text = human_size(total_size)
@@ -125,7 +141,8 @@ class BudgetMixin:
                     else:
                         status, tag = "OK", "ok"
                 iid = tv.insert(
-                    "", END,
+                    "",
+                    END,
                     values=(path, human_size(threshold_bytes), current_text, status, as_of_text),
                     tags=(tag, "odd" if index % 2 else "even"),
                 )
@@ -143,7 +160,9 @@ class BudgetMixin:
                 return
             path = tv.item(sel)["values"][0]
             if not messagebox.askyesno(
-                "Remove Budget", f"Remove the budget for:\n{path}?", parent=win,
+                "Remove Budget",
+                f"Remove the budget for:\n{path}?",
+                parent=win,
             ):
                 return
             delete_budget(budget_id)

@@ -81,13 +81,17 @@ def record_scan(node, growth_limit=50):
         folder_sizes=folder_sizes,
     )
     previous_scan_id = history.get_previous_scan_id(
-        scan_path=scan_path, current_scan_id=scan_id,
+        scan_path=scan_path,
+        current_scan_id=scan_id,
     )
     growth_rows = (
         history.get_folder_growth(
-            current_scan_id=scan_id, previous_scan_id=previous_scan_id, limit=growth_limit,
+            current_scan_id=scan_id,
+            previous_scan_id=previous_scan_id,
+            limit=growth_limit,
         )
-        if previous_scan_id else []
+        if previous_scan_id
+        else []
     )
 
     return RecordedScan(

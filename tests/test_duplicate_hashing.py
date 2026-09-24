@@ -34,13 +34,18 @@ def _make_app(tmp_path, files):
     app.root_node = root
     app._should_skip_duplicate_scan = lambda path: False
     app.dup_stats = {
-        "files_total": 0, "files_checked": 0, "files_skipped": 0,
-        "bytes_skipped": 0, "partial_hashed": 0, "full_hashed": 0,
+        "files_total": 0,
+        "files_checked": 0,
+        "files_skipped": 0,
+        "bytes_skipped": 0,
+        "partial_hashed": 0,
+        "full_hashed": 0,
     }
     return app
 
 
 # -- _partial_hash_file's new (partial_digest, full_digest) contract ------- #
+
 
 def test_partial_hash_returns_a_full_digest_for_a_file_within_one_chunk(tmp_path):
     content = b"small file content"
@@ -84,17 +89,25 @@ def test_partial_hash_reports_none_none_for_an_unreadable_file(tmp_path):
 
 # -- End-to-end: correctness is unchanged, and the second read is skipped -- #
 
+
 def test_small_identical_files_are_found_as_duplicates_without_a_second_read(tmp_path, monkeypatch):
     content = b"identical small content" * 10  # well under the 1MB chunk size
-    app = _make_app(tmp_path, [
-        ("a.bin", content), ("b.bin", content), ("unique.bin", b"different"),
-    ])
+    app = _make_app(
+        tmp_path,
+        [
+            ("a.bin", content),
+            ("b.bin", content),
+            ("unique.bin", b"different"),
+        ],
+    )
 
     full_hash_calls = []
     real_full_hash = app._full_hash_file
     monkeypatch.setattr(
-        app, "_full_hash_file",
-        lambda path, cancel_event=None: full_hash_calls.append(path) or real_full_hash(path, cancel_event),
+        app,
+        "_full_hash_file",
+        lambda path, cancel_event=None: full_hash_calls.append(path)
+        or real_full_hash(path, cancel_event),
     )
 
     duplicates = app._find_duplicate_files(cancel_event=threading.Event())
@@ -123,15 +136,20 @@ def test_large_identical_files_still_go_through_full_hash_confirmation(tmp_path,
     # test instead of threading a parameter through the pipeline.
     real_partial = app._partial_hash_file
     monkeypatch.setattr(
-        app, "_partial_hash_file",
-        lambda path, cancel_event=None, chunk_size=1024 * 1024: real_partial(path, cancel_event, tiny_chunk),
+        app,
+        "_partial_hash_file",
+        lambda path, cancel_event=None, chunk_size=1024 * 1024: real_partial(
+            path, cancel_event, tiny_chunk
+        ),
     )
 
     full_hash_calls = []
     real_full_hash = app._full_hash_file
     monkeypatch.setattr(
-        app, "_full_hash_file",
-        lambda path, cancel_event=None: full_hash_calls.append(path) or real_full_hash(path, cancel_event),
+        app,
+        "_full_hash_file",
+        lambda path, cancel_event=None: full_hash_calls.append(path)
+        or real_full_hash(path, cancel_event),
     )
 
     duplicates = app._find_duplicate_files(cancel_event=threading.Event())

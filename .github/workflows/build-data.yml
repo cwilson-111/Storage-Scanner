@@ -21,7 +21,38 @@ permissions:
   contents: write
 
 jobs:
+  # Same gates as build.yml's test job -- a Data build is still a published
+  # release, so a lint, format, type or coverage regression must block it
+  # too. pyarrow/openpyxl are installed here so the Data Tools tests that
+  # skip without them actually run.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install pyarrow openpyxl
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (black)
+        run: black --check .
+
+      - name: Type check (mypy)
+        run: mypy storage_scanner/
+
+      - name: Run test suite with coverage
+        run: pytest tests/
+
   build:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

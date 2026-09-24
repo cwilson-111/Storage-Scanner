@@ -39,7 +39,9 @@ class AuditMixin:
         failed_count = sum(1 for row in entries if not row[6])
 
         ttk.Label(
-            win, padding=(10, 8), style="Accent.TLabel",
+            win,
+            padding=(10, 8),
+            style="Accent.TLabel",
             text=(
                 f"{len(entries):,} logged action(s) — "
                 f"{human_size(reclaimed)} sent to {TRASH_NAME}"
@@ -48,7 +50,9 @@ class AuditMixin:
         ).pack(side=TOP, fill=X)
 
         ttk.Label(
-            win, padding=(10, 0, 10, 8), foreground=COLORS["muted"],
+            win,
+            padding=(10, 0, 10, 8),
+            foreground=COLORS["muted"],
             text=(
                 f"This is a record of what was deleted, not an undo button — "
                 f"everything here went to {TRASH_NAME}, which is where to "
@@ -95,10 +99,15 @@ class AuditMixin:
                 date_text = created_at.replace("T", " ")
                 result_text = "Recycled" if success else f"Failed: {error_message or 'unknown'}"
                 iid = tv.insert(
-                    "", END,
+                    "",
+                    END,
                     values=(
-                        date_text, source, "Folder" if is_dir else "File",
-                        path, human_size(size_bytes), result_text,
+                        date_text,
+                        source,
+                        "Folder" if is_dir else "File",
+                        path,
+                        human_size(size_bytes),
+                        result_text,
                     ),
                     tags=("failed" if not success else "", "odd" if index % 2 else "even"),
                 )
@@ -120,5 +129,7 @@ class AuditMixin:
 
         ttk.Button(button_bar, text="Copy Path", command=copy_selected_path).pack(side=LEFT)
         ttk.Button(
-            button_bar, text=f"Open {TRASH_NAME}", command=open_trash_clicked,
+            button_bar,
+            text=f"Open {TRASH_NAME}",
+            command=open_trash_clicked,
         ).pack(side=RIGHT)

@@ -52,4 +52,6 @@ elif IS_WINDOWS:
 else:
     FILE_MANAGER_NAME = "Files"  # generic term, matches GNOME Files/Nautilus/Dolphin etc.
 
-TRASH_NAME = "Recycle Bin" if IS_WINDOWS else "Trash"  # matches the XDG Trash spec's own naming on Linux
+TRASH_NAME = (
+    "Recycle Bin" if IS_WINDOWS else "Trash"
+)  # matches the XDG Trash spec's own naming on Linux

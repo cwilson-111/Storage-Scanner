@@ -5,7 +5,18 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 
 import os
 from tkinter import (
-    BOTH, E, END, LEFT, Menu, RIGHT, StringVar, TOP, Toplevel, W, X, ttk,
+    BOTH,
+    END,
+    LEFT,
+    RIGHT,
+    TOP,
+    E,
+    Menu,
+    StringVar,
+    Toplevel,
+    W,
+    X,
+    ttk,
 )
 
 from history import (
@@ -34,9 +45,7 @@ class HistoryMixin:
         self.last_growth_rows = growth_rows
 
         if previous_scan_id:
-            self.status_var.set(
-                f"Scan complete. History saved. Growth rows: {len(growth_rows):,}"
-            )
+            self.status_var.set(f"Scan complete. History saved. Growth rows: {len(growth_rows):,}")
         else:
             self.status_var.set(
                 "Scan complete. History saved. Scan the same path again to calculate growth."
@@ -44,12 +53,14 @@ class HistoryMixin:
 
         if budget_breach:
             self._show_budget_banner([budget_breach])
+
     def _history_save_failed(self, exc):
         """
         Runs on the Tkinter UI thread if history saving fails.
         """
         self.last_growth_rows = []
         self.status_var.set(f"Scan complete, but history failed: {exc}")
+
     def _save_history_worker(self, node):
         """
         Saves scan history in a background thread so the Tkinter UI does not freeze.
@@ -64,7 +75,7 @@ class HistoryMixin:
                     recorded.previous_scan_id,
                     recorded.growth_rows,
                     recorded.budget_breach,
-                )
+                ),
             )
 
         except Exception as exc:
@@ -73,10 +84,8 @@ class HistoryMixin:
             # so capture its message now — the lambda runs later, after exc
             # no longer exists.
             error_message = str(exc)
-            self.root.after(
-                0,
-                lambda: self._history_save_failed(error_message)
-            )
+            self.root.after(0, lambda: self._history_save_failed(error_message))
+
     def _format_change(self, value, is_bytes=True):
         if value is None:
             return "—"
@@ -84,19 +93,18 @@ class HistoryMixin:
         if is_bytes and isinstance(value, (int, float)) and abs(value) >= 1024:
             return f"{sign}{human_size(abs(value))}"
         return f"{sign}{int(value):,}"
+
     def _format_percent(self, value):
         if value is None:
             return "—"
         return f"{value:+.1f}%"
+
     def _format_forecast(self, forecast):
         """Render a Forecast namedtuple as one line — a range and an
         explicit confidence level, never a single number presented as
         certain (per the roadmap's own caution about forecasting)."""
         if forecast.status == "insufficient_data":
-            return (
-                f"Forecast: not enough history yet "
-                f"({forecast.data_points}/3 scans needed)"
-            )
+            return f"Forecast: not enough history yet " f"({forecast.data_points}/3 scans needed)"
         if forecast.status == "not_growing":
             return "Forecast: not growing — no fill date to estimate"
         if forecast.days_estimate == 0:
@@ -114,7 +122,10 @@ class HistoryMixin:
             f"({forecast.confidence} confidence, {forecast.data_points} scans "
             f"over {forecast.span_days:,.0f} days, R²={forecast.r_squared:.2f})"
         )
-    def _likely_folder_for_anomaly(self, scan_path, anomaly, created_ats_in_order, scan_ids_by_created_at):
+
+    def _likely_folder_for_anomaly(
+        self, scan_path, anomaly, created_ats_in_order, scan_ids_by_created_at
+    ):
         """Best-effort: which currently-tracked folder (>=50MB, see
         _collect_folder_sizes_for_history) most likely drove this anomaly's
         scan-to-scan change, found the same way the Growth Details tab
@@ -144,26 +155,22 @@ class HistoryMixin:
         rows = get_folder_growth(current_id, previous_id, limit=50)
         normalized_root = os.path.normcase(os.path.normpath(scan_path))
         candidates = [
-            row for row in rows
-            if os.path.normcase(os.path.normpath(row[0])) != normalized_root
+            row for row in rows if os.path.normcase(os.path.normpath(row[0])) != normalized_root
         ]
         if not candidates:
             return None
 
         if anomaly.kind == "drop":
-            folder_path, _prev, _curr, growth_bytes = min(
-                candidates, key=lambda r: r[3]
-            )[:4]
+            folder_path, _prev, _curr, growth_bytes = min(candidates, key=lambda r: r[3])[:4]
             if growth_bytes >= 0:
                 return None
         else:
-            folder_path, _prev, _curr, growth_bytes = max(
-                candidates, key=lambda r: r[3]
-            )[:4]
+            folder_path, _prev, _curr, growth_bytes = max(candidates, key=lambda r: r[3])[:4]
             if growth_bytes <= 0:
                 return None
 
         return folder_path
+
     def _build_anomalies_tab(self, frame, anomalies, history_count, folder_by_anomaly=None):
         """Populate the Anomalies tab: scan-to-scan size changes that were
         statistical outliers for this path's own history (see
@@ -213,7 +220,9 @@ class HistoryMixin:
         tv.tag_configure("drop", foreground=COLORS["warning"])
 
         if not anomalies:
-            tv.insert("", END, values=("—", "—", "No anomalies detected in this path's history.", ""))
+            tv.insert(
+                "", END, values=("—", "—", "No anomalies detected in this path's history.", "")
+            )
             return
 
         # Only anomalies a folder was actually identified for get a
@@ -224,9 +233,12 @@ class HistoryMixin:
             date_text = anomaly.created_at.split("T")[0]
             folder_path = folder_by_anomaly.get(anomaly)
             iid = tv.insert(
-                "", END,
+                "",
+                END,
                 values=(
-                    date_text, anomaly.kind.capitalize(), anomaly.message,
+                    date_text,
+                    anomaly.kind.capitalize(),
+                    anomaly.message,
                     folder_path or "Not identified",
                 ),
                 tags=(anomaly.kind, "odd" if index % 2 else "even"),
@@ -251,19 +263,26 @@ class HistoryMixin:
             tv.focus(iid)
             row_menu.delete(0, END)
             row_menu.add_command(
-                label=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
+                label=f"Reveal in {FILE_MANAGER_NAME}",
+                command=reveal_selected,
             )
             row_menu.tk_popup(event.x_root, event.y_root)
 
         tv.bind("<Button-2>" if IS_MACOS else "<Button-3>", show_row_menu)
+
     def _summarize_folder_change(self, row):
         if not row:
             return "—"
-        folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, file_count = row
-        if growth_percent is None:
-            percent_text = "new"
-        else:
-            percent_text = f"{growth_percent:.1f}%"
+        (
+            folder_path,
+            previous_size,
+            current_size,
+            growth_bytes,
+            growth_percent,
+            growth_type,
+            file_count,
+        ) = row
+        percent_text = "new" if growth_percent is None else f"{growth_percent:.1f}%"
         return f"{os.path.basename(folder_path)} — {human_size(growth_bytes)} ({percent_text})"
 
     # -- Show Growth Function ---------------------------------------------- #
@@ -339,27 +358,69 @@ class HistoryMixin:
         scan_ids_by_created_at = get_scan_ids_by_created_at(scan_path, limit=200)
         folder_by_anomaly = {
             anomaly: self._likely_folder_for_anomaly(
-                scan_path, anomaly, created_ats_in_order, scan_ids_by_created_at,
+                scan_path,
+                anomaly,
+                created_ats_in_order,
+                scan_ids_by_created_at,
             )
             for anomaly in anomaly_list
         }
-        self._build_anomalies_tab(anomalies_frame, anomaly_list, len(full_history), folder_by_anomaly)
+        self._build_anomalies_tab(
+            anomalies_frame, anomaly_list, len(full_history), folder_by_anomaly
+        )
 
         overview = ttk.LabelFrame(summary_frame, text="Overview", padding=10)
         overview.pack(fill=X, pady=(0, 10))
 
         metrics = [
-            ("Current size", human_size(summary["current_size_bytes"]) if summary["current_size_bytes"] is not None else "—"),
-            ("Previous size", human_size(summary["previous_size_bytes"]) if summary["previous_size_bytes"] is not None else "—"),
+            (
+                "Current size",
+                (
+                    human_size(summary["current_size_bytes"])
+                    if summary["current_size_bytes"] is not None
+                    else "—"
+                ),
+            ),
+            (
+                "Previous size",
+                (
+                    human_size(summary["previous_size_bytes"])
+                    if summary["previous_size_bytes"] is not None
+                    else "—"
+                ),
+            ),
             ("Size change", self._format_change(summary["size_change_bytes"])),
             ("Size change %", self._format_percent(summary["size_change_percent"])),
-            ("Current files", f"{summary['current_file_count']:,}" if summary["current_file_count"] is not None else "—"),
-            ("Previous files", f"{summary['previous_file_count']:,}" if summary["previous_file_count"] is not None else "—"),
-            ("File count change", self._format_change(summary["file_count_change"], is_bytes=False)),
+            (
+                "Current files",
+                (
+                    f"{summary['current_file_count']:,}"
+                    if summary["current_file_count"] is not None
+                    else "—"
+                ),
+            ),
+            (
+                "Previous files",
+                (
+                    f"{summary['previous_file_count']:,}"
+                    if summary["previous_file_count"] is not None
+                    else "—"
+                ),
+            ),
+            (
+                "File count change",
+                self._format_change(summary["file_count_change"], is_bytes=False),
+            ),
             ("Tracked folders", f"{summary['tracked_folders']:,}"),
             ("New folders", f"{summary['new_folders']:,}"),
-            ("Largest growth folder", self._summarize_folder_change(summary["largest_growth_folder"])),
-            ("Largest shrink folder", self._summarize_folder_change(summary["largest_shrink_folder"])),
+            (
+                "Largest growth folder",
+                self._summarize_folder_change(summary["largest_growth_folder"]),
+            ),
+            (
+                "Largest shrink folder",
+                self._summarize_folder_change(summary["largest_shrink_folder"]),
+            ),
         ]
 
         for index, (label, value) in enumerate(metrics):
@@ -374,7 +435,9 @@ class HistoryMixin:
         changes_frame.pack(fill=BOTH, expand=True)
 
         change_cols = ("folder", "change", "status")
-        change_tv = ttk.Treeview(changes_frame, columns=change_cols, show="headings", selectmode="browse")
+        change_tv = ttk.Treeview(
+            changes_frame, columns=change_cols, show="headings", selectmode="browse"
+        )
         change_tv.heading("folder", text="Folder")
         change_tv.heading("change", text="Change")
         change_tv.heading("status", text="Status")
@@ -390,10 +453,23 @@ class HistoryMixin:
         change_tv.tag_configure("unchanged", foreground=COLORS["muted"])
 
         if not rows:
-            change_tv.insert("", END, values=("No previous scan found for this exact path.", "", ""), tags=("even",))
+            change_tv.insert(
+                "",
+                END,
+                values=("No previous scan found for this exact path.", "", ""),
+                tags=("even",),
+            )
         else:
             for index, row in enumerate(rows[:10]):
-                folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, file_count = row
+                (
+                    folder_path,
+                    previous_size,
+                    current_size,
+                    growth_bytes,
+                    growth_percent,
+                    growth_type,
+                    file_count,
+                ) = row
                 if growth_type == "Growing":
                     status_tag = "growing"
                 elif growth_type == "Shrinking":
@@ -476,10 +552,7 @@ class HistoryMixin:
                 file_count,
             ) = row
 
-            if growth_percent is None:
-                percent_text = "New"
-            else:
-                percent_text = f"{growth_percent:.1f}%"
+            percent_text = "New" if growth_percent is None else f"{growth_percent:.1f}%"
 
             if growth_type == "Growing":
                 status_tag = "growing"
@@ -504,6 +577,7 @@ class HistoryMixin:
                 ),
                 tags=(status_tag, stripe),
             )
+
     def _build_snapshot_picker(self, win, scan_path, scan_choices, newer_id, older_id):
         """Let the user pick any two saved snapshots of this path to compare,
         instead of only ever seeing the two most recent (roadmap: 'compare
@@ -520,7 +594,7 @@ class HistoryMixin:
 
         label_by_id = {
             scan_id: f"{created_at.replace('T', ' ')}  —  "
-                     f"{human_size(total_size)}, {file_count:,} files"
+            f"{human_size(total_size)}, {file_count:,} files"
             for scan_id, created_at, total_size, file_count in scan_choices
         }
         id_by_label = {label: scan_id for scan_id, label in label_by_id.items()}
@@ -529,14 +603,22 @@ class HistoryMixin:
         ttk.Label(picker, text="Compare to:").pack(side=LEFT)
         newer_var = StringVar(value=label_by_id.get(newer_id, labels[0]))
         newer_combo = ttk.Combobox(
-            picker, textvariable=newer_var, values=labels, state="readonly", width=42,
+            picker,
+            textvariable=newer_var,
+            values=labels,
+            state="readonly",
+            width=42,
         )
         newer_combo.pack(side=LEFT, padx=(4, 12))
 
         ttk.Label(picker, text="Baseline:").pack(side=LEFT)
         older_var = StringVar(value=label_by_id.get(older_id, labels[min(1, len(labels) - 1)]))
         older_combo = ttk.Combobox(
-            picker, textvariable=older_var, values=labels, state="readonly", width=42,
+            picker,
+            textvariable=older_var,
+            values=labels,
+            state="readonly",
+            width=42,
         )
         older_combo.pack(side=LEFT, padx=(4, 12))
 

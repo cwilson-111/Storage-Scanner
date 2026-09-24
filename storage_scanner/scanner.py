@@ -6,6 +6,7 @@ import queue
 import stat
 import sys
 import threading
+from typing import Optional
 
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import Node
@@ -21,9 +22,7 @@ _FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
 _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
 _FILE_ATTRIBUTE_OFFLINE = 0x00001000
 _CLOUD_PLACEHOLDER_ATTRS = (
-    _FILE_ATTRIBUTE_RECALL_ON_OPEN
-    | _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
-    | _FILE_ATTRIBUTE_OFFLINE
+    _FILE_ATTRIBUTE_RECALL_ON_OPEN | _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | _FILE_ATTRIBUTE_OFFLINE
 )
 
 
@@ -39,13 +38,18 @@ def is_cloud_placeholder_attrs(attrs):
     thousands of ordinary C:\\Windows\\Boot files as RECALL_ON_OPEN with no
     REPARSE_POINT bit at all, none of which are actually cloud placeholders.
     """
-    return bool(attrs & _CLOUD_PLACEHOLDER_ATTRS) and bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return bool(attrs & _CLOUD_PLACEHOLDER_ATTRS) and bool(
+        attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
 
 _INVALID_FILE_SIZE = 0xFFFFFFFF
 
 # GetCompressedFileSizeW-per-volume cluster size, cached so an entire scan
 # costs one extra GetDiskFreeSpaceW call per drive, not one per file.
-_cluster_size_cache = {}
+# A None value is cached too: it means "asked the OS, it wouldn't say", so a
+# repeat lookup for that volume doesn't re-ask on every single file.
+_cluster_size_cache: "dict[str, Optional[int]]" = {}
 _cluster_size_cache_lock = threading.Lock()
 
 
@@ -71,8 +75,11 @@ def _get_cluster_size(path):
         free_clusters = ctypes.c_ulong(0)
         total_clusters = ctypes.c_ulong(0)
         succeeded = ctypes.windll.kernel32.GetDiskFreeSpaceW(
-            volume_root, ctypes.byref(sectors_per_cluster), ctypes.byref(bytes_per_sector),
-            ctypes.byref(free_clusters), ctypes.byref(total_clusters),
+            volume_root,
+            ctypes.byref(sectors_per_cluster),
+            ctypes.byref(bytes_per_sector),
+            ctypes.byref(free_clusters),
+            ctypes.byref(total_clusters),
         )
         if succeeded:
             size = sectors_per_cluster.value * bytes_per_sector.value
@@ -281,7 +288,7 @@ def scan(path, progress_q, cancel_event, workers=None):
             node.children.append(child)  # only this worker touches node.children
 
             if is_dir:
-                work.put(child)          # discovered later, sized in rollup
+                work.put(child)  # discovered later, sized in rollup
             else:
                 if st_info is None:
                     child.error = True
@@ -327,9 +334,7 @@ def scan(path, progress_q, cancel_event, workers=None):
                 work.task_done()
 
     n = workers or _worker_count()
-    threads = [
-        threading.Thread(target=_worker, daemon=True) for _ in range(n)
-    ]
+    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(n)]
     for t in threads:
         t.start()
     work.join()  # block until every queued directory has been processed

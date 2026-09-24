@@ -23,7 +23,8 @@ except ImportError:  # pragma: no cover - optional runtime dependency
 from storage_scanner.logging_setup import logger
 
 ExcelResult = namedtuple(
-    "ExcelResult", ["success", "output_path", "error"],
+    "ExcelResult",
+    ["success", "output_path", "error"],
 )
 
 _INSTALL_HINT = (
@@ -103,8 +104,7 @@ def convert_csv_to_xlsx(csv_path, output_path=None, sheet_name="Sheet1"):
             )
         if len(rows) > _MAX_ROWS:
             raise ValueError(
-                f"CSV has {len(rows):,} rows, more than Excel's "
-                f"{_MAX_ROWS:,}-row limit"
+                f"CSV has {len(rows):,} rows, more than Excel's " f"{_MAX_ROWS:,}-row limit"
             )
 
         workbook = openpyxl.Workbook()
@@ -119,7 +119,9 @@ def convert_csv_to_xlsx(csv_path, output_path=None, sheet_name="Sheet1"):
             try:
                 os.remove(output_path)
             except OSError:
-                logger.warning("Could not clean up partial xlsx file %r", output_path, exc_info=True)
+                logger.warning(
+                    "Could not clean up partial xlsx file %r", output_path, exc_info=True
+                )
         return ExcelResult(False, None, str(exc))
 
     return ExcelResult(True, output_path, None)

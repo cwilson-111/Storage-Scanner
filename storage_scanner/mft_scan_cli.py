@@ -74,19 +74,24 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(prog="Storage-Scanner.py --mft-scan")
     parser.add_argument("drive", help='Volume root to read, e.g. "C:\\\\"')
     parser.add_argument(
-        "--subtree", required=True,
+        "--subtree",
+        required=True,
         help="Path within the volume whose Node to write out",
     )
     parser.add_argument(
-        "--output", required=True, metavar="FILE",
+        "--output",
+        required=True,
+        metavar="FILE",
         help="Write the resulting Node as JSON to FILE",
     )
     parser.add_argument(
-        "--progress-file", default=None, metavar="FILE",
+        "--progress-file",
+        default=None,
+        metavar="FILE",
         help="Continuously overwrite FILE with the latest record count read "
-             "so far, for run_elevated_scan_windows to relay back to the "
-             "GUI's progress_q -- optional, omitted entirely when this is "
-             "invoked outside that path (e.g. directly from a terminal).",
+        "so far, for run_elevated_scan_windows to relay back to the "
+        "GUI's progress_q -- optional, omitted entirely when this is "
+        "invoked outside that path (e.g. directly from a terminal).",
     )
     return parser
 
@@ -106,13 +111,16 @@ def run_mft_scan(argv):
 
     try:
         cancel_event = threading.Event()  # no external cancellation in this
-                                           # process -- the caller cancels
-                                           # by terminating it outright
+        # process -- the caller cancels
+        # by terminating it outright
         progress_q = _ProgressFileWriter(args.progress_file) if args.progress_file else None
         record_source = open_record_source(args.drive)
         try:
             records = get_records_using_cache(
-                record_source, args.drive, progress_q=progress_q, cancel_event=cancel_event,
+                record_source,
+                args.drive,
+                progress_q=progress_q,
+                cancel_event=cancel_event,
             )
         finally:
             record_source.close()

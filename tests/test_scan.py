@@ -117,8 +117,8 @@ def test_rollup_propagates_a_grandchilds_error_all_the_way_to_the_root():
     _rollup(root)
 
     assert locked.error is True
-    assert mid.error is True    # propagated from its direct child
-    assert root.error is True   # propagated transitively, in the same pass
+    assert mid.error is True  # propagated from its direct child
+    assert root.error is True  # propagated transitively, in the same pass
     # The rest of the rollup still works normally alongside the propagation.
     assert root.size == 100
 
@@ -196,6 +196,7 @@ def test_progress_bytes_tracks_towards_the_final_rolled_up_size(tmp_path):
 
 
 # -- find_inaccessible_paths ------------------------------------------------ #
+
 
 def test_find_inaccessible_paths_returns_empty_for_a_clean_tree():
     root = Node("/root", "root", is_dir=True)

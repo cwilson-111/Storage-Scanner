@@ -1,0 +1,32 @@
+# Dependency updates. Storage Scanner ships no third-party runtime
+# dependencies, so this watches the two things that can actually go stale and
+# carry a vulnerability: the build/test toolchain in requirements-dev.txt, and
+# the GitHub Actions the release workflows run.
+version: 2
+
+updates:
+  # Actions are pinned to immutable commit SHAs (see build.yml). Dependabot
+  # understands that pinning style and bumps both the SHA and the trailing
+  # "# vN" comment, which is the only practical way to keep SHA pins current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
+    # Lint/format/type tooling moves fast and a minor bump can introduce new
+    # rules that fail the gate; group those so one PR carries them together.
+    groups:
+      quality-tooling:
+        patterns:
+          - "ruff"
+          - "black"
+          - "mypy"
+          - "pytest*"

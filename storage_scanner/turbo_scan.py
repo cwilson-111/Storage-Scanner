@@ -26,6 +26,7 @@ get_records_using_cache, and never changes what records a scan returns.
 import os
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 from history import get_app_metadata
 from storage_scanner import mft_parser, mft_scan, mft_volume, scanner, turbo_cache, usn_journal
@@ -57,11 +58,11 @@ class ScanReport:
     engine: str
     elapsed_seconds: float
     file_count: int
-    fallback_reason: str = None
+    fallback_reason: Optional[str] = None
 
 
 def choose_engine(path, turbo_enabled):
-    """"turbo" only on Windows, only when the caller says Turbo Scan is
+    """ "turbo" only on Windows, only when the caller says Turbo Scan is
     enabled, and only on a local fixed NTFS volume -- "compatible"
     otherwise. Never raises (is_ntfs_fixed_drive doesn't either)."""
     if not IS_WINDOWS or not turbo_enabled:
@@ -98,9 +99,7 @@ def find_subtree_node(root_node, target_path):
             None,
         )
         if match is None:
-            raise RuntimeError(
-                f"Turbo Scan could not locate {target_path!r} in the volume tree"
-            )
+            raise RuntimeError(f"Turbo Scan could not locate {target_path!r} in the volume tree")
         node = match
     return node
 
@@ -137,7 +136,8 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
     except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
         logger.warning(
             "Turbo Scan cache is unavailable for %r; scanning without it",
-            volume_root, exc_info=True,
+            volume_root,
+            exc_info=True,
         )
 
     if cached is not None and cached["record_size"] == record_source.record_size:
@@ -146,13 +146,17 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
         except (usn_journal.UsnJournalError, turbo_cache.TurboCacheCorruptError) as exc:
             logger.info(
                 "Turbo Scan cache for %r could not be refreshed incrementally, "
-                "falling back to a full scan: %s", volume_root, exc,
+                "falling back to a full scan: %s",
+                volume_root,
+                exc,
             )
             try:
                 turbo_cache.invalidate_volume(volume_serial)
             except Exception:  # noqa: BLE001 - best-effort cleanup only
                 logger.warning(
-                    "Could not invalidate Turbo Scan cache for %r", volume_root, exc_info=True,
+                    "Could not invalidate Turbo Scan cache for %r",
+                    volume_root,
+                    exc_info=True,
                 )
         else:
             if records is not None:
@@ -184,7 +188,11 @@ def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, 
     if root_frn is not None:
         try:
             turbo_cache.save_full_scan(
-                volume_serial, volume_root, root_frn, record_source.record_size, records,
+                volume_serial,
+                volume_root,
+                root_frn,
+                record_source.record_size,
+                records,
             )
             # Captured only now, after the scan (and the cache write of its
             # results) has fully finished -- capturing it any earlier would
@@ -195,7 +203,9 @@ def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, 
         except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
             logger.warning(
                 "Could not cache this Turbo Scan of %r; the next scan of this "
-                "volume will do a full rebuild again", volume_root, exc_info=True,
+                "volume will do a full rebuild again",
+                volume_root,
+                exc_info=True,
             )
     return records
 
@@ -235,7 +245,9 @@ def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
         raise usn_journal.UsnJournalError("USN journal has wrapped past this volume's saved cursor")
 
     dirty, new_next_usn = usn_journal.read_journal_changes(
-        handle, state.journal_id, cached["next_usn"],
+        handle,
+        state.journal_id,
+        cached["next_usn"],
         lowest_valid_usn=state.lowest_valid_usn,
     )
 
@@ -283,12 +295,16 @@ def _run_turbo_in_process(path, progress_q, cancel_event):
         logger.warning("Turbo Scan of %r had %d unreachable record(s)", path, orphan_count)
     logger.debug(
         "Turbo Scan of %r: %d records read, root has %d direct children",
-        path, len(records), len(root_node.children),
+        path,
+        len(records),
+        len(root_node.children),
     )
     subtree_node = find_subtree_node(root_node, path)
     logger.debug(
         "Turbo Scan of %r: subtree node %r has %d direct children before reroot",
-        path, subtree_node.path, len(subtree_node.children),
+        path,
+        subtree_node.path,
+        len(subtree_node.children),
     )
     # A requested folder that's itself a reparse point (junction/symlink)
     # must still be followed, matching scanner.scan()'s own root handling
@@ -300,7 +316,10 @@ def _run_turbo_in_process(path, progress_q, cancel_event):
     finalized = mft_scan.finalize_subtree(subtree_node, frn_by_node_id)
     logger.debug(
         "Turbo Scan of %r: finalized node has %d direct children, size=%d, file_count=%d",
-        path, len(finalized.children), finalized.size, finalized.file_count,
+        path,
+        len(finalized.children),
+        finalized.size,
+        finalized.file_count,
     )
     return finalized
 
@@ -356,20 +375,26 @@ def scan_with_best_engine(path, progress_q, cancel_event, workers=None, turbo_en
         except Exception as exc:  # noqa: BLE001 - any Turbo failure falls back
             logger.warning(
                 "Turbo Scan of %r failed, falling back to Compatible Scan: %s",
-                path, exc, exc_info=True,
+                path,
+                exc,
+                exc_info=True,
             )
             fallback_reason = str(exc) or exc.__class__.__name__
         else:
             elapsed = time.perf_counter() - start
             return root_node, ScanReport(
-                engine=ENGINE_TURBO, elapsed_seconds=elapsed,
-                file_count=root_node.file_count, fallback_reason=None,
+                engine=ENGINE_TURBO,
+                elapsed_seconds=elapsed,
+                file_count=root_node.file_count,
+                fallback_reason=None,
             )
 
     start = time.perf_counter()
     root_node = scanner.scan(path, progress_q, cancel_event, workers=workers)
     elapsed = time.perf_counter() - start
     return root_node, ScanReport(
-        engine=ENGINE_COMPATIBLE, elapsed_seconds=elapsed,
-        file_count=root_node.file_count, fallback_reason=fallback_reason,
+        engine=ENGINE_COMPATIBLE,
+        elapsed_seconds=elapsed,
+        file_count=root_node.file_count,
+        fallback_reason=fallback_reason,
     )

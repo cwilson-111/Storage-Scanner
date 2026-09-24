@@ -21,20 +21,28 @@ SCAN_PATH = "C:/Example"
 def _row(folder_path, growth_bytes, previous_size=1000, current_size=None):
     current_size = previous_size + growth_bytes if current_size is None else current_size
     growth_percent = (growth_bytes / previous_size) * 100 if previous_size else None
-    growth_type = "Growing" if growth_bytes > 0 else "Shrinking" if growth_bytes < 0 else "Unchanged"
+    growth_type = (
+        "Growing" if growth_bytes > 0 else "Shrinking" if growth_bytes < 0 else "Unchanged"
+    )
     return (folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, 10)
 
 
 def _drop_anomaly(created_at="2024-02-01T00:00:00"):
-    return Anomaly(created_at=created_at, kind="drop", growth_bytes=-5000, z_score=-4.0, message="dropped")
+    return Anomaly(
+        created_at=created_at, kind="drop", growth_bytes=-5000, z_score=-4.0, message="dropped"
+    )
 
 
 def _spike_anomaly(created_at="2024-02-01T00:00:00"):
-    return Anomaly(created_at=created_at, kind="spike", growth_bytes=5000, z_score=4.0, message="spiked")
+    return Anomaly(
+        created_at=created_at, kind="spike", growth_bytes=5000, z_score=4.0, message="spiked"
+    )
 
 
 def _setup(monkeypatch, rows):
-    monkeypatch.setattr(history_window, "get_folder_growth", lambda current, previous, limit=50: rows)
+    monkeypatch.setattr(
+        history_window, "get_folder_growth", lambda current, previous, limit=50: rows
+    )
     return HistoryMixin()
 
 
@@ -46,7 +54,7 @@ def _order_and_ids():
 
 def test_drop_anomaly_picks_the_folder_that_shrank_the_most(monkeypatch):
     rows = [
-        _row(SCAN_PATH, growth_bytes=-9000),           # root itself -- must be excluded
+        _row(SCAN_PATH, growth_bytes=-9000),  # root itself -- must be excluded
         _row("C:/Example/Downloads", growth_bytes=-8000),
         _row("C:/Example/Photos", growth_bytes=-500),
     ]
@@ -60,7 +68,7 @@ def test_drop_anomaly_picks_the_folder_that_shrank_the_most(monkeypatch):
 
 def test_spike_anomaly_picks_the_folder_that_grew_the_most(monkeypatch):
     rows = [
-        _row(SCAN_PATH, growth_bytes=9000),             # root itself -- must be excluded
+        _row(SCAN_PATH, growth_bytes=9000),  # root itself -- must be excluded
         _row("C:/Example/Downloads", growth_bytes=8000),
         _row("C:/Example/Photos", growth_bytes=500),
     ]
@@ -83,7 +91,10 @@ def test_returns_none_when_only_the_root_folder_is_tracked(monkeypatch):
 def test_returns_none_when_no_tracked_folder_moved_in_the_anomalys_direction(monkeypatch):
     # A drop anomaly, but every tracked non-root folder actually grew --
     # nothing here honestly explains the drop, so don't guess.
-    rows = [_row("C:/Example/Downloads", growth_bytes=200), _row("C:/Example/Photos", growth_bytes=50)]
+    rows = [
+        _row("C:/Example/Downloads", growth_bytes=200),
+        _row("C:/Example/Photos", growth_bytes=50),
+    ]
     app = _setup(monkeypatch, rows)
     created_ats, scan_ids = _order_and_ids()
 

@@ -13,13 +13,12 @@ import queue
 import sys
 import threading
 import webbrowser
-from tkinter import TOP, X, ttk, Tk
+from tkinter import TOP, Tk, X, ttk
 
 from history import init_history_db
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
-from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
 from storage_scanner.ui.audit_window import AuditMixin
 from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
@@ -30,11 +29,19 @@ from storage_scanner.ui.history_window import HistoryMixin
 from storage_scanner.ui.main_window import MainWindowMixin
 from storage_scanner.ui.search_window import SearchMixin
 from storage_scanner.ui.treemap_window import TreemapMixin
+from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
 
 
 class StorageScannerApp(
-    MainWindowMixin, HistoryMixin, DuplicatesMixin, FileWindowsMixin,
-    SearchMixin, TreemapMixin, CleanupMixin, AuditMixin, BudgetMixin,
+    MainWindowMixin,
+    HistoryMixin,
+    DuplicatesMixin,
+    FileWindowsMixin,
+    SearchMixin,
+    TreemapMixin,
+    CleanupMixin,
+    AuditMixin,
+    BudgetMixin,
     AutomationMixin,
 ):
     def __init__(self, root, initial_path=None):
@@ -56,10 +63,10 @@ class StorageScannerApp(
         self.cancel_event = threading.Event()
         self.scan_thread = None
         self.root_node = None
-        self.node_by_iid = {}   # treeview iid -> Node
+        self.node_by_iid = {}  # treeview iid -> Node
         self._heat_tags = set()  # quantized heat tags configured so far
         self._sort_key = "size"  # "name" | "size" | "items"
-        self._sort_reverse = True   # sizes default biggest-first
+        self._sort_reverse = True  # sizes default biggest-first
 
         # Live scan preview (see main_window._start_live_tree) -- only ever
         # populated for a Compatible-engine scan, which builds its Node
@@ -76,8 +83,7 @@ class StorageScannerApp(
         self.last_previous_scan_id = None
         self.last_growth_rows = []
 
-        
-        #Progress bar for duplicates scan
+        # Progress bar for duplicates scan
         self.dup_progress_q = queue.Queue()
         self.dup_thread = None
         self.dup_cancel_event = threading.Event()
@@ -93,7 +99,6 @@ class StorageScannerApp(
         self.duplicates = None
         self._duplicates_scan_root = None
 
-        
         self.dup_stats = {
             "files_total": 0,
             "files_checked": 0,
@@ -102,7 +107,6 @@ class StorageScannerApp(
             "partial_hashed": 0,
             "full_hashed": 0,
         }
-
 
         self._build_toolbar()
         self._build_tree()
@@ -137,7 +141,8 @@ class StorageScannerApp(
             self._update_banner = None
 
         ttk.Label(
-            banner, style="Accent.TLabel",
+            banner,
+            style="Accent.TLabel",
             text=f"⬆ A newer version ({newer_tag}) is available.",
         ).pack(side="left")
         ttk.Button(banner, text="View Release", command=open_release_page).pack(
@@ -159,6 +164,7 @@ def main():
     # touching Tk, so it never needs a window-server connection it can't get.
     if len(sys.argv) >= 3 and sys.argv[1] == "--priv-scan":
         from storage_scanner.priv_scan_cli import run_priv_scan
+
         run_priv_scan(sys.argv[2])
         return
 
@@ -167,6 +173,7 @@ def main():
     # Scheduler, or any other automation. See storage_scanner/cli.py.
     if len(sys.argv) >= 2 and sys.argv[1] == "--cli":
         from storage_scanner.cli import run_cli
+
         sys.exit(run_cli(sys.argv[2:]))
 
     # A headless elevated Turbo Scan request (see storage_scanner/
@@ -177,6 +184,7 @@ def main():
     # instead of stdout — see storage_scanner/mft_scan_cli.py.
     if len(sys.argv) >= 2 and sys.argv[1] == "--mft-scan":
         from storage_scanner.mft_scan_cli import run_mft_scan
+
         sys.exit(run_mft_scan(sys.argv[2:]))
 
     # A Windows elevated relaunch passes the folder that was on screen so

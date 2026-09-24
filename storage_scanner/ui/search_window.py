@@ -6,8 +6,19 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 
 from datetime import datetime
 from tkinter import (
-    BOTH, BOTTOM, E, END, LEFT, RIGHT, StringVar, TOP, Toplevel, W, X,
-    messagebox, ttk,
+    BOTH,
+    BOTTOM,
+    END,
+    LEFT,
+    RIGHT,
+    TOP,
+    E,
+    StringVar,
+    Toplevel,
+    W,
+    X,
+    messagebox,
+    ttk,
 )
 
 from storage_scanner.audit import recycle_and_log
@@ -50,26 +61,42 @@ class SearchMixin:
         row1 = ttk.Frame(win, padding=(10, 8, 10, 4))
         row1.pack(side=TOP, fill=X)
         ttk.Label(row1, text="Name contains:").grid(row=0, column=0, sticky=W, padx=(0, 4))
-        ttk.Entry(row1, textvariable=name_var, width=20).grid(row=0, column=1, sticky=W, padx=(0, 14))
+        ttk.Entry(row1, textvariable=name_var, width=20).grid(
+            row=0, column=1, sticky=W, padx=(0, 14)
+        )
         ttk.Label(row1, text="Extensions (csv):").grid(row=0, column=2, sticky=W, padx=(0, 4))
-        ttk.Entry(row1, textvariable=ext_var, width=16).grid(row=0, column=3, sticky=W, padx=(0, 14))
+        ttk.Entry(row1, textvariable=ext_var, width=16).grid(
+            row=0, column=3, sticky=W, padx=(0, 14)
+        )
         ttk.Label(row1, text="Min size:").grid(row=0, column=4, sticky=W, padx=(0, 4))
-        ttk.Entry(row1, textvariable=min_size_var, width=10).grid(row=0, column=5, sticky=W, padx=(0, 14))
+        ttk.Entry(row1, textvariable=min_size_var, width=10).grid(
+            row=0, column=5, sticky=W, padx=(0, 14)
+        )
         ttk.Label(row1, text="Max size:").grid(row=0, column=6, sticky=W, padx=(0, 4))
         ttk.Entry(row1, textvariable=max_size_var, width=10).grid(row=0, column=7, sticky=W)
 
         row2 = ttk.Frame(win, padding=(10, 0, 10, 8))
         row2.pack(side=TOP, fill=X)
-        ttk.Label(row2, text="Modified after (YYYY-MM-DD):").grid(row=0, column=0, sticky=W, padx=(0, 4))
-        ttk.Entry(row2, textvariable=after_var, width=12).grid(row=0, column=1, sticky=W, padx=(0, 14))
-        ttk.Label(row2, text="Modified before (YYYY-MM-DD):").grid(row=0, column=2, sticky=W, padx=(0, 4))
-        ttk.Entry(row2, textvariable=before_var, width=12).grid(row=0, column=3, sticky=W, padx=(0, 14))
-        ttk.Button(row2, text="Search", command=lambda: run_search()).grid(row=0, column=4, padx=(14, 4))
+        ttk.Label(row2, text="Modified after (YYYY-MM-DD):").grid(
+            row=0, column=0, sticky=W, padx=(0, 4)
+        )
+        ttk.Entry(row2, textvariable=after_var, width=12).grid(
+            row=0, column=1, sticky=W, padx=(0, 14)
+        )
+        ttk.Label(row2, text="Modified before (YYYY-MM-DD):").grid(
+            row=0, column=2, sticky=W, padx=(0, 4)
+        )
+        ttk.Entry(row2, textvariable=before_var, width=12).grid(
+            row=0, column=3, sticky=W, padx=(0, 14)
+        )
+        ttk.Button(row2, text="Search", command=lambda: run_search()).grid(
+            row=0, column=4, padx=(14, 4)
+        )
         ttk.Button(row2, text="Clear", command=lambda: clear_filters()).grid(row=0, column=5)
 
-        ttk.Label(win, textvariable=summary_var, style="Accent.TLabel", padding=(10, 0, 10, 8)).pack(
-            side=TOP, fill=X
-        )
+        ttk.Label(
+            win, textvariable=summary_var, style="Accent.TLabel", padding=(10, 0, 10, 8)
+        ).pack(side=TOP, fill=X)
 
         frame = ttk.Frame(win, padding=(10, 0, 10, 10))
         frame.pack(fill=BOTH, expand=True)
@@ -144,11 +171,11 @@ class SearchMixin:
             iid_to_node.clear()
             for index, node in enumerate(results):
                 modified = (
-                    datetime.fromtimestamp(node.mtime).strftime("%Y-%m-%d")
-                    if node.mtime else "—"
+                    datetime.fromtimestamp(node.mtime).strftime("%Y-%m-%d") if node.mtime else "—"
                 )
                 iid = tv.insert(
-                    "", END,
+                    "",
+                    END,
                     values=(
                         "Folder" if node.is_dir else "File",
                         node.name,
@@ -222,12 +249,10 @@ class SearchMixin:
                     parent=win,
                 )
 
-        ttk.Button(
-            button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected
-        ).pack(side=LEFT)
-        ttk.Button(button_bar, text="Copy Path", command=copy_selected_path).pack(
-            side=LEFT, padx=6
+        ttk.Button(button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected).pack(
+            side=LEFT
         )
+        ttk.Button(button_bar, text="Copy Path", command=copy_selected_path).pack(side=LEFT, padx=6)
         ttk.Button(button_bar, text="Delete Selected", command=delete_selected).pack(side=RIGHT)
 
         tv.bind("<Double-1>", lambda _e: reveal_selected())

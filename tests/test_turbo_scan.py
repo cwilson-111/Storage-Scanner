@@ -13,8 +13,8 @@ from storage_scanner import turbo_scan, usn_journal
 from storage_scanner.models import Node
 from storage_scanner.turbo_scan import ScanReport, choose_engine, find_subtree_node
 
-
 # -- choose_engine: the full decision matrix -------------------------------- #
+
 
 def test_turbo_when_windows_enabled_and_ntfs_fixed(monkeypatch):
     monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
@@ -41,6 +41,7 @@ def test_compatible_when_drive_is_not_ntfs_fixed(monkeypatch):
 
 
 # -- find_subtree_node ------------------------------------------------------- #
+
 
 def _make_tree():
     root = Node("C:\\Data", "Data", True)
@@ -70,6 +71,7 @@ def test_find_subtree_node_raises_for_a_missing_component():
 
 # -- scan_with_best_engine ---------------------------------------------------- #
 
+
 def _progress_and_cancel():
     return queue.Queue(), threading.Event()
 
@@ -84,17 +86,24 @@ def test_uses_compatible_engine_directly_when_turbo_not_applicable(monkeypatch):
         return fake_node
 
     monkeypatch.setattr(turbo_scan.scanner, "scan", fake_scan)
-    monkeypatch.setattr(turbo_scan, "_attempt_turbo_scan", lambda *a, **k: pytest.fail("should not be called"))
+    monkeypatch.setattr(
+        turbo_scan, "_attempt_turbo_scan", lambda *a, **k: pytest.fail("should not be called")
+    )
 
     progress_q, cancel_event = _progress_and_cancel()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Data", progress_q, cancel_event, turbo_enabled=False,
+        "C:\\Data",
+        progress_q,
+        cancel_event,
+        turbo_enabled=False,
     )
 
     assert node is fake_node
     assert report == ScanReport(
-        engine=turbo_scan.ENGINE_COMPATIBLE, elapsed_seconds=report.elapsed_seconds,
-        file_count=7, fallback_reason=None,
+        engine=turbo_scan.ENGINE_COMPATIBLE,
+        elapsed_seconds=report.elapsed_seconds,
+        file_count=7,
+        fallback_reason=None,
     )
     assert len(calls) == 1
 
@@ -105,13 +114,17 @@ def test_successful_turbo_scan_reports_turbo_engine_and_skips_compatible(monkeyp
     monkeypatch.setattr(turbo_scan, "choose_engine", lambda *a, **k: turbo_scan.ENGINE_TURBO)
     monkeypatch.setattr(turbo_scan, "_attempt_turbo_scan", lambda *a, **k: fake_node)
     monkeypatch.setattr(
-        turbo_scan.scanner, "scan",
+        turbo_scan.scanner,
+        "scan",
         lambda *a, **k: pytest.fail("Compatible engine should not run"),
     )
 
     progress_q, cancel_event = _progress_and_cancel()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Data", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\Data",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
 
     assert node is fake_node
@@ -134,7 +147,10 @@ def test_turbo_failure_falls_back_to_compatible_with_a_reason(monkeypatch):
 
     progress_q, cancel_event = _progress_and_cancel()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Data", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\Data",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
 
     assert node is fallback_node
@@ -148,7 +164,8 @@ def test_turbo_disabled_setting_read_from_app_metadata_when_not_passed(monkeypat
     monkeypatch.setattr(turbo_scan, "get_app_metadata", lambda key, default: "0")
     monkeypatch.setattr(turbo_scan.scanner, "scan", lambda *a, **k: fake_node)
     monkeypatch.setattr(
-        turbo_scan, "_attempt_turbo_scan",
+        turbo_scan,
+        "_attempt_turbo_scan",
         lambda *a, **k: pytest.fail("Turbo Scan should be disabled by app_metadata"),
     )
 
@@ -163,13 +180,15 @@ def test_already_elevated_uses_in_process_path(monkeypatch):
     fake_node = Node("C:\\Data", "Data", True)
     monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
     called = {}
+
     def fake_in_process(path, progress_q, cancel_event):
         called["in_process"] = path
         return fake_node
 
     monkeypatch.setattr(turbo_scan, "_run_turbo_in_process", fake_in_process)
     monkeypatch.setattr(
-        turbo_scan, "_run_turbo_via_elevated_helper",
+        turbo_scan,
+        "_run_turbo_via_elevated_helper",
         lambda *a, **k: pytest.fail("should not spawn an elevated helper when already elevated"),
     )
 
@@ -185,7 +204,8 @@ def test_not_elevated_uses_elevated_helper_path(monkeypatch):
     monkeypatch.setattr(turbo_scan, "IS_ROOT", False)
     called = {}
     monkeypatch.setattr(
-        turbo_scan, "_run_turbo_in_process",
+        turbo_scan,
+        "_run_turbo_in_process",
         lambda *a, **k: pytest.fail("should not scan in-process when not elevated"),
     )
 
@@ -208,6 +228,7 @@ def test_not_elevated_uses_elevated_helper_path(monkeypatch):
 # specifically about turbo_scan's *decision* of which path to take and how
 # it reacts to each failure mode -- test_turbo_scan_integration.py covers
 # the real, unmocked, end-to-end wiring between all three modules.
+
 
 @pytest.fixture(autouse=True)
 def _no_real_cache_db(monkeypatch):
@@ -248,9 +269,15 @@ def _fake_parsed_record(record_number):
 def test_no_cache_yet_does_a_full_scan(monkeypatch):
     source = _FakeRecordSource(record_count=3)
     monkeypatch.setattr(turbo_scan.turbo_cache, "get_cached_volume", lambda serial: None)
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "save_full_scan", lambda *a, **k: None)
-    monkeypatch.setattr(turbo_scan.usn_journal, "ensure_journal", lambda handle: pytest.fail("no journal on a first scan in this test"))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "ensure_journal",
+        lambda handle: pytest.fail("no journal on a first scan in this test"),
+    )
 
     records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
@@ -276,7 +303,8 @@ def test_cancelling_mid_full_scan_raises_instead_of_returning_a_partial_list(mon
     monkeypatch.setattr(turbo_scan.turbo_cache, "get_cached_volume", lambda serial: None)
     monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", fake_parse)
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "save_full_scan",
+        turbo_scan.turbo_cache,
+        "save_full_scan",
         lambda *a, **k: pytest.fail("a cancelled scan must never be cached"),
     )
 
@@ -298,15 +326,24 @@ def test_cancelling_mid_incremental_refresh_raises_not_returns_none(monkeypatch)
     cancel_event = threading.Event()
 
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
         lambda serial: {
-            "record_size": 1024, "next_usn": 100, "usn_journal_id": 7, "volume_serial": 1,
+            "record_size": 1024,
+            "next_usn": 100,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
         },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
+        turbo_scan.usn_journal,
+        "query_journal",
         lambda handle: usn_journal.JournalState(
-            journal_id=7, first_usn=0, next_usn=200, lowest_valid_usn=0, max_usn=1000,
+            journal_id=7,
+            first_usn=0,
+            next_usn=200,
+            lowest_valid_usn=0,
+            max_usn=1000,
         ),
     )
 
@@ -319,15 +356,18 @@ def test_cancelling_mid_incremental_refresh_raises_not_returns_none(monkeypatch)
 
     monkeypatch.setattr(turbo_scan.usn_journal, "read_journal_changes", fake_read_journal_changes)
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "apply_incremental_changes",
+        turbo_scan.turbo_cache,
+        "apply_incremental_changes",
         lambda *a, **k: pytest.fail("a cancelled refresh must never write to the cache"),
     )
     monkeypatch.setattr(
-        turbo_scan.mft_parser, "parse_base_record",
+        turbo_scan.mft_parser,
+        "parse_base_record",
         lambda n, s: pytest.fail("should never reach the dirty-record parse loop"),
     )
     monkeypatch.setattr(
-        turbo_scan, "_full_scan_and_cache",
+        turbo_scan,
+        "_full_scan_and_cache",
         lambda *a, **k: pytest.fail("cancellation must raise, not fall through to a full rescan"),
     )
 
@@ -338,12 +378,19 @@ def test_cancelling_mid_incremental_refresh_raises_not_returns_none(monkeypatch)
 def test_cache_with_no_journal_cursor_does_a_full_scan(monkeypatch):
     source = _FakeRecordSource(record_count=2)
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
         lambda serial: {"record_size": 1024, "next_usn": None},
     )
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "save_full_scan", lambda *a, **k: None)
-    monkeypatch.setattr(turbo_scan.usn_journal, "ensure_journal", lambda handle: pytest.fail("should not touch the journal"))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "ensure_journal",
+        lambda handle: pytest.fail("should not touch the journal"),
+    )
 
     records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
@@ -354,18 +401,32 @@ def test_cache_with_valid_journal_and_no_changes_uses_incremental_path(monkeypat
     source = _FakeRecordSource()
     cached_records = [_fake_parsed_record(0), _fake_parsed_record(1)]
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
-        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
+        lambda serial: {
+            "record_size": 1024,
+            "next_usn": 500,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
+        },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
-        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+        turbo_scan.usn_journal,
+        "query_journal",
+        lambda handle: usn_journal.JournalState(
+            journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999
+        ),
     )
-    monkeypatch.setattr(turbo_scan.usn_journal, "read_journal_changes", lambda handle, journal_id, start_usn, lowest_valid_usn=None: ([], 500))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "read_journal_changes",
+        lambda handle, journal_id, start_usn, lowest_valid_usn=None: ([], 500),
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "apply_incremental_changes", lambda *a, **k: None)
     monkeypatch.setattr(turbo_scan.turbo_cache, "load_all_records", lambda serial: cached_records)
     monkeypatch.setattr(
-        turbo_scan.mft_parser, "parse_base_record",
+        turbo_scan.mft_parser,
+        "parse_base_record",
         lambda n, s: pytest.fail("a full scan should not run on the incremental path"),
     )
 
@@ -386,15 +447,30 @@ def test_incremental_refresh_posts_status_and_progress_messages(monkeypatch):
     dirty = [usn_journal.DirtyRecord(record_number=n, reason=0x1) for n in range(250)]
 
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
-        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
+        lambda serial: {
+            "record_size": 1024,
+            "next_usn": 500,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
+        },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
-        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+        turbo_scan.usn_journal,
+        "query_journal",
+        lambda handle: usn_journal.JournalState(
+            journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999
+        ),
     )
-    monkeypatch.setattr(turbo_scan.usn_journal, "read_journal_changes", lambda handle, journal_id, start_usn, lowest_valid_usn=None: (dirty, 999))
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "read_journal_changes",
+        lambda handle, journal_id, start_usn, lowest_valid_usn=None: (dirty, 999),
+    )
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "apply_incremental_changes", lambda *a, **k: None)
     monkeypatch.setattr(turbo_scan.turbo_cache, "load_all_records", lambda serial: cached_records)
 
@@ -419,14 +495,27 @@ def test_incremental_refresh_with_no_dirty_records_skips_the_applying_status(mon
     cached_records = [_fake_parsed_record(0)]
 
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
-        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
+        lambda serial: {
+            "record_size": 1024,
+            "next_usn": 500,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
+        },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
-        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+        turbo_scan.usn_journal,
+        "query_journal",
+        lambda handle: usn_journal.JournalState(
+            journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999
+        ),
     )
-    monkeypatch.setattr(turbo_scan.usn_journal, "read_journal_changes", lambda handle, journal_id, start_usn, lowest_valid_usn=None: ([], 500))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "read_journal_changes",
+        lambda handle, journal_id, start_usn, lowest_valid_usn=None: ([], 500),
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "apply_incremental_changes", lambda *a, **k: None)
     monkeypatch.setattr(turbo_scan.turbo_cache, "load_all_records", lambda serial: cached_records)
 
@@ -438,24 +527,43 @@ def test_incremental_refresh_with_no_dirty_records_skips_the_applying_status(mon
         messages.append(progress_q.get_nowait())
     statuses = [payload for kind, payload in messages if kind == "status"]
     assert not any("applying" in s.lower() for s in statuses)  # nothing to apply
-    assert any("loading" in s.lower() for s in statuses)  # still posted -- load_all_records still runs
+    assert any(
+        "loading" in s.lower() for s in statuses
+    )  # still posted -- load_all_records still runs
 
 
 def test_journal_id_mismatch_falls_back_to_full_scan_and_invalidates(monkeypatch):
     source = _FakeRecordSource(record_count=1)
     invalidated = []
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
-        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
+        lambda serial: {
+            "record_size": 1024,
+            "next_usn": 500,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
+        },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
-        lambda handle: usn_journal.JournalState(journal_id=999, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+        turbo_scan.usn_journal,
+        "query_journal",
+        lambda handle: usn_journal.JournalState(
+            journal_id=999, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999
+        ),
     )
-    monkeypatch.setattr(turbo_scan.turbo_cache, "invalidate_volume", lambda serial: invalidated.append(serial))
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.turbo_cache, "invalidate_volume", lambda serial: invalidated.append(serial)
+    )
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "save_full_scan", lambda *a, **k: None)
-    monkeypatch.setattr(turbo_scan.usn_journal, "ensure_journal", lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "ensure_journal",
+        lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")),
+    )
 
     records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
@@ -471,15 +579,24 @@ def test_corrupt_cached_record_falls_back_to_full_scan_and_invalidates(monkeypat
     source = _FakeRecordSource(record_count=1)
     invalidated = []
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
         lambda serial: {
-            "record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1,
+            "record_size": 1024,
+            "next_usn": 500,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
         },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
+        turbo_scan.usn_journal,
+        "query_journal",
         lambda handle: usn_journal.JournalState(
-            journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999,
+            journal_id=7,
+            first_usn=0,
+            next_usn=500,
+            lowest_valid_usn=0,
+            max_usn=9999,
         ),
     )
 
@@ -487,20 +604,30 @@ def test_corrupt_cached_record_falls_back_to_full_scan_and_invalidates(monkeypat
         record_number = 3
 
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "read_journal_changes",
+        turbo_scan.usn_journal,
+        "read_journal_changes",
         lambda handle, journal_id, next_usn, lowest_valid_usn=None: ([_DirtyRecord()], 501),
     )
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "apply_incremental_changes", lambda *a, **k: None)
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "load_all_records",
+        turbo_scan.turbo_cache,
+        "load_all_records",
         lambda serial: (_ for _ in ()).throw(
             turbo_scan.turbo_cache.TurboCacheCorruptError("truncated blob")
         ),
     )
-    monkeypatch.setattr(turbo_scan.turbo_cache, "invalidate_volume", lambda serial: invalidated.append(serial))
+    monkeypatch.setattr(
+        turbo_scan.turbo_cache, "invalidate_volume", lambda serial: invalidated.append(serial)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "save_full_scan", lambda *a, **k: None)
-    monkeypatch.setattr(turbo_scan.usn_journal, "ensure_journal", lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "ensure_journal",
+        lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")),
+    )
 
     records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
@@ -511,18 +638,33 @@ def test_corrupt_cached_record_falls_back_to_full_scan_and_invalidates(monkeypat
 def test_wrapped_journal_falls_back_to_full_scan(monkeypatch):
     source = _FakeRecordSource(record_count=1)
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
         # cached next_usn (100) is below the journal's current lowest_valid_usn (200) -- wrapped
-        lambda serial: {"record_size": 1024, "next_usn": 100, "usn_journal_id": 7, "volume_serial": 1},
+        lambda serial: {
+            "record_size": 1024,
+            "next_usn": 100,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
+        },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
-        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=150, next_usn=500, lowest_valid_usn=200, max_usn=9999),
+        turbo_scan.usn_journal,
+        "query_journal",
+        lambda handle: usn_journal.JournalState(
+            journal_id=7, first_usn=150, next_usn=500, lowest_valid_usn=200, max_usn=9999
+        ),
     )
     monkeypatch.setattr(turbo_scan.turbo_cache, "invalidate_volume", lambda serial: None)
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
     monkeypatch.setattr(turbo_scan.turbo_cache, "save_full_scan", lambda *a, **k: None)
-    monkeypatch.setattr(turbo_scan.usn_journal, "ensure_journal", lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")))
+    monkeypatch.setattr(
+        turbo_scan.usn_journal,
+        "ensure_journal",
+        lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")),
+    )
 
     records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
@@ -533,17 +675,28 @@ def test_dirty_record_that_no_longer_parses_is_deleted_not_upserted(monkeypatch)
     source = _FakeRecordSource()
     applied = {}
     monkeypatch.setattr(
-        turbo_scan.turbo_cache, "get_cached_volume",
-        lambda serial: {"record_size": 1024, "next_usn": 500, "usn_journal_id": 7, "volume_serial": 1},
+        turbo_scan.turbo_cache,
+        "get_cached_volume",
+        lambda serial: {
+            "record_size": 1024,
+            "next_usn": 500,
+            "usn_journal_id": 7,
+            "volume_serial": 1,
+        },
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "query_journal",
-        lambda handle: usn_journal.JournalState(journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999),
+        turbo_scan.usn_journal,
+        "query_journal",
+        lambda handle: usn_journal.JournalState(
+            journal_id=7, first_usn=0, next_usn=500, lowest_valid_usn=0, max_usn=9999
+        ),
     )
     monkeypatch.setattr(
-        turbo_scan.usn_journal, "read_journal_changes",
+        turbo_scan.usn_journal,
+        "read_journal_changes",
         lambda handle, journal_id, start_usn, lowest_valid_usn=None: (
-            [usn_journal.DirtyRecord(record_number=42, reason=0x200)], 510,
+            [usn_journal.DirtyRecord(record_number=42, reason=0x200)],
+            510,
         ),
     )
     # record 42 no longer parses -- it was deleted since the cache was built
@@ -570,7 +723,9 @@ def test_cache_write_failure_after_a_full_scan_does_not_lose_the_scan_result(mon
     # attempts to cache, and this test wouldn't exercise the failure path.
     source = _FakeRecordSource(record_count=6)
     monkeypatch.setattr(turbo_scan.turbo_cache, "get_cached_volume", lambda serial: None)
-    monkeypatch.setattr(turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n))
+    monkeypatch.setattr(
+        turbo_scan.mft_parser, "parse_base_record", lambda n, s: _fake_parsed_record(n)
+    )
 
     def boom(*a, **k):
         raise sqlite3.OperationalError("database is locked")

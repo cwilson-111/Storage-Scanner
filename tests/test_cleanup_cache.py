@@ -12,7 +12,9 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import cleanup_cache
 from storage_scanner.cleanup_recommendations import (
-    CATEGORY_DUPLICATE, CATEGORY_REVIEW, Recommendation,
+    CATEGORY_DUPLICATE,
+    CATEGORY_REVIEW,
+    Recommendation,
 )
 from storage_scanner.models import Node
 
@@ -32,10 +34,19 @@ def _node(path, name, is_dir=False, size=100):
     return n
 
 
-def _rec(node, category=CATEGORY_REVIEW, reason="old and large", risk="Medium",
-         recoverable_bytes=None, action="Review, then delete"):
+def _rec(
+    node,
+    category=CATEGORY_REVIEW,
+    reason="old and large",
+    risk="Medium",
+    recoverable_bytes=None,
+    action="Review, then delete",
+):
     return Recommendation(
-        node=node, category=category, reason=reason, risk=risk,
+        node=node,
+        category=category,
+        reason=reason,
+        risk=risk,
         recoverable_bytes=node.size if recoverable_bytes is None else recoverable_bytes,
         action=action,
     )
@@ -47,9 +58,8 @@ def test_init_cleanup_cache_db_is_idempotent_and_creates_all_tables(tmp_path, mo
 
     conn = sqlite3.connect(db_path)
     tables = {
-        row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     conn.close()
     assert {"cached_cleanup_runs", "cached_recommendations"} <= tables
@@ -64,10 +74,12 @@ def test_save_and_load_round_trips_every_field(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
     node = _node("C:/Example/big.mp4", "big.mp4", is_dir=False, size=500_000_000)
     original = _rec(
-        node, category=CATEGORY_REVIEW,
+        node,
+        category=CATEGORY_REVIEW,
         reason="Large file (477 MB) not modified in ~200 days.",
         risk="Medium — not verified safe, just a candidate to look at",
-        recoverable_bytes=500_000_000, action="Review, then delete or archive if unneeded",
+        recoverable_bytes=500_000_000,
+        action="Review, then delete or archive if unneeded",
     )
 
     cleanup_cache.save_recommendations(SCAN_PATH, [original])
@@ -115,12 +127,8 @@ def test_a_second_save_fully_replaces_the_first_for_the_same_path(tmp_path, monk
 
 def test_saving_to_one_scan_path_does_not_affect_another(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
-    cleanup_cache.save_recommendations(
-        "C:/A", [_rec(_node("C:/A/x.bin", "x.bin"))]
-    )
-    cleanup_cache.save_recommendations(
-        "C:/B", [_rec(_node("C:/B/y.bin", "y.bin"))]
-    )
+    cleanup_cache.save_recommendations("C:/A", [_rec(_node("C:/A/x.bin", "x.bin"))])
+    cleanup_cache.save_recommendations("C:/B", [_rec(_node("C:/B/y.bin", "y.bin"))])
 
     assert len(cleanup_cache.load_recommendations("C:/A")) == 1
     assert len(cleanup_cache.load_recommendations("C:/B")) == 1

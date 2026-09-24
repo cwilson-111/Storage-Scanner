@@ -48,7 +48,8 @@ def test_check_for_update_skips_network_call_within_min_interval(tmp_path, monke
 
     called = []
     monkeypatch.setattr(
-        update_check, "_fetch_latest_release_tag",
+        update_check,
+        "_fetch_latest_release_tag",
         lambda: called.append(True) or "v99.0.0",
     )
 

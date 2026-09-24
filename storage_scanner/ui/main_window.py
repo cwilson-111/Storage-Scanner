@@ -12,8 +12,23 @@ import subprocess
 import threading
 import time
 from tkinter import (
-    BooleanVar, BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP,
-    Toplevel, W, X, filedialog, messagebox, simpledialog, ttk,
+    BOTH,
+    BOTTOM,
+    END,
+    LEFT,
+    RIGHT,
+    TOP,
+    BooleanVar,
+    E,
+    Menu,
+    StringVar,
+    Toplevel,
+    W,
+    X,
+    filedialog,
+    messagebox,
+    simpledialog,
+    ttk,
 )
 
 from history import get_app_metadata, set_app_metadata, set_budget
@@ -25,12 +40,19 @@ from storage_scanner.csv_to_xlsx import convert_csv_to_xlsx
 from storage_scanner.csv_to_xlsx import default_output_path as default_xlsx_path
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import (
-    relaunch_elevated_windows, run_elevated_scan_linux, run_elevated_scan_macos,
+    relaunch_elevated_windows,
+    run_elevated_scan_linux,
+    run_elevated_scan_macos,
 )
 from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
-    FILE_MANAGER_NAME, IS_LINUX, IS_MACOS, IS_ROOT, IS_WINDOWS, TRASH_NAME,
+    FILE_MANAGER_NAME,
+    IS_LINUX,
+    IS_MACOS,
+    IS_ROOT,
+    IS_WINDOWS,
+    TRASH_NAME,
     resource_path,
 )
 from storage_scanner.scan_history import drive_capacity_bytes
@@ -50,7 +72,8 @@ class MainWindowMixin:
 
         self.path_var = StringVar()
         self.path_combo = ttk.Combobox(
-            bar_frame, textvariable=self.path_var,
+            bar_frame,
+            textvariable=self.path_var,
             values=self._list_drives(),
         )
         self.path_combo.pack(side=LEFT, padx=6, fill=X, expand=True)
@@ -58,7 +81,10 @@ class MainWindowMixin:
 
         ttk.Button(bar_frame, text="Browse…", command=self.browse).pack(side=LEFT)
         self.scan_btn = ttk.Button(
-            bar_frame, text="Scan", command=self.start_scan, style="Primary.TButton",
+            bar_frame,
+            text="Scan",
+            command=self.start_scan,
+            style="Primary.TButton",
         )
         self.scan_btn.pack(side=LEFT, padx=6)
         self.cancel_btn = ttk.Button(
@@ -68,7 +94,9 @@ class MainWindowMixin:
 
         if (IS_MACOS or IS_WINDOWS or IS_LINUX) and not IS_ROOT:
             self.elevate_btn = ttk.Button(
-                bar_frame, text="🔒 Run as Admin", command=self._request_elevation,
+                bar_frame,
+                text="🔒 Run as Admin",
+                command=self._request_elevation,
             )
             self.elevate_btn.pack(side=LEFT, padx=(6, 0))
 
@@ -95,7 +123,9 @@ class MainWindowMixin:
 
         cleanup_menu = Menu(self.tools_menu, tearoff=0)
         cleanup_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
-        cleanup_menu.add_command(label="Cleanup Recommendations", command=self.show_cleanup_recommendations)
+        cleanup_menu.add_command(
+            label="Cleanup Recommendations", command=self.show_cleanup_recommendations
+        )
         self.tools_menu.add_cascade(label="Clean Up", menu=cleanup_menu)
 
         history_menu = Menu(self.tools_menu, tearoff=0)
@@ -134,14 +164,15 @@ class MainWindowMixin:
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
-            bar_frame, textvariable=self.top_count_var, width=5, state="disabled",
+            bar_frame,
+            textvariable=self.top_count_var,
+            width=5,
+            state="disabled",
             values=("25", "50", "100"),
         )
         self.top_count_combo.pack(side=RIGHT, padx=(0, 6))
         # Re-running with a new count is instant, so update live on selection.
-        self.top_count_combo.bind(
-            "<<ComboboxSelected>>", lambda e: self.show_top_files()
-        )
+        self.top_count_combo.bind("<<ComboboxSelected>>", lambda e: self.show_top_files())
         ttk.Label(bar_frame, text="TOP", style="Accent.TLabel").pack(side=RIGHT, padx=(0, 4))
 
         if self._initial_path:
@@ -150,6 +181,7 @@ class MainWindowMixin:
             drives = self._list_drives()
             if drives:
                 self.path_var.set(drives[0])
+
     def _build_tree(self):
         container = ttk.Frame(self.root, padding=(8, 4))
         container.pack(side=TOP, fill=BOTH, expand=True)
@@ -161,16 +193,11 @@ class MainWindowMixin:
         # Clickable headings sort that level (and every expanded level). The
         # percent/alloc columns sort by (logical) size — within a level
         # they track together closely enough to share one sort.
-        self.tree.heading("#0", text="Name",
-                          command=lambda: self._sort_by("name"))
-        self.tree.heading("size", text="Size",
-                          command=lambda: self._sort_by("size"))
-        self.tree.heading("alloc", text="On Disk",
-                          command=lambda: self._sort_by("size"))
-        self.tree.heading("percent", text="% of Parent",
-                          command=lambda: self._sort_by("size"))
-        self.tree.heading("items", text="Files",
-                          command=lambda: self._sort_by("items"))
+        self.tree.heading("#0", text="Name", command=lambda: self._sort_by("name"))
+        self.tree.heading("size", text="Size", command=lambda: self._sort_by("size"))
+        self.tree.heading("alloc", text="On Disk", command=lambda: self._sort_by("size"))
+        self.tree.heading("percent", text="% of Parent", command=lambda: self._sort_by("size"))
+        self.tree.heading("items", text="Files", command=lambda: self._sort_by("items"))
         self._update_heading_arrows()
 
         self.tree.column("#0", width=440, anchor=W, stretch=True)
@@ -194,13 +221,10 @@ class MainWindowMixin:
         # dirs bold), and a stripe tag (background). Errors override the
         # foreground to red. Heat tags are created lazily in _heat_tag().
         self.tree.tag_configure("dir", font=FONT_MONO_BOLD)
-        self.tree.tag_configure("error", foreground=COLORS["error"],
-                                font=FONT_MONO_BOLD)
+        self.tree.tag_configure("error", foreground=COLORS["error"], font=FONT_MONO_BOLD)
         self.tree.tag_configure("placeholder", foreground=COLORS["muted"])
-        self.tree.tag_configure("link", foreground=COLORS["accent2"],
-                                font=FONT_MONO_BOLD)
-        self.tree.tag_configure("cloud", foreground=COLORS["muted"],
-                                font=FONT_MONO_BOLD)
+        self.tree.tag_configure("link", foreground=COLORS["accent2"], font=FONT_MONO_BOLD)
+        self.tree.tag_configure("cloud", foreground=COLORS["muted"], font=FONT_MONO_BOLD)
         self.tree.tag_configure("even", background=COLORS["panel"])
         self.tree.tag_configure("odd", background=COLORS["stripe"])
 
@@ -214,13 +238,13 @@ class MainWindowMixin:
         self.menu.add_command(label="Copy path", command=self._copy_path)
         self.menu.add_command(label="Set Budget…", command=self._set_budget_for_selected)
         self.menu.add_separator()
-        self.menu.add_command(label=f"Delete (to {TRASH_NAME})",
-                              command=self._delete_selected)
+        self.menu.add_command(label=f"Delete (to {TRASH_NAME})", command=self._delete_selected)
         self.tree.bind("<Button-3>", self._show_menu)
 
         # Keyboard: Delete recycles the selection, F5 re-scans.
         self.tree.bind("<Delete>", lambda e: self._delete_selected())
         self.root.bind("<F5>", lambda e: self.start_scan())
+
     def _build_statusbar(self):
         status = ttk.Frame(self.root, padding=(8, 2))
         status.pack(side=BOTTOM, fill=X)
@@ -229,6 +253,7 @@ class MainWindowMixin:
             side=LEFT, fill=X, expand=True
         )
         self.progress = ttk.Progressbar(status, mode="indeterminate", length=220)
+
     # -- Drive / folder selection ----------------------------------------- #
     @staticmethod
     def _list_drives():
@@ -252,11 +277,15 @@ class MainWindowMixin:
             # filters out an empty placeholder dir with nothing actually
             # mounted there (udisks2/automount tools create these upfront).
             username = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
-            bases = [b for b in (
-                os.path.join("/media", username) if username else None,
-                os.path.join("/run/media", username) if username else None,
-                "/mnt",
-            ) if b]
+            bases = [
+                b
+                for b in (
+                    os.path.join("/media", username) if username else None,
+                    os.path.join("/run/media", username) if username else None,
+                    "/mnt",
+                )
+                if b
+            ]
             for base in bases:
                 if not os.path.isdir(base):
                     continue
@@ -272,14 +301,17 @@ class MainWindowMixin:
             if os.path.exists(d):
                 drives.append(d)
         return drives
+
     def browse(self):
         current = self.path_var.get().strip().strip('"')
         initialdir = current if os.path.isdir(current) else os.path.expanduser("~")
         chosen = filedialog.askdirectory(
-            title="Select a folder to analyze", initialdir=initialdir,
+            title="Select a folder to analyze",
+            initialdir=initialdir,
         )
         if chosen:
             self.path_var.set(os.path.normpath(chosen))
+
     def compress_csv_to_parquet(self):
         csv_path = filedialog.askopenfilename(
             title="Choose a CSV file to compress",
@@ -300,7 +332,9 @@ class MainWindowMixin:
 
         result = compress_csv_to_parquet(csv_path, output_path)
         if not result.success:
-            messagebox.showerror("Storage Scanner", f"Could not compress to Parquet:\n{result.error}")
+            messagebox.showerror(
+                "Storage Scanner", f"Could not compress to Parquet:\n{result.error}"
+            )
             return
 
         try:
@@ -313,6 +347,7 @@ class MainWindowMixin:
             "Storage Scanner",
             f"Compressed to:\n{result.output_path}{saved}",
         )
+
     def convert_csv_to_xlsx(self):
         csv_path = filedialog.askopenfilename(
             title="Choose a CSV file to convert",
@@ -337,6 +372,7 @@ class MainWindowMixin:
             return
 
         messagebox.showinfo("Storage Scanner", f"Converted to:\n{result.output_path}")
+
     def _request_elevation(self):
         current = self.path_var.get().strip().strip('"')
 
@@ -349,9 +385,7 @@ class MainWindowMixin:
             # window stays open, unprivileged, throughout.
             target = current if os.path.isdir(current) else None
             if not target:
-                messagebox.showerror(
-                    "Storage Scanner", "Choose a valid folder to scan first."
-                )
+                messagebox.showerror("Storage Scanner", "Choose a valid folder to scan first.")
                 return
             if IS_MACOS:
                 run_scan_fn = run_elevated_scan_macos
@@ -411,6 +445,7 @@ class MainWindowMixin:
                 "Elevation was cancelled or not accepted. Still running "
                 "with normal permissions.",
             )
+
     def _get_drive_capacity_bytes(self, path):
         """
         Returns total capacity of the drive containing the scanned path.
@@ -480,7 +515,10 @@ class MainWindowMixin:
         choice = {"value": self.TURBO_REGULAR_SCAN}
 
         ttk.Label(
-            dialog, padding=(16, 14, 16, 4), wraplength=470, justify=LEFT,
+            dialog,
+            padding=(16, 14, 16, 4),
+            wraplength=470,
+            justify=LEFT,
             text=(
                 "Turbo Scan reads the NTFS Master File Table directly instead "
                 "of walking folders one at a time, which can be dramatically "
@@ -489,7 +527,10 @@ class MainWindowMixin:
             ),
         ).pack(side=TOP, fill=X)
         ttk.Label(
-            dialog, padding=(16, 4, 16, 10), wraplength=470, justify=LEFT,
+            dialog,
+            padding=(16, 4, 16, 10),
+            wraplength=470,
+            justify=LEFT,
             foreground=COLORS["muted"],
             text=(
                 "• Restart as Admin: one Windows prompt now, then every scan "
@@ -512,15 +553,19 @@ class MainWindowMixin:
             dialog.destroy()
 
         ttk.Button(
-            buttons, text="Restart as Admin", style="Primary.TButton",
+            buttons,
+            text="Restart as Admin",
+            style="Primary.TButton",
             command=lambda: pick(self.TURBO_RESTART_AS_ADMIN),
         ).pack(side=LEFT)
         ttk.Button(
-            buttons, text="Just This Scan",
+            buttons,
+            text="Just This Scan",
             command=lambda: pick(self.TURBO_THIS_SCAN_ONLY),
         ).pack(side=LEFT, padx=6)
         ttk.Button(
-            buttons, text="Regular Scan",
+            buttons,
+            text="Regular Scan",
             command=lambda: pick(self.TURBO_REGULAR_SCAN),
         ).pack(side=RIGHT)
 
@@ -568,10 +613,14 @@ class MainWindowMixin:
         )
         self.scan_thread.start()
         self.root.after(100, self._poll_progress)
+
     def _scan_worker(self, target, turbo_enabled=False):
         try:
             node, report = turbo_scan.scan_with_best_engine(
-                target, self.progress_q, self.cancel_event, turbo_enabled=turbo_enabled,
+                target,
+                self.progress_q,
+                self.cancel_event,
+                turbo_enabled=turbo_enabled,
             )
             self.progress_q.put(("done", (node, report)))
         except Exception as exc:  # noqa: BLE001 - report any scan failure to UI
@@ -623,11 +672,10 @@ class MainWindowMixin:
             node = dict_to_node(json.loads(output))
         except (ValueError, KeyError) as exc:
             logger.exception("Elevated scan of %r produced unparseable output", target)
-            self.progress_q.put(
-                ("error", f"Elevated scan produced invalid output: {exc}")
-            )
+            self.progress_q.put(("error", f"Elevated scan produced invalid output: {exc}"))
             return
         self.progress_q.put(("done", (node, None)))
+
     def _poll_progress(self):
         try:
             while True:
@@ -651,7 +699,7 @@ class MainWindowMixin:
             pass
         self._maybe_refresh_live_tree()
         self.root.after(100, self._poll_progress)
-    
+
     # -- History helper functions ------------------------------------------ #
     def _finish_scan(self, node, report=None):
         self._stop_progress()
@@ -675,22 +723,29 @@ class MainWindowMixin:
         self.root_node = node
         logger.debug(
             "_finish_scan: node %r has %d direct children, size=%s, file_count=%s, engine=%s",
-            node.path, len(node.children), node.size, node.file_count,
+            node.path,
+            len(node.children),
+            node.size,
+            node.file_count,
             report.engine if report is not None else "compatible",
         )
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
         self.tree.item(root_iid, open=True)
         self._populate_children(root_iid, node)
         logger.debug(
-            "_finish_scan: after populate, tree has %d top-level row(s), root row has %d child row(s)",
-            len(self.tree.get_children("")), len(self.tree.get_children(root_iid)),
+            "_finish_scan: after populate, tree has %d top-level row(s), "
+            "root row has %d child row(s)",
+            len(self.tree.get_children("")),
+            len(self.tree.get_children(root_iid)),
         )
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
         engine_prefix = ""
         if report is not None and report.engine == turbo_scan.ENGINE_TURBO:
-            throughput = report.file_count / report.elapsed_seconds if report.elapsed_seconds > 0 else 0
+            throughput = (
+                report.file_count / report.elapsed_seconds if report.elapsed_seconds > 0 else 0
+            )
             engine_prefix = (
                 f"⚡ Turbo Scan (NTFS MFT) · {report.file_count:,} files in "
                 f"{report.elapsed_seconds:.1f}s ({throughput:,.0f} files/sec)  —  "
@@ -717,6 +772,7 @@ class MainWindowMixin:
             args=(node,),
             daemon=True,
         ).start()
+
     def _finish_error(self, msg):
         self._stop_progress()
         self.scan_btn.config(state="normal")
@@ -805,8 +861,12 @@ class MainWindowMixin:
             self._dismiss_turbo_fallback_banner()
 
         ttk.Label(
-            banner, style="Accent.TLabel",
-            text=f"⚠ Turbo Scan wasn't available for this scan — used the regular scan instead ({reason}).",
+            banner,
+            style="Accent.TLabel",
+            text=(
+                "⚠ Turbo Scan wasn't available for this scan — used the "
+                f"regular scan instead ({reason})."
+            ),
         ).pack(side=LEFT)
         ttk.Button(banner, text="✕", width=3, command=dismiss).pack(side=RIGHT)
 
@@ -843,14 +903,17 @@ class MainWindowMixin:
             self._dismiss_inaccessible_paths_banner()
 
         ttk.Label(
-            banner, style="Accent.TLabel",
+            banner,
+            style="Accent.TLabel",
             text=(
                 f"⚠ {count} {noun} couldn't be read (permissions) — "
                 f"the total above may be missing whatever they contain."
             ),
         ).pack(side=LEFT)
         ttk.Button(
-            banner, text="View List", command=self._show_inaccessible_paths_window,
+            banner,
+            text="View List",
+            command=self._show_inaccessible_paths_window,
         ).pack(side=LEFT, padx=(10, 0))
         ttk.Button(banner, text="✕", width=3, command=dismiss).pack(side=RIGHT)
 
@@ -880,7 +943,9 @@ class MainWindowMixin:
             logger.debug("Inaccessible Paths window iconbitmap failed", exc_info=True)
 
         ttk.Label(
-            win, padding=(10, 8), style="Accent.TLabel",
+            win,
+            padding=(10, 8),
+            style="Accent.TLabel",
             text=(
                 "These paths returned a permission error during the last scan, so "
                 "they (and anything inside them, for a folder) were counted as 0 "
@@ -889,7 +954,8 @@ class MainWindowMixin:
                 "C:\\System Volume Information, or a backup tool's own storage) — "
                 "running this app elevated doesn't override that."
             ),
-            wraplength=740, justify=LEFT,
+            wraplength=740,
+            justify=LEFT,
         ).pack(side=TOP, fill=X)
 
         frame = ttk.Frame(win, padding=(10, 0, 10, 10))
@@ -913,9 +979,12 @@ class MainWindowMixin:
         tv.tag_configure("odd", background=COLORS["stripe"])
 
         iid_to_node = {}
-        for index, inaccessible_node in enumerate(sorted(inaccessible_nodes, key=lambda n: n.path.lower())):
+        for index, inaccessible_node in enumerate(
+            sorted(inaccessible_nodes, key=lambda n: n.path.lower())
+        ):
             iid = tv.insert(
-                "", END,
+                "",
+                END,
                 values=(inaccessible_node.path, "Folder" if inaccessible_node.is_dir else "File"),
                 tags=("odd" if index % 2 else "even",),
             )
@@ -938,11 +1007,11 @@ class MainWindowMixin:
                 self.root.clipboard_append(inaccessible_node.path)
 
         ttk.Button(
-            button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
+            button_bar,
+            text=f"Reveal in {FILE_MANAGER_NAME}",
+            command=reveal_selected,
         ).pack(side=LEFT)
-        ttk.Button(button_bar, text="Copy Path", command=copy_selected_path).pack(
-            side=LEFT, padx=6
-        )
+        ttk.Button(button_bar, text="Copy Path", command=copy_selected_path).pack(side=LEFT, padx=6)
 
         tv.bind("<Double-1>", lambda _e: reveal_selected())
 
@@ -951,23 +1020,27 @@ class MainWindowMixin:
         self.dup_cancel_event.set()
         self.status_var.set("Cancelling …")
 
-    #-- Helper Methods for Progress Bar ------------------------------------- #
+    # -- Helper Methods for Progress Bar ------------------------------------- #
     def _start_indeterminate_progress(self):
         """Show an animated progress bar when total work is unknown."""
         self.progress.config(mode="indeterminate", maximum=100, value=0)
         self.progress.pack(side=RIGHT, padx=6)
         self.progress.start(12)
+
     def _start_determinate_progress(self, maximum):
         """Show a percentage progress bar when total work is known."""
         self.progress.stop()
         self.progress.config(mode="determinate", maximum=max(1, maximum), value=0)
         self.progress.pack(side=RIGHT, padx=6)
+
     def _update_determinate_progress(self, value):
         self.progress.config(value=value)
+
     def _stop_progress(self):
         self.progress.stop()
         self.progress.config(value=0)
         self.progress.pack_forget()
+
     # -- Treeview population (lazy) ---------------------------------------- #
     def _heat_tag(self, fraction):
         """Return a treeview tag whose foreground is the heat color for
@@ -978,6 +1051,7 @@ class MainWindowMixin:
             self.tree.tag_configure(name, foreground=heat_color(bucket / 24))
             self._heat_tags.add(name)
         return name
+
     def _insert_node(self, parent_iid, node, parent_size, index=0, live=False):
         # `live=True` means `node` came from a scan still in progress: a
         # directory's size/alloc_size/file_count are only meaningful after
@@ -998,9 +1072,9 @@ class MainWindowMixin:
         elif node.is_link:
             tags = ["link"]
         else:
-            tags = [self._heat_tag(fraction)]   # foreground = space-hog heat
+            tags = [self._heat_tag(fraction)]  # foreground = space-hog heat
             if node.is_dir:
-                tags.append("dir")              # bold, keeps heat color
+                tags.append("dir")  # bold, keeps heat color
         tags.append("odd" if index % 2 else "even")
 
         if node.error:
@@ -1028,9 +1102,13 @@ class MainWindowMixin:
             if node.is_cloud_placeholder:
                 alloc_text += " (online-only)"
 
-        label = f"{icon} {node.name}" + ("\\" if node.is_dir and not node.name.endswith("\\") else "")
+        label = f"{icon} {node.name}" + (
+            "\\" if node.is_dir and not node.name.endswith("\\") else ""
+        )
         iid = self.tree.insert(
-            parent_iid, END, text=label,
+            parent_iid,
+            END,
+            text=label,
             values=(size_text, alloc_text, percent, items),
             tags=tuple(tags),
         )
@@ -1040,6 +1118,7 @@ class MainWindowMixin:
         if node.is_dir and node.children:
             self.tree.insert(iid, END, text="…(loading)", tags=("placeholder",))
         return iid
+
     def _populate_children(self, parent_iid, node, live=False):
         # Remove placeholder if present.
         kids = self.tree.get_children(parent_iid)
@@ -1048,17 +1127,17 @@ class MainWindowMixin:
         elif kids:
             return  # already populated
 
-        ordered = sorted(node.children, key=self._node_sort_key,
-                         reverse=self._sort_reverse)
+        ordered = sorted(node.children, key=self._node_sort_key, reverse=self._sort_reverse)
         for index, child in enumerate(ordered):
-            self._insert_node(parent_iid, child, parent_size=node.size or 1,
-                              index=index, live=live)
+            self._insert_node(parent_iid, child, parent_size=node.size or 1, index=index, live=live)
+
     def _node_sort_key(self, node):
         if self._sort_key == "name":
             return node.name.lower()
         if self._sort_key == "items":
             return node.file_count
         return node.size
+
     def _on_open(self, _event):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
@@ -1068,6 +1147,7 @@ class MainWindowMixin:
         self._populate_children(iid, node, live=live)
         if live:
             self._live_expanded_iids.add(iid)
+
     def _on_double_click(self, _event):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
@@ -1076,8 +1156,14 @@ class MainWindowMixin:
 
     # -- Column sorting ---------------------------------------------------- #
 
-    _HEADINGS = {"#0": "Name", "size": "Size", "alloc": "On Disk",
-                 "percent": "% of Parent", "items": "Files"}
+    _HEADINGS = {
+        "#0": "Name",
+        "size": "Size",
+        "alloc": "On Disk",
+        "percent": "% of Parent",
+        "items": "Files",
+    }
+
     def _sort_by(self, key):
         """Handle a heading click: toggle direction if it's the active key,
         else switch to it (names ascend, sizes/counts descend by default)."""
@@ -1085,42 +1171,50 @@ class MainWindowMixin:
             self._sort_reverse = not self._sort_reverse
         else:
             self._sort_key = key
-            self._sort_reverse = (key != "name")
+            self._sort_reverse = key != "name"
         self._update_heading_arrows()
         self._resort_tree()
+
     def _update_heading_arrows(self):
         arrow = " ▼" if self._sort_reverse else " ▲"
         # The percent column is driven by the size sort, so it shares the mark.
-        active_cols = {"size": ("size", "alloc", "percent"),
-                       "name": ("#0",), "items": ("items",)}[self._sort_key]
+        active_cols = {"size": ("size", "alloc", "percent"), "name": ("#0",), "items": ("items",)}[
+            self._sort_key
+        ]
         for col, base in self._HEADINGS.items():
             text = base + (arrow if col in active_cols else "")
             self.tree.heading(col, text=text)
+
     def _resort_tree(self):
         """Re-order every already-populated level in place (preserves which
         nodes are expanded; lazy children sort on expand via _populate)."""
+
         def walk(parent_iid):
             self._sort_level(parent_iid)
             for iid in self.tree.get_children(parent_iid):
                 node = self.node_by_iid.get(iid)
                 if node and node.is_dir:
                     walk(iid)
+
         walk("")
+
     def _sort_level(self, parent_iid):
-        kids = [k for k in self.tree.get_children(parent_iid)
-                if k in self.node_by_iid]
+        kids = [k for k in self.tree.get_children(parent_iid) if k in self.node_by_iid]
         if not kids:
             return
-        kids.sort(key=lambda iid: self._node_sort_key(self.node_by_iid[iid]),
-                  reverse=self._sort_reverse)
+        kids.sort(
+            key=lambda iid: self._node_sort_key(self.node_by_iid[iid]), reverse=self._sort_reverse
+        )
         for index, iid in enumerate(kids):
             self.tree.move(iid, parent_iid, index)
             self._set_stripe(iid, index)
+
     def _set_stripe(self, iid, index):
         """Rewrite a row's even/odd background tag, keeping its other tags."""
         tags = [t for t in self.tree.item(iid, "tags") if t not in ("even", "odd")]
         tags.append("odd" if index % 2 else "even")
         self.tree.item(iid, tags=tuple(tags))
+
     def _refresh_row(self, iid):
         """Recompute a row's size / percent / files text from its node."""
         node = self.node_by_iid.get(iid)
@@ -1139,6 +1233,7 @@ class MainWindowMixin:
         for child in self.tree.get_children(iid):
             self._forget_subtree(child)
         self.node_by_iid.pop(iid, None)
+
     def _delete_selected(self):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
@@ -1148,8 +1243,7 @@ class MainWindowMixin:
         if not messagebox.askyesno(
             f"Delete to {TRASH_NAME}",
             f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
-            f"{human_size(node.size)}"
-            + (f" in {node.file_count:,} files" if node.is_dir else ""),
+            f"{human_size(node.size)}" + (f" in {node.file_count:,} files" if node.is_dir else ""),
             icon="warning",
         ):
             return
@@ -1206,14 +1300,17 @@ class MainWindowMixin:
             self.tools_menu.tk_popup(x, y)
         finally:
             self.tools_menu.grab_release()
+
     def _show_menu(self, event):
         iid = self.tree.identify_row(event.y)
         if iid:
             self.tree.selection_set(iid)
             self.tree.focus(iid)
             self.menu.tk_popup(event.x_root, event.y_root)
+
     def _selected_node(self):
         return self.node_by_iid.get(self.tree.focus())
+
     def _reveal(self, path, is_dir):
         try:
             if IS_MACOS:
@@ -1235,21 +1332,26 @@ class MainWindowMixin:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not reveal %r", path, exc_info=True)
             messagebox.showerror("Storage Scanner", f"Could not open:\n{exc}")
+
     def _open_in_explorer(self):
         node = self._selected_node()
         if node:
             self._reveal(node.path, node.is_dir)
+
     def _copy_path(self):
         node = self._selected_node()
         if node:
             self.root.clipboard_clear()
             self.root.clipboard_append(node.path)
+
     def _set_budget_for_selected(self):
         node = self._selected_node()
         if not node:
             return
         if not node.is_dir:
-            messagebox.showinfo("Storage Scanner", "Budgets apply to folders, not individual files.")
+            messagebox.showinfo(
+                "Storage Scanner", "Budgets apply to folders, not individual files."
+            )
             return
 
         response = simpledialog.askstring(
@@ -1273,8 +1375,6 @@ class MainWindowMixin:
 
         normalized = os.path.normcase(os.path.normpath(node.path))
         set_budget(normalized, threshold_bytes)
-        self.status_var.set(
-            f"Budget set: {node.path} → alert above {human_size(threshold_bytes)}"
-        )
+        self.status_var.set(f"Budget set: {node.path} → alert above {human_size(threshold_bytes)}")
 
     # -- Top 25 largest files --------------------------------------------- #

@@ -40,9 +40,9 @@ TIMEOUT_SECONDS = 180
 def _isolated_env(app_data_root):
     """Environment that sends every platform's app-data folder to app_data_root."""
     env = dict(os.environ)
-    env["LOCALAPPDATA"] = str(app_data_root)          # Windows
-    env["XDG_DATA_HOME"] = str(app_data_root)         # Linux
-    env["HOME"] = str(app_data_root)                  # macOS: ~/Library/Application Support
+    env["LOCALAPPDATA"] = str(app_data_root)  # Windows
+    env["XDG_DATA_HOME"] = str(app_data_root)  # Linux
+    env["HOME"] = str(app_data_root)  # macOS: ~/Library/Application Support
     return env
 
 
@@ -75,15 +75,24 @@ def run_smoke_test(binary):
         output = Path(work) / "result.json"
 
         command = [
-            str(binary), "--cli", str(target),
-            "--format", "json", "--output", str(output), "--save-history",
+            str(binary),
+            "--cli",
+            str(target),
+            "--format",
+            "json",
+            "--output",
+            str(output),
+            "--save-history",
         ]
         print("RUN   " + subprocess.list2cmdline(command))
 
         try:
             result = subprocess.run(
-                command, env=_isolated_env(app_data_root),
-                capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+                command,
+                env=_isolated_env(app_data_root),
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
             check(False, f"finished within {TIMEOUT_SECONDS}s")
@@ -98,20 +107,28 @@ def run_smoke_test(binary):
         if check(output.is_file(), "wrote the JSON result"):
             data = json.loads(output.read_text(encoding="utf-8"))
             expected_size = sum(FILES.values())
-            check(data.get("size") == expected_size,
-                  f"total size {expected_size} (got {data.get('size')})")
-            check(data.get("file_count") == len(FILES),
-                  f"file count {len(FILES)} (got {data.get('file_count')})")
+            check(
+                data.get("size") == expected_size,
+                f"total size {expected_size} (got {data.get('size')})",
+            )
+            check(
+                data.get("file_count") == len(FILES),
+                f"file count {len(FILES)} (got {data.get('file_count')})",
+            )
 
         db = _history_db(app_data_root)
-        if check(db is not None, "created the scan history database in the isolated app-data folder"):
+        if check(
+            db is not None, "created the scan history database in the isolated app-data folder"
+        ):
             conn = sqlite3.connect(db)
             try:
                 rows = conn.execute("SELECT total_size, file_count FROM scans").fetchall()
             finally:
                 conn.close()
-            check(rows == [(sum(FILES.values()), len(FILES))],
-                  f"saved exactly one scan to history (got {rows})")
+            check(
+                rows == [(sum(FILES.values()), len(FILES))],
+                f"saved exactly one scan to history (got {rows})",
+            )
 
     return failures
 

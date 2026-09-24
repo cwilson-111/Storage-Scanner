@@ -86,8 +86,8 @@ class JournalState:
 class DirtyRecord:
     record_number: int
     reason: int  # raw Reason bitmask, OR'd across every USN entry seen for
-                 # this record number -- logging/debugging only, never
-                 # branched on (see module docstring).
+    # this record number -- logging/debugging only, never
+    # branched on (see module docstring).
 
 
 class _USN_JOURNAL_DATA_V0(ctypes.Structure):
@@ -127,9 +127,14 @@ def query_journal(handle):
     buffer = _USN_JOURNAL_DATA_V0()
     bytes_returned = wintypes.DWORD(0)
     succeeded = ctypes.windll.kernel32.DeviceIoControl(
-        handle, _FSCTL_QUERY_USN_JOURNAL, None, 0,
-        ctypes.byref(buffer), ctypes.sizeof(buffer),
-        ctypes.byref(bytes_returned), None,
+        handle,
+        _FSCTL_QUERY_USN_JOURNAL,
+        None,
+        0,
+        ctypes.byref(buffer),
+        ctypes.sizeof(buffer),
+        ctypes.byref(bytes_returned),
+        None,
     )
     if not succeeded:
         raise UsnJournalError("FSCTL_QUERY_USN_JOURNAL failed (no journal on this volume?)")
@@ -163,9 +168,14 @@ def create_journal(handle):
     input_data = _CREATE_USN_JOURNAL_DATA(MaximumSize=0, AllocationDelta=0)
     bytes_returned = wintypes.DWORD(0)
     succeeded = ctypes.windll.kernel32.DeviceIoControl(
-        handle, _FSCTL_CREATE_USN_JOURNAL,
-        ctypes.byref(input_data), ctypes.sizeof(input_data),
-        None, 0, ctypes.byref(bytes_returned), None,
+        handle,
+        _FSCTL_CREATE_USN_JOURNAL,
+        ctypes.byref(input_data),
+        ctypes.sizeof(input_data),
+        None,
+        0,
+        ctypes.byref(bytes_returned),
+        None,
     )
     if not succeeded:
         raise UsnJournalError("FSCTL_CREATE_USN_JOURNAL failed")
@@ -224,16 +234,23 @@ def read_journal_changes(handle, journal_id, start_usn, lowest_valid_usn=None):
 
     while True:
         input_data = _READ_USN_JOURNAL_DATA_V0(
-            StartUsn=current_usn, ReasonMask=_USN_REASON_ALL,
-            ReturnOnlyOnClose=_RETURN_ONLY_ON_CLOSE, Timeout=0,
-            BytesToWaitFor=0, UsnJournalID=journal_id,
+            StartUsn=current_usn,
+            ReasonMask=_USN_REASON_ALL,
+            ReturnOnlyOnClose=_RETURN_ONLY_ON_CLOSE,
+            Timeout=0,
+            BytesToWaitFor=0,
+            UsnJournalID=journal_id,
         )
         bytes_returned = wintypes.DWORD(0)
         succeeded = ctypes.windll.kernel32.DeviceIoControl(
-            handle, _FSCTL_READ_USN_JOURNAL,
-            ctypes.byref(input_data), ctypes.sizeof(input_data),
-            out_buffer, _READ_BUFFER_BYTES,
-            ctypes.byref(bytes_returned), None,
+            handle,
+            _FSCTL_READ_USN_JOURNAL,
+            ctypes.byref(input_data),
+            ctypes.sizeof(input_data),
+            out_buffer,
+            _READ_BUFFER_BYTES,
+            ctypes.byref(bytes_returned),
+            None,
         )
         if not succeeded:
             raise UsnJournalError(
@@ -241,7 +258,7 @@ def read_journal_changes(handle, journal_id, start_usn, lowest_valid_usn=None):
                 f"(journal recreated/deleted, or volume dismounted?)"
             )
 
-        data = out_buffer.raw[:bytes_returned.value]
+        data = out_buffer.raw[: bytes_returned.value]
         if len(data) < 8:
             raise UsnJournalError(
                 f"FSCTL_READ_USN_JOURNAL returned an implausibly short buffer "
@@ -252,11 +269,21 @@ def read_journal_changes(handle, journal_id, start_usn, lowest_valid_usn=None):
         offset = 8
         found_any = False
         while offset + _USN_RECORD_HEADER_SIZE <= len(data):
-            (record_length, _major, _minor, file_ref, _parent_ref, _usn,
-             _timestamp, reason, _source_info, _security_id, _file_attrs,
-             _name_len, _name_offset) = struct.unpack_from(
-                _USN_RECORD_HEADER_FORMAT, data, offset
-            )
+            (
+                record_length,
+                _major,
+                _minor,
+                file_ref,
+                _parent_ref,
+                _usn,
+                _timestamp,
+                reason,
+                _source_info,
+                _security_id,
+                _file_attrs,
+                _name_len,
+                _name_offset,
+            ) = struct.unpack_from(_USN_RECORD_HEADER_FORMAT, data, offset)
             if record_length == 0:
                 break
             record_number = file_ref & _FRN_RECORD_NUMBER_MASK

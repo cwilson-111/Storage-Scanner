@@ -22,8 +22,8 @@ import sys
 import tkinter
 import uuid
 from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, version as pkg_version
-
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 
 # Optional, lazily-imported runtime packages (see history.py's matplotlib
 # guard and storage_scanner/csv_to_*.py): PyInstaller only bundles one if
@@ -76,24 +76,33 @@ def build_sbom(app_version):
     for optional_package in _OPTIONAL_RUNTIME_PACKAGES:
         found_version = _pkg(optional_package)
         if found_version:
-            components.append({
-                "type": "library",
-                "name": optional_package,
-                "version": found_version,
-                "description": "Optional feature dependency, bundled because it was installed at build time.",
-                "scope": "optional",
-            })
+            components.append(
+                {
+                    "type": "library",
+                    "name": optional_package,
+                    "version": found_version,
+                    "description": (
+                        "Optional feature dependency, bundled because it was "
+                        "installed at build time."
+                    ),
+                    "scope": "optional",
+                }
+            )
 
     for build_tool in ("pyinstaller", "pillow"):
         found_version = _pkg(build_tool)
         if found_version:
-            components.append({
-                "type": "application",
-                "name": build_tool,
-                "version": found_version,
-                "description": "Build-time only — not present in the shipped executable's own code.",
-                "scope": "excluded",
-            })
+            components.append(
+                {
+                    "type": "application",
+                    "name": build_tool,
+                    "version": found_version,
+                    "description": (
+                        "Build-time only — not present in the shipped " "executable's own code."
+                    ),
+                    "scope": "excluded",
+                }
+            )
 
     return {
         "bomFormat": "CycloneDX",
@@ -120,11 +129,13 @@ def build_sbom(app_version):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--app-version", default="unknown",
+        "--app-version",
+        default="unknown",
         help="Version string to record for the application component (e.g. a git tag).",
     )
     parser.add_argument(
-        "--output", default="sbom.json",
+        "--output",
+        default="sbom.json",
         help="Path to write the SBOM JSON to (default: sbom.json).",
     )
     args = parser.parse_args()

@@ -47,11 +47,14 @@ def not_elevated_ntfs(monkeypatch):
     monkeypatch.setattr(main_window, "IS_ROOT", False)
     monkeypatch.setattr(main_window, "is_ntfs_fixed_drive", lambda _path: True)
     monkeypatch.setattr(
-        main_window, "relaunch_elevated_windows",
+        main_window,
+        "relaunch_elevated_windows",
         lambda initial=None: relaunches.append(initial) or True,
     )
     monkeypatch.setattr(
-        main_window.messagebox, "showerror", lambda *a, **k: errors.append(a),
+        main_window.messagebox,
+        "showerror",
+        lambda *a, **k: errors.append(a),
     )
     return relaunches, errors
 
@@ -70,7 +73,8 @@ def test_regular_scan_skips_turbo(not_elevated_ntfs, tmp_path):
 
 
 def test_restart_as_admin_relaunches_on_the_same_folder_and_starts_no_scan(
-    not_elevated_ntfs, tmp_path,
+    not_elevated_ntfs,
+    tmp_path,
 ):
     relaunches, _errors = not_elevated_ntfs
     app = _App(MainWindowMixin.TURBO_RESTART_AS_ADMIN)

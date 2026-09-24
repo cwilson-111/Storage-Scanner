@@ -5,7 +5,7 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 
 import os
 from collections import defaultdict
-from tkinter import BOTH, E, END, TOP, Toplevel, W, X, ttk
+from tkinter import BOTH, END, TOP, E, Toplevel, W, X, ttk
 
 from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
@@ -54,9 +54,10 @@ class FileWindowsMixin:
             logger.debug("Largest Files window iconbitmap failed", exc_info=True)
 
         ttk.Label(
-            win, padding=(10, 8),
+            win,
+            padding=(10, 8),
             text=f"Largest files under {self.root_node.path}"
-                 f"   (double-click to reveal in {FILE_MANAGER_NAME})",
+            f"   (double-click to reveal in {FILE_MANAGER_NAME})",
         ).pack(side=TOP, fill=X)
 
         frame = ttk.Frame(win, padding=(10, 0, 10, 10))
@@ -99,9 +100,10 @@ class FileWindowsMixin:
         iid_to_path = {}
         for rank, node in enumerate(top, start=1):
             iid = tv.insert(
-                "", END, values=(rank, human_size(node.size), node.path),
-                tags=(heat_tag(node.size / max_size),
-                      "odd" if rank % 2 else "even"),
+                "",
+                END,
+                values=(rank, human_size(node.size), node.path),
+                tags=(heat_tag(node.size / max_size), "odd" if rank % 2 else "even"),
             )
             iid_to_path[iid] = node.path
 
@@ -148,7 +150,8 @@ class FileWindowsMixin:
             logger.debug("File Types window iconbitmap failed", exc_info=True)
 
         ttk.Label(
-            win, padding=(10, 8),
+            win,
+            padding=(10, 8),
             text=f"Space by file type under {self.root_node.path}",
         ).pack(side=TOP, fill=X)
 
@@ -190,7 +193,8 @@ class FileWindowsMixin:
             fraction = size / total
             percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
             tv.insert(
-                "", END,
+                "",
+                END,
                 values=(ext, human_size(size), percent, f"{counts[ext]:,}"),
                 tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
             )

@@ -37,10 +37,19 @@ def _pack_usn_record(file_ref, parent_ref, usn, reason, record_length=None):
     length = record_length if record_length is not None else usn_journal._USN_RECORD_HEADER_SIZE
     return struct.pack(
         usn_journal._USN_RECORD_HEADER_FORMAT,
-        length, 2, 0,        # RecordLength, MajorVersion, MinorVersion
-        file_ref, parent_ref, usn, 0,   # FileReferenceNumber, ParentFRN, Usn, TimeStamp
-        reason, 0, 0, 0,      # Reason, SourceInfo, SecurityId, FileAttributes
-        0, usn_journal._USN_RECORD_HEADER_SIZE,  # FileNameLength, FileNameOffset
+        length,
+        2,
+        0,  # RecordLength, MajorVersion, MinorVersion
+        file_ref,
+        parent_ref,
+        usn,
+        0,  # FileReferenceNumber, ParentFRN, Usn, TimeStamp
+        reason,
+        0,
+        0,
+        0,  # Reason, SourceInfo, SecurityId, FileAttributes
+        0,
+        usn_journal._USN_RECORD_HEADER_SIZE,  # FileNameLength, FileNameOffset
     )
 
 
@@ -50,8 +59,15 @@ def _read_response(next_usn, records_bytes=b""):
 
 class _FakeUsnKernel32:
     def __init__(
-        self, *, journal_id=1, first_usn=0, next_usn=100, lowest_valid_usn=0,
-        max_usn=10_000, query_fails=False, create_fails=False,
+        self,
+        *,
+        journal_id=1,
+        first_usn=0,
+        next_usn=100,
+        lowest_valid_usn=0,
+        max_usn=10_000,
+        query_fails=False,
+        create_fails=False,
         read_responses=None,
     ):
         self.journal_id = journal_id
@@ -67,7 +83,9 @@ class _FakeUsnKernel32:
         self.last_create_data = None
         self.read_start_usns = []
 
-    def DeviceIoControl(self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped):
+    def DeviceIoControl(
+        self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped
+    ):
         if code == usn_journal._FSCTL_QUERY_USN_JOURNAL:
             self.query_calls += 1
             if self.query_fails:
@@ -84,14 +102,18 @@ class _FakeUsnKernel32:
 
         if code == usn_journal._FSCTL_CREATE_USN_JOURNAL:
             self.create_calls += 1
-            data = ctypes.cast(in_buf, ctypes.POINTER(usn_journal._CREATE_USN_JOURNAL_DATA)).contents
+            data = ctypes.cast(
+                in_buf, ctypes.POINTER(usn_journal._CREATE_USN_JOURNAL_DATA)
+            ).contents
             self.last_create_data = (data.MaximumSize, data.AllocationDelta)
             if self.create_fails:
                 return 0
             return 1
 
         if code == usn_journal._FSCTL_READ_USN_JOURNAL:
-            request = ctypes.cast(in_buf, ctypes.POINTER(usn_journal._READ_USN_JOURNAL_DATA_V0)).contents
+            request = ctypes.cast(
+                in_buf, ctypes.POINTER(usn_journal._READ_USN_JOURNAL_DATA_V0)
+            ).contents
             self.read_start_usns.append(request.StartUsn)
             if request.UsnJournalID != self.journal_id:
                 return 0  # journal ID mismatch -- the real FSCTL rejects this outright
@@ -116,8 +138,11 @@ def _patch(monkeypatch, kernel32):
 
 # -- query_journal ------------------------------------------------------- #
 
+
 def test_query_journal_parses_the_returned_buffer(monkeypatch):
-    kernel32 = _FakeUsnKernel32(journal_id=99, first_usn=10, next_usn=500, lowest_valid_usn=5, max_usn=99_999)
+    kernel32 = _FakeUsnKernel32(
+        journal_id=99, first_usn=10, next_usn=500, lowest_valid_usn=5, max_usn=99_999
+    )
     _patch(monkeypatch, kernel32)
 
     state = usn_journal.query_journal(_FAKE_HANDLE)
@@ -138,6 +163,7 @@ def test_query_journal_raises_when_no_journal_exists(monkeypatch):
 
 
 # -- create_journal / ensure_journal -------------------------------------- #
+
 
 def test_create_journal_sends_zero_maximum_size_and_allocation_delta(monkeypatch):
     kernel32 = _FakeUsnKernel32()
@@ -200,11 +226,11 @@ def test_ensure_journal_creates_one_only_when_none_exists_yet(monkeypatch):
 
 # -- read_journal_changes -------------------------------------------------- #
 
+
 def test_read_journal_changes_returns_dirty_records_and_new_cursor(monkeypatch):
-    records = (
-        _pack_usn_record(_pack_frn(1, 100), _pack_frn(1, 5), usn=200, reason=0x100)
-        + _pack_usn_record(_pack_frn(1, 101), _pack_frn(1, 5), usn=210, reason=0x200)
-    )
+    records = _pack_usn_record(
+        _pack_frn(1, 100), _pack_frn(1, 5), usn=200, reason=0x100
+    ) + _pack_usn_record(_pack_frn(1, 101), _pack_frn(1, 5), usn=210, reason=0x200)
     kernel32 = _FakeUsnKernel32(
         journal_id=1,
         read_responses=[
@@ -222,10 +248,11 @@ def test_read_journal_changes_returns_dirty_records_and_new_cursor(monkeypatch):
 
 
 def test_read_journal_changes_deduplicates_a_record_touched_multiple_times(monkeypatch):
-    records = (
-        _pack_usn_record(_pack_frn(1, 100), _pack_frn(1, 5), usn=200, reason=0x100)  # DATA_OVERWRITE
-        + _pack_usn_record(_pack_frn(1, 100), _pack_frn(1, 5), usn=205, reason=0x1000)  # RENAME_OLD_NAME
-    )
+    records = _pack_usn_record(
+        _pack_frn(1, 100), _pack_frn(1, 5), usn=200, reason=0x100
+    ) + _pack_usn_record(  # DATA_OVERWRITE
+        _pack_frn(1, 100), _pack_frn(1, 5), usn=205, reason=0x1000
+    )  # RENAME_OLD_NAME
     kernel32 = _FakeUsnKernel32(
         journal_id=1,
         read_responses=[
@@ -265,7 +292,9 @@ def test_read_journal_changes_masks_the_sequence_number_out_of_the_frn(monkeypat
 
 def test_read_journal_changes_pages_until_no_records_are_returned(monkeypatch):
     first_page_records = _pack_usn_record(_pack_frn(1, 100), _pack_frn(1, 5), usn=200, reason=0x100)
-    second_page_records = _pack_usn_record(_pack_frn(1, 101), _pack_frn(1, 5), usn=250, reason=0x100)
+    second_page_records = _pack_usn_record(
+        _pack_frn(1, 101), _pack_frn(1, 5), usn=250, reason=0x100
+    )
     kernel32 = _FakeUsnKernel32(
         journal_id=1,
         read_responses=[
@@ -313,10 +342,11 @@ def test_read_journal_changes_proceeds_when_start_usn_is_at_or_above_lowest_vali
     _patch(monkeypatch, kernel32)
 
     dirty, new_next_usn = read_journal_changes(
-        _FAKE_HANDLE, journal_id=1, start_usn=200, lowest_valid_usn=200,
+        _FAKE_HANDLE,
+        journal_id=1,
+        start_usn=200,
+        lowest_valid_usn=200,
     )
 
     assert dirty == []
     assert new_next_usn == 300
-
-

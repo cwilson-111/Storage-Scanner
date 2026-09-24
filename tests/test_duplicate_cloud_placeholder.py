@@ -84,8 +84,12 @@ def test_two_concurrent_scans_do_not_cross_contaminate_stats(tmp_path):
     first's numbers, in either direction."""
     app = _make_app(tmp_path)
     app.dup_stats = {  # as if a Duplicate Files window's earlier run left this
-        "files_total": 999, "files_checked": 999, "files_skipped": 42,
-        "bytes_skipped": 12345, "partial_hashed": 999, "full_hashed": 999,
+        "files_total": 999,
+        "files_checked": 999,
+        "files_skipped": 42,
+        "bytes_skipped": 12345,
+        "partial_hashed": 999,
+        "full_hashed": 999,
     }
     before = dict(app.dup_stats)
 

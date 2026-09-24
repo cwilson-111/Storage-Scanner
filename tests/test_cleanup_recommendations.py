@@ -8,9 +8,13 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import cleanup_recommendations
 from storage_scanner.cleanup_recommendations import (
-    CATEGORY_DUPLICATE, CATEGORY_PROTECTED, CATEGORY_REVIEW,
-    build_duplicate_recommendations, find_protected_and_review_candidates,
-    is_protected_path, pick_keeper,
+    CATEGORY_DUPLICATE,
+    CATEGORY_PROTECTED,
+    CATEGORY_REVIEW,
+    build_duplicate_recommendations,
+    find_protected_and_review_candidates,
+    is_protected_path,
+    pick_keeper,
 )
 from storage_scanner.models import Node
 
@@ -50,7 +54,9 @@ def _protected_marker():
 
 def test_protected_path_matches_known_os_markers(monkeypatch):
     monkeypatch.setattr(
-        cleanup_recommendations, "DEFAULT_DUPLICATE_EXCLUDES", (_protected_marker(),),
+        cleanup_recommendations,
+        "DEFAULT_DUPLICATE_EXCLUDES",
+        (_protected_marker(),),
     )
     system_path = os.path.join(os.sep, "System", "Library", "CoreServices", "foo")
     other_path = os.path.join(os.sep, "Users", "me", "Documents", "report.pdf")
@@ -95,8 +101,11 @@ def test_recent_atime_prevents_review_flag_even_with_old_mtime():
     you reopen often but never edit."""
     root = Node("/root", "root", is_dir=True)
     _file(
-        root, "reference.pdf", size=150 * 1024 * 1024,
-        mtime=NOW - 400 * DAY, atime=NOW - 2 * DAY,
+        root,
+        "reference.pdf",
+        size=150 * 1024 * 1024,
+        mtime=NOW - 400 * DAY,
+        atime=NOW - 2 * DAY,
     )
 
     recs = find_protected_and_review_candidates(root, now=NOW)
@@ -106,7 +115,9 @@ def test_recent_atime_prevents_review_flag_even_with_old_mtime():
 
 def test_system_path_is_protected_not_reviewed(monkeypatch):
     monkeypatch.setattr(
-        cleanup_recommendations, "DEFAULT_DUPLICATE_EXCLUDES", (_protected_marker(),),
+        cleanup_recommendations,
+        "DEFAULT_DUPLICATE_EXCLUDES",
+        (_protected_marker(),),
     )
     root = Node(os.path.join(os.sep, "System"), "System", is_dir=True)
     _file(root, "big.bin", size=500 * 1024 * 1024, mtime=NOW - 400 * DAY)
@@ -121,8 +132,11 @@ def test_system_path_is_protected_not_reviewed(monkeypatch):
 def test_cloud_placeholder_is_protected():
     root = Node("/root", "root", is_dir=True)
     _file(
-        root, "bigfile.zip", size=500 * 1024 * 1024,
-        mtime=NOW - 400 * DAY, is_cloud_placeholder=True,
+        root,
+        "bigfile.zip",
+        size=500 * 1024 * 1024,
+        mtime=NOW - 400 * DAY,
+        is_cloud_placeholder=True,
     )
 
     recs = find_protected_and_review_candidates(root, now=NOW)

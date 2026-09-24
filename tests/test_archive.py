@@ -42,7 +42,8 @@ def test_archive_file_compresses_and_removes_original(tmp_path, monkeypatch):
     node.size = target.stat().st_size
 
     monkeypatch.setattr(
-        archive, "recycle_and_log",
+        archive,
+        "recycle_and_log",
         lambda node, source, action, extra_error_context=None: True,
     )
 
@@ -73,7 +74,8 @@ def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path, 
     node.size = target.stat().st_size
 
     monkeypatch.setattr(
-        archive, "recycle_and_log",
+        archive,
+        "recycle_and_log",
         lambda node, source, action, extra_error_context=None: False,
     )
 

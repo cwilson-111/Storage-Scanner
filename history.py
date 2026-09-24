@@ -1,4 +1,3 @@
-
 import sqlite3
 from datetime import datetime
 
@@ -8,8 +7,8 @@ except ImportError:  # pragma: no cover - optional runtime dependency
     plt = None
 
 import logging
-import sys
 import os
+import sys
 from pathlib import Path
 
 APP_NAME = "NeuralStorageMatrix"
@@ -42,14 +41,14 @@ DB_NAME = APP_DATA_DIR / "storage_history.db"
 # this module — both name the same "storage_scanner" logger either way.
 logging.getLogger("storage_scanner").debug("Using database: %s", DB_NAME)
 
+
 def init_history_db():
-    
+
     conn = sqlite3.connect(DB_NAME)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA temp_store = MEMORY")
-
 
     cur = conn.cursor()
 
@@ -65,7 +64,6 @@ def init_history_db():
             (key, value)
             VALUES ('schema_version', '1')
             """)
-
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
@@ -90,9 +88,6 @@ def init_history_db():
             FOREIGN KEY(scan_id) REFERENCES scans(id)
         )
     """)
-
-
-    
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -156,15 +151,20 @@ def set_app_metadata(key, value):
     """Set (or update) one value in the app_metadata key/value table."""
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO app_metadata (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    """, (key, value))
+    """,
+        (key, value),
+    )
     conn.commit()
     conn.close()
 
 
-def save_scan_snapshot(scan_path, total_size, drive_capacity, file_count, folder_count, folder_sizes):
+def save_scan_snapshot(
+    scan_path, total_size, drive_capacity, file_count, folder_count, folder_sizes
+):
     """
     Saves one scan result into SQLite.
 
@@ -182,69 +182,86 @@ def save_scan_snapshot(scan_path, total_size, drive_capacity, file_count, folder
 
     created_at = datetime.now().isoformat(timespec="seconds")
 
-    cur.execute("""
-    INSERT INTO scans 
+    cur.execute(
+        """
+    INSERT INTO scans
     (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
-""", (scan_path, total_size, drive_capacity, file_count, folder_count, created_at))
+""",
+        (scan_path, total_size, drive_capacity, file_count, folder_count, created_at),
+    )
 
     scan_id = cur.lastrowid
 
     rows = []
     for folder_path, data in folder_sizes.items():
-        rows.append((
-            scan_id,
-            folder_path,
-            int(data.get("size", 0)),
-            int(data.get("file_count", 0)),
-            created_at
-        ))
+        rows.append(
+            (
+                scan_id,
+                folder_path,
+                int(data.get("size", 0)),
+                int(data.get("file_count", 0)),
+                created_at,
+            )
+        )
 
-    cur.executemany("""
+    cur.executemany(
+        """
         INSERT INTO folder_snapshots
         (scan_id, folder_path, size_bytes, file_count, created_at)
         VALUES (?, ?, ?, ?, ?)
-    """, rows)
+    """,
+        rows,
+    )
 
     conn.commit()
     conn.close()
 
     return scan_id
 
+
 def get_previous_scan_id(scan_path, current_scan_id):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id
         FROM scans
         WHERE scan_path = ?
           AND id < ?
         ORDER BY id DESC
         LIMIT 1
-    """, (scan_path, current_scan_id))
+    """,
+        (scan_path, current_scan_id),
+    )
 
     row = cur.fetchone()
     conn.close()
 
     return row[0] if row else None
+
 
 def get_latest_scan_id(scan_path):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id
         FROM scans
         WHERE scan_path = ?
         ORDER BY id DESC
         LIMIT 1
-    """, (scan_path,))
+    """,
+        (scan_path,),
+    )
 
     row = cur.fetchone()
     conn.close()
 
     return row[0] if row else None
+
 
 def list_scans_for_path(scan_path, limit=200):
     """All saved scans of `scan_path`, most recent first.
@@ -256,13 +273,16 @@ def list_scans_for_path(scan_path, limit=200):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id, created_at, total_size, file_count
         FROM scans
         WHERE scan_path = ?
         ORDER BY created_at DESC
         LIMIT ?
-    """, (scan_path, limit))
+    """,
+        (scan_path, limit),
+    )
 
     rows = cur.fetchall()
     conn.close()
@@ -274,8 +294,9 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT 
+    cur.execute(
+        """
+        SELECT
             curr.folder_path,
             COALESCE(prev.size_bytes, 0) AS previous_size,
             curr.size_bytes AS current_size,
@@ -288,7 +309,9 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
         WHERE curr.scan_id = ?
         ORDER BY growth_bytes DESC
         LIMIT ?
-    """, (previous_scan_id, current_scan_id, limit))
+    """,
+        (previous_scan_id, current_scan_id, limit),
+    )
 
     rows = cur.fetchall()
     results = []
@@ -323,22 +346,29 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     conn.close()
     return results
 
+
 def get_growth_summary(current_scan_id, previous_scan_id):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT total_size, file_count, created_at
         FROM scans
         WHERE id = ?
-    """, (current_scan_id,))
+    """,
+        (current_scan_id,),
+    )
     current_row = cur.fetchone()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT total_size, file_count, created_at
         FROM scans
         WHERE id = ?
-    """, (previous_scan_id,))
+    """,
+        (previous_scan_id,),
+    )
     previous_row = cur.fetchone()
 
     conn.close()
@@ -410,13 +440,16 @@ def get_scan_history(scan_path, limit=30):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT created_at, total_size, file_count, folder_count
         FROM scans
         WHERE scan_path = ?
         ORDER BY created_at ASC
         LIMIT ?
-    """, (scan_path, limit))
+    """,
+        (scan_path, limit),
+    )
 
     rows = cur.fetchall()
     conn.close()
@@ -437,13 +470,16 @@ def get_scan_ids_by_created_at(scan_path, limit=30):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT created_at, id
         FROM scans
         WHERE scan_path = ?
         ORDER BY created_at ASC
         LIMIT ?
-    """, (scan_path, limit))
+    """,
+        (scan_path, limit),
+    )
 
     rows = dict(cur.fetchall())
     conn.close()
@@ -465,12 +501,23 @@ def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_
 
     created_at = datetime.now().isoformat(timespec="seconds")
 
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO audit_log
         (created_at, source, action, path, is_dir, size_bytes, success, error_message)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (created_at, source, action, path, int(bool(is_dir)), int(size_bytes),
-          int(bool(success)), error_message))
+    """,
+        (
+            created_at,
+            source,
+            action,
+            path,
+            int(bool(is_dir)),
+            int(size_bytes),
+            int(bool(success)),
+            error_message,
+        ),
+    )
 
     entry_id = cur.lastrowid
     conn.commit()
@@ -484,12 +531,15 @@ def get_audit_log(limit=500):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT created_at, source, action, path, is_dir, size_bytes, success, error_message
         FROM audit_log
         ORDER BY created_at DESC
         LIMIT ?
-    """, (limit,))
+    """,
+        (limit,),
+    )
 
     rows = cur.fetchall()
     conn.close()
@@ -503,11 +553,14 @@ def set_budget(path, threshold_bytes):
     cur = conn.cursor()
     created_at = datetime.now().isoformat(timespec="seconds")
 
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO budgets (path, threshold_bytes, created_at)
         VALUES (?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET threshold_bytes = excluded.threshold_bytes
-    """, (path, threshold_bytes, created_at))
+    """,
+        (path, threshold_bytes, created_at),
+    )
 
     conn.commit()
     conn.close()
@@ -540,13 +593,16 @@ def get_latest_scan_snapshot(scan_path):
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT created_at, total_size, file_count, folder_count
         FROM scans
         WHERE scan_path = ?
         ORDER BY created_at DESC
         LIMIT 1
-    """, (scan_path,))
+    """,
+        (scan_path,),
+    )
     row = cur.fetchone()
     conn.close()
     return row
@@ -558,6 +614,7 @@ def format_bytes(num):
             return f"{num:.2f} {unit}"
         num /= 1024
     return f"{num:.2f} PB"
+
 
 def create_usage_history_chart(scan_path, output_file="usage_history.png"):
     history = get_scan_history(scan_path)
@@ -573,9 +630,9 @@ def create_usage_history_chart(scan_path, output_file="usage_history.png"):
     dates = []
     sizes_gb = []
 
-    for created_at, total_size, file_count, folder_count in history:
+    for created_at, total_size, _file_count, _folder_count in history:
         dates.append(datetime.fromisoformat(created_at))
-        sizes_gb.append(total_size / (1024 ** 3))
+        sizes_gb.append(total_size / (1024**3))
 
     plt.figure(figsize=(10, 5))
     plt.plot(dates, sizes_gb, marker="o")
@@ -589,13 +646,22 @@ def create_usage_history_chart(scan_path, output_file="usage_history.png"):
 
     return output_file
 
+
 def print_growth_report(current_scan_id, previous_scan_id):
     growth_rows = get_folder_growth(current_scan_id, previous_scan_id)
 
     print("\nFolder Growth Report")
     print("-" * 80)
 
-    for folder_path, previous_size, current_size, growth_bytes, growth_percent, growth_type, file_count in growth_rows:
+    for (
+        folder_path,
+        previous_size,
+        current_size,
+        growth_bytes,
+        growth_percent,
+        growth_type,
+        file_count,
+    ) in growth_rows:
         percent_text = (
             f"{growth_percent:.2f}%" if growth_percent is not None else "N/A (new folder)"
         )
