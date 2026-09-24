@@ -16,11 +16,11 @@ This lets tests substitute an in-memory dict-backed fake for the real
 sequential/random-access volume reader.
 """
 
+import stat as _stat
 import struct
 from dataclasses import dataclass, field
 
 from storage_scanner.scanner import is_cloud_placeholder_attrs
-import stat as _stat
 
 _FILE_ATTRIBUTE_REPARSE_POINT = _stat.FILE_ATTRIBUTE_REPARSE_POINT
 
@@ -130,13 +130,13 @@ class _RawAttribute:
     attribute_id: int
     non_resident: bool
     is_named: bool = False  # True for a named stream (e.g. an alternate
-                             # data stream) rather than the primary attribute
+    # data stream) rather than the primary attribute
     value: bytes = b""
     allocated_size: int = 0
     real_size: int = 0
     initialized_size: int = 0
     data_runs: bytes = b""  # non-resident only; still encoded, never
-                             # decoded here -- see decode_data_runs
+    # decoded here -- see decode_data_runs
 
 
 @dataclass
@@ -152,10 +152,20 @@ def _read_header(raw):
         return None
     fields = struct.unpack_from(_RECORD_HEADER_FORMAT, raw, 0)
     (
-        signature, usa_offset, usa_size, _lsn, sequence_number,
-        hard_link_count, first_attribute_offset, flags, bytes_in_use,
-        bytes_allocated, base_file_record_segment, _next_attribute_id,
-        _reserved, _mft_record_number,
+        signature,
+        usa_offset,
+        usa_size,
+        _lsn,
+        sequence_number,
+        hard_link_count,
+        first_attribute_offset,
+        flags,
+        bytes_in_use,
+        bytes_allocated,
+        base_file_record_segment,
+        _next_attribute_id,
+        _reserved,
+        _mft_record_number,
     ) = fields
     if signature != _SIGNATURE_FILE:
         return None  # e.g. b"BAAD" (torn write) or an all-zero unused slot
@@ -199,12 +209,12 @@ def _apply_fixups(raw, header, sector_size=_SECTOR_SIZE):
         check_off = i * sector_size - 2
         if check_off + 2 > len(raw):
             break  # record shorter than this sector -- nothing more to fix
-        if bytes(raw[check_off:check_off + 2]) != usn:
+        if bytes(raw[check_off : check_off + 2]) != usn:
             return None
         original_off = usa_offset + 2 * i
         if original_off + 2 > len(raw):
             return None
-        fixed[check_off:check_off + 2] = raw[original_off:original_off + 2]
+        fixed[check_off : check_off + 2] = raw[original_off : original_off + 2]
     return bytes(fixed)
 
 
@@ -236,8 +246,9 @@ def _iter_attributes(fixed, header):
             break
         if offset + _ATTR_COMMON_SIZE > end:
             break
-        (_type, length, non_resident, name_length, _name_offset,
-         _flags, attribute_id) = struct.unpack_from(_ATTR_COMMON_FORMAT, fixed, offset)
+        _type, length, non_resident, name_length, _name_offset, _flags, attribute_id = (
+            struct.unpack_from(_ATTR_COMMON_FORMAT, fixed, offset)
+        )
         if length == 0 or offset + length > end:
             break  # corrupt -- stop walking defensively rather than loop/overrun
         is_named = name_length != 0
@@ -245,11 +256,16 @@ def _iter_attributes(fixed, header):
         if non_resident:
             nrh_off = offset + _ATTR_COMMON_SIZE
             if nrh_off + _ATTR_NONRESIDENT_SIZE <= end:
-                (_starting_vcn, _last_vcn, data_runs_offset,
-                 _compression_unit, _reserved, allocated_size, real_size,
-                 initialized_size) = struct.unpack_from(
-                    _ATTR_NONRESIDENT_FORMAT, fixed, nrh_off
-                )
+                (
+                    _starting_vcn,
+                    _last_vcn,
+                    data_runs_offset,
+                    _compression_unit,
+                    _reserved,
+                    allocated_size,
+                    real_size,
+                    initialized_size,
+                ) = struct.unpack_from(_ATTR_NONRESIDENT_FORMAT, fixed, nrh_off)
                 # The run-list bytes are never decoded here (see module
                 # docstring) -- only sliced out, using the attribute's own
                 # documented data_runs_offset field (not assumed from the
@@ -262,23 +278,29 @@ def _iter_attributes(fixed, header):
                     if offset < runs_start <= runs_end <= end:
                         data_runs = bytes(fixed[runs_start:runs_end])
                 yield _RawAttribute(
-                    attr_type=attr_type, attribute_id=attribute_id,
-                    non_resident=True, is_named=is_named,
+                    attr_type=attr_type,
+                    attribute_id=attribute_id,
+                    non_resident=True,
+                    is_named=is_named,
                     allocated_size=allocated_size,
-                    real_size=real_size, initialized_size=initialized_size,
+                    real_size=real_size,
+                    initialized_size=initialized_size,
                     data_runs=data_runs,
                 )
         else:
             rh_off = offset + _ATTR_COMMON_SIZE
             if rh_off + _ATTR_RESIDENT_SIZE <= end:
-                value_length, value_offset, _resident_flags, _reserved = (
-                    struct.unpack_from(_ATTR_RESIDENT_FORMAT, fixed, rh_off)
+                value_length, value_offset, _resident_flags, _reserved = struct.unpack_from(
+                    _ATTR_RESIDENT_FORMAT, fixed, rh_off
                 )
                 value_start = offset + value_offset
-                value = bytes(fixed[value_start:value_start + value_length])
+                value = bytes(fixed[value_start : value_start + value_length])
                 yield _RawAttribute(
-                    attr_type=attr_type, attribute_id=attribute_id,
-                    non_resident=False, is_named=is_named, value=value,
+                    attr_type=attr_type,
+                    attribute_id=attribute_id,
+                    non_resident=False,
+                    is_named=is_named,
+                    value=value,
                 )
 
         offset += length
@@ -287,8 +309,8 @@ def _iter_attributes(fixed, header):
 def _parse_standard_information(value):
     if len(value) < _STANDARD_INFO_MIN_SIZE:
         return None
-    _creation, modified, _changed, accessed, file_attributes = (
-        struct.unpack_from(_STANDARD_INFO_FORMAT, value, 0)
+    _creation, modified, _changed, accessed, file_attributes = struct.unpack_from(
+        _STANDARD_INFO_FORMAT, value, 0
     )
     return {
         "mtime": _filetime_to_unix(modified),
@@ -300,8 +322,9 @@ def _parse_standard_information(value):
 def _parse_file_name(value):
     if len(value) < _FILE_NAME_FIXED_SIZE + 2:
         return None
-    (parent_frn, _ctime, _mtime, _chtime, _atime, _alloc, _real,
-     _attrs, _ea) = struct.unpack_from(_FILE_NAME_FIXED_FORMAT, value, 0)
+    parent_frn, _ctime, _mtime, _chtime, _atime, _alloc, _real, _attrs, _ea = struct.unpack_from(
+        _FILE_NAME_FIXED_FORMAT, value, 0
+    )
     name_length = value[_FILE_NAME_FIXED_SIZE]
     namespace = value[_FILE_NAME_FIXED_SIZE + 1]
     name_start = _FILE_NAME_FIXED_SIZE + 2
@@ -350,7 +373,7 @@ def _read_nonresident_attribute_list(raw_attr, record_source):
         return None
     if not chunks:
         return None
-    return b"".join(chunks)[:raw_attr.real_size]
+    return b"".join(chunks)[: raw_attr.real_size]
 
 
 def _parse_attribute_list(raw_attr, record_source):
@@ -372,17 +395,21 @@ def _parse_attribute_list(raw_attr, record_source):
     entries = []
     offset = 0
     while offset + _ATTR_LIST_ENTRY_MIN_SIZE <= len(value):
-        attr_type, entry_length, _name_length, _name_offset = (
-            struct.unpack_from(_ATTR_LIST_ENTRY_HEAD_FORMAT, value, offset)
+        attr_type, entry_length, _name_length, _name_offset = struct.unpack_from(
+            _ATTR_LIST_ENTRY_HEAD_FORMAT, value, offset
         )
         if entry_length == 0:
             break
         _starting_vcn, base_frn, attribute_id = struct.unpack_from(
             _ATTR_LIST_ENTRY_TAIL_FORMAT, value, offset + _ATTR_LIST_ENTRY_HEAD_SIZE
         )
-        entries.append(_AttributeListEntry(
-            attr_type=attr_type, attribute_id=attribute_id, base_frn=base_frn,
-        ))
+        entries.append(
+            _AttributeListEntry(
+                attr_type=attr_type,
+                attribute_id=attribute_id,
+                base_frn=base_frn,
+            )
+        )
         offset += entry_length
     return entries
 
@@ -443,8 +470,10 @@ def parse_base_record(record_number, record_source):
                 # merge that other file's attributes into this one.
                 continue
             for ext_attr in _iter_attributes(ext_fixed, ext_header):
-                if (ext_attr.attr_type == entry.attr_type
-                        and ext_attr.attribute_id == entry.attribute_id):
+                if (
+                    ext_attr.attr_type == entry.attr_type
+                    and ext_attr.attribute_id == entry.attribute_id
+                ):
                     attrs.append(ext_attr)
 
     std_info = None
@@ -554,15 +583,13 @@ def decode_data_runs(runs_bytes):
         offset_size = (header >> 4) & 0x0F
         offset += 1
 
-        length = int.from_bytes(runs_bytes[offset:offset + length_size], "little", signed=False)
+        length = int.from_bytes(runs_bytes[offset : offset + length_size], "little", signed=False)
         offset += length_size
 
         if offset_size == 0:
             continue  # sparse run -- no physical allocation, LCN unchanged
 
-        lcn_delta = int.from_bytes(
-            runs_bytes[offset:offset + offset_size], "little", signed=True
-        )
+        lcn_delta = int.from_bytes(runs_bytes[offset : offset + offset_size], "little", signed=True)
         offset += offset_size
         current_lcn += lcn_delta
         runs.append((length, current_lcn))

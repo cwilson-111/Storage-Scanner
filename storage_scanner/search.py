@@ -10,9 +10,9 @@ import re
 _SIZE_UNITS = {
     "b": 1,
     "kb": 1024,
-    "mb": 1024 ** 2,
-    "gb": 1024 ** 3,
-    "tb": 1024 ** 4,
+    "mb": 1024**2,
+    "gb": 1024**3,
+    "tb": 1024**4,
 }
 
 _SIZE_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z]*)\s*$")
@@ -61,7 +61,9 @@ def filter_nodes(
     leading dot (case-insensitive) and only ever matches files.
     """
     name_query = name_query.strip().lower() if name_query else None
-    ext_set = {e.strip().lower().lstrip(".") for e in extensions if e.strip()} if extensions else None
+    ext_set = (
+        {e.strip().lower().lstrip(".") for e in extensions if e.strip()} if extensions else None
+    )
 
     results = []
     stack = list(root.children)

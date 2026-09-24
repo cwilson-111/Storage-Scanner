@@ -33,6 +33,7 @@ def _command(scheduled):
 # validation
 # --------------------------------------
 
+
 @pytest.mark.parametrize("time", ["9:00", "09:00", "23:59", "0:05"])
 def test_valid_times_are_accepted(time):
     _scan(time=time).validate()
@@ -62,6 +63,7 @@ def test_unknown_frequency_and_weekday_are_rejected():
 # the command a scheduler runs
 # --------------------------------------
 
+
 def test_scan_command_is_a_valid_history_saving_cli_invocation():
     command = _command(_scan())
 
@@ -78,7 +80,9 @@ def test_launch_args_use_the_executable_alone_when_frozen():
 
 def test_launch_args_run_the_entry_script_from_source():
     args = schedule.app_launch_args(
-        frozen=False, executable="/usr/bin/python3", script="/src/Storage-Scanner.py",
+        frozen=False,
+        executable="/usr/bin/python3",
+        script="/src/Storage-Scanner.py",
     )
     assert args[-1] == "/src/Storage-Scanner.py"
 
@@ -124,7 +128,9 @@ TODAY = datetime(2026, 9, 23, 14, 30)
 
 def _xml(scheduled, command=None):
     xml = schedule.windows_task_xml(
-        scheduled, command=command or _command(scheduled), today=TODAY,
+        scheduled,
+        command=command or _command(scheduled),
+        today=TODAY,
     )
     # ElementTree won't parse a str that declares an encoding; schtasks gets
     # the real UTF-16 bytes.
@@ -153,7 +159,9 @@ def test_daily_task_xml_starts_today_at_the_chosen_time():
     assert root.find(f"{trigger}/t:ScheduleByWeek", NS) is None
 
 
-@pytest.mark.parametrize("weekday, element", [("MON", "Monday"), ("FRI", "Friday"), ("SUN", "Sunday")])
+@pytest.mark.parametrize(
+    "weekday, element", [("MON", "Monday"), ("FRI", "Friday"), ("SUN", "Sunday")]
+)
 def test_weekly_task_xml_names_the_day(weekday, element):
     root = _xml(_scan(frequency="weekly", weekday=weekday))
     days = root.find("t:Triggers/t:CalendarTrigger/t:ScheduleByWeek/t:DaysOfWeek", NS)
@@ -202,8 +210,13 @@ def test_create_and_delete_args_target_the_same_task_name():
     delete = schedule.windows_delete_args(_scan())
 
     assert create == [
-        "schtasks", "/Create", "/TN", schedule.task_name(_scan()),
-        "/XML", r"C:\Temp\task.xml", "/F",
+        "schtasks",
+        "/Create",
+        "/TN",
+        schedule.task_name(_scan()),
+        "/XML",
+        r"C:\Temp\task.xml",
+        "/F",
     ]
     assert delete[delete.index("/TN") + 1] == schedule.task_name(_scan())
 
@@ -254,10 +267,12 @@ def test_create_windows_task_reports_schtasks_failure(monkeypatch):
 # cron
 # --------------------------------------
 
+
 def test_daily_cron_line():
     scheduled = _scan(path="/home/me/data", time="18:30")
     line = schedule.cron_line(
-        scheduled, command=["/opt/ss/StorageScanner", "--cli", "/home/me/data"],
+        scheduled,
+        command=["/opt/ss/StorageScanner", "--cli", "/home/me/data"],
     )
 
     assert line == "30 18 * * * /opt/ss/StorageScanner --cli /home/me/data"
@@ -275,7 +290,8 @@ def test_cron_line_shell_quotes_paths_with_spaces():
     scheduled = _scan(path="/Users/me/My Files")
     command = [
         "/Applications/Storage Scanner.app/Contents/MacOS/StorageScanner",
-        "--cli", "/Users/me/My Files",
+        "--cli",
+        "/Users/me/My Files",
     ]
 
     assert shlex.split(schedule.cron_line(scheduled, command=command))[5:] == command

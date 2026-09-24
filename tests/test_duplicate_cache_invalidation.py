@@ -66,10 +66,12 @@ def test_deleting_a_folder_removes_every_duplicate_file_nested_inside_it():
     folder = Node("/root/sub", "sub", is_dir=True)
     folder.children = [inside_a]
 
-    app = _app_with_duplicates([
-        (100, "digest1", [inside_a, inside_b]),
-        (200, "digest2", [outside_c, _node("/root/other/d")]),
-    ])
+    app = _app_with_duplicates(
+        [
+            (100, "digest1", [inside_a, inside_b]),
+            (200, "digest2", [outside_c, _node("/root/other/d")]),
+        ]
+    )
 
     app._remove_from_duplicate_cache(folder)
 

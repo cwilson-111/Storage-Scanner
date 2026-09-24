@@ -34,7 +34,7 @@ _REQUEST_TIMEOUT_SECONDS = 3
 
 
 def parse_version(tag):
-    """"v1.2.3" -> (1, 2, 3). Returns None for anything that isn't a plain
+    """ "v1.2.3" -> (1, 2, 3). Returns None for anything that isn't a plain
     semver-shaped tag — a dev build's "0.0.0-dev", a "main"-stamped build,
     or anything unexpected from the API is deliberately never treated as
     a comparable version, rather than risk a wrong comparison."""

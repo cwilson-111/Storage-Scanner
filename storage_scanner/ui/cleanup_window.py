@@ -8,15 +8,18 @@ selection and confirmation, and Protected rows can never be deleted at all.
 
 import queue
 import threading
-from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, StringVar, TOP, Toplevel, X, messagebox, ttk
+from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, StringVar, Toplevel, X, messagebox, ttk
 
 from storage_scanner import cleanup_cache
 from storage_scanner.archive import archive_file, likely_compresses_well
-from storage_scanner.cleanup_recommendations import (
-    CATEGORY_DUPLICATE, CATEGORY_PROTECTED, CATEGORY_REVIEW,
-    build_duplicate_recommendations, find_protected_and_review_candidates,
-)
 from storage_scanner.audit import recycle_and_log
+from storage_scanner.cleanup_recommendations import (
+    CATEGORY_DUPLICATE,
+    CATEGORY_PROTECTED,
+    CATEGORY_REVIEW,
+    build_duplicate_recommendations,
+    find_protected_and_review_candidates,
+)
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
@@ -67,7 +70,10 @@ class CleanupMixin:
 
         summary_var = StringVar(value="Scanning for recommendations…")
         ttk.Label(
-            win, textvariable=summary_var, style="Accent.TLabel", padding=(10, 8),
+            win,
+            textvariable=summary_var,
+            style="Accent.TLabel",
+            padding=(10, 8),
         ).pack(side=TOP, fill=X)
 
         frame = ttk.Frame(win, padding=(10, 0, 10, 10))
@@ -111,7 +117,8 @@ class CleanupMixin:
             for index, rec in enumerate(recommendations):
                 cat_tag = _CATEGORY_TAGS.get(rec.category, "review")
                 iid = tv.insert(
-                    "", END,
+                    "",
+                    END,
                     values=(
                         rec.category,
                         rec.node.name,
@@ -126,8 +133,7 @@ class CleanupMixin:
 
         def summarize(recommendations, suffix=""):
             recoverable = sum(
-                r.recoverable_bytes for r in recommendations
-                if r.category != CATEGORY_PROTECTED
+                r.recoverable_bytes for r in recommendations if r.category != CATEGORY_PROTECTED
             )
             summary_var.set(
                 f"{len(recommendations):,} recommendation(s) — "
@@ -236,7 +242,8 @@ class CleanupMixin:
             # Protected rows are silently skipped even if selected (e.g. via
             # select-all) — they're never a valid deletion target here.
             targets = [
-                (iid, iid_to_rec[iid]) for iid in selected
+                (iid, iid_to_rec[iid])
+                for iid in selected
                 if iid in iid_to_rec and iid_to_rec[iid].category != CATEGORY_PROTECTED
             ]
             if not targets:
@@ -285,7 +292,8 @@ class CleanupMixin:
             # have a clearer "delete the copy, keep the keeper" story, and
             # Protected rows are never a valid target for anything here.
             targets = [
-                (iid, iid_to_rec[iid]) for iid in selected
+                (iid, iid_to_rec[iid])
+                for iid in selected
                 if iid in iid_to_rec and iid_to_rec[iid].category == CATEGORY_REVIEW
             ]
             skipped = len(selected) - len(targets)
@@ -298,7 +306,9 @@ class CleanupMixin:
                 )
                 return
 
-            poor = [rec.node.name for _iid, rec in targets if not likely_compresses_well(rec.node.path)]
+            poor = [
+                rec.node.name for _iid, rec in targets if not likely_compresses_well(rec.node.path)
+            ]
             warning = ""
             if poor:
                 sample = ", ".join(poor[:5])
@@ -355,7 +365,9 @@ class CleanupMixin:
         ).pack(side=LEFT)
         ttk.Button(button_bar, text="Rescan", command=do_rescan).pack(side=LEFT, padx=(10, 0))
         ttk.Button(
-            button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected,
+            button_bar,
+            text=f"Reveal in {FILE_MANAGER_NAME}",
+            command=reveal_selected,
         ).pack(side=RIGHT, padx=(6, 0))
         ttk.Button(button_bar, text="Delete Selected", command=delete_selected).pack(side=RIGHT)
         ttk.Button(button_bar, text="Archive Selected", command=archive_selected).pack(

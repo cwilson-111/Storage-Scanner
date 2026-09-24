@@ -53,11 +53,15 @@ def check_all_budgets(now=None):
             continue
         scanned_at, total_size, _file_count, _folder_count = snapshot
         if total_size > threshold_bytes:
-            breaches.append(BudgetBreach(
-                path=path, threshold_bytes=threshold_bytes,
-                current_size_bytes=total_size, as_of=scanned_at,
-                is_stale=_is_stale(scanned_at, now),
-            ))
+            breaches.append(
+                BudgetBreach(
+                    path=path,
+                    threshold_bytes=threshold_bytes,
+                    current_size_bytes=total_size,
+                    as_of=scanned_at,
+                    is_stale=_is_stale(scanned_at, now),
+                )
+            )
     return breaches
 
 
@@ -72,9 +76,11 @@ def check_budget_for_path(path, current_size_bytes, now=None):
             if current_size_bytes > threshold_bytes:
                 now = now or datetime.now(timezone.utc)
                 return BudgetBreach(
-                    path=path, threshold_bytes=threshold_bytes,
+                    path=path,
+                    threshold_bytes=threshold_bytes,
                     current_size_bytes=current_size_bytes,
-                    as_of=now.isoformat(), is_stale=False,
+                    as_of=now.isoformat(),
+                    is_stale=False,
                 )
             return None
     return None

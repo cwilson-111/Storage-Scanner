@@ -18,14 +18,16 @@ def test_get_latest_scan_id_returns_most_recent_scan(tmp_path, monkeypatch):
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+        INSERT INTO scans
+            (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         ("C:/Example", 100, 1000, 10, 3, "2024-01-01T00:00:00"),
     )
     cur.execute(
         """
-        INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+        INSERT INTO scans
+            (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         ("C:/Example", 200, 1000, 20, 5, "2024-02-01T00:00:00"),
@@ -51,7 +53,8 @@ def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatc
     ]:
         cur.execute(
             """
-            INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+            INSERT INTO scans
+                (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             ("C:/Example", total_size, 1000, 10, 3, created_at),
@@ -59,7 +62,8 @@ def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatc
     # A scan of a different path must not show up in this path's picker.
     cur.execute(
         """
-        INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+        INSERT INTO scans
+            (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         ("C:/Other", 999, 1000, 10, 3, "2024-04-01T00:00:00"),
@@ -73,7 +77,9 @@ def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatc
     # Newest first, by created_at — lets the comparison picker default to
     # the two most recent without an extra sort step.
     assert [created_at for _id, created_at, _size, _files in rows] == [
-        "2024-03-01T00:00:00", "2024-02-01T00:00:00", "2024-01-01T00:00:00",
+        "2024-03-01T00:00:00",
+        "2024-02-01T00:00:00",
+        "2024-01-01T00:00:00",
     ]
     assert [size for _id, _created_at, size, _files in rows] == [150, 200, 100]
 
@@ -92,7 +98,8 @@ def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path,
     ]:
         cur.execute(
             """
-            INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+            INSERT INTO scans
+                (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             ("C:/Example", total_size, 1000, 10, 3, created_at),
@@ -100,7 +107,8 @@ def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path,
     # A different path's scan must never leak into this path's mapping.
     cur.execute(
         """
-        INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+        INSERT INTO scans
+            (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         ("C:/Other", 999, 1000, 10, 3, "2024-01-01T00:00:00"),
@@ -119,12 +127,20 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
     history.init_history_db()
 
     history.record_audit_entry(
-        source="Duplicate Files", action="recycle", path="/Users/me/dup.bin",
-        is_dir=False, size_bytes=1234, success=True,
+        source="Duplicate Files",
+        action="recycle",
+        path="/Users/me/dup.bin",
+        is_dir=False,
+        size_bytes=1234,
+        success=True,
     )
     history.record_audit_entry(
-        source="Main tree", action="recycle", path="/Users/me/locked",
-        is_dir=True, size_bytes=999, success=False,
+        source="Main tree",
+        action="recycle",
+        path="/Users/me/locked",
+        is_dir=True,
+        size_bytes=999,
+        success=False,
         error_message="It may be in use, protected, or require admin rights.",
     )
 
@@ -155,8 +171,12 @@ def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
 
     for i in range(5):
         history.record_audit_entry(
-            source="Search & Filter", action="recycle", path=f"/tmp/f{i}.bin",
-            is_dir=False, size_bytes=i, success=True,
+            source="Search & Filter",
+            action="recycle",
+            path=f"/tmp/f{i}.bin",
+            is_dir=False,
+            size_bytes=i,
+            success=True,
         )
 
     assert len(history.get_audit_log(limit=3)) == 3

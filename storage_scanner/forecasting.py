@@ -21,12 +21,12 @@ MIN_POINTS_FOR_FORECAST = 3
 Forecast = namedtuple(
     "Forecast",
     [
-        "status",         # "ok" | "not_growing" | "insufficient_data"
+        "status",  # "ok" | "not_growing" | "insufficient_data"
         "days_estimate",  # point estimate, or None
-        "days_optimistic",   # latest plausible fill date (most days remaining), or None
+        "days_optimistic",  # latest plausible fill date (most days remaining), or None
         "days_pessimistic",  # soonest plausible fill date (fewest days remaining), or None
-        "confidence",     # "low" | "medium" | "high" | None
-        "r_squared",      # fit quality, 0..1, or None
+        "confidence",  # "low" | "medium" | "high" | None
+        "r_squared",  # fit quality, 0..1, or None
         "data_points",
         "span_days",
     ],
@@ -70,9 +70,7 @@ def _slope_standard_error(xs, ys, slope, intercept):
     ss_xx = sum((x - mean_x) ** 2 for x in xs)
     if ss_xx == 0:
         return 0.0
-    residual_variance = sum(
-        (y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys)
-    ) / (n - 2)
+    residual_variance = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys)) / (n - 2)
     return (residual_variance / ss_xx) ** 0.5
 
 
@@ -98,9 +96,14 @@ def forecast_days_until_full(history, drive_capacity_bytes, now=None):
     """
     if len(history) < MIN_POINTS_FOR_FORECAST:
         return Forecast(
-            status="insufficient_data", days_estimate=None, days_optimistic=None,
-            days_pessimistic=None, confidence=None, r_squared=None,
-            data_points=len(history), span_days=None,
+            status="insufficient_data",
+            days_estimate=None,
+            days_optimistic=None,
+            days_pessimistic=None,
+            confidence=None,
+            r_squared=None,
+            data_points=len(history),
+            span_days=None,
         )
 
     dates = [datetime.fromisoformat(row[0]) for row in history]
@@ -113,9 +116,14 @@ def forecast_days_until_full(history, drive_capacity_bytes, now=None):
 
     if slope <= 0:
         return Forecast(
-            status="not_growing", days_estimate=None, days_optimistic=None,
-            days_pessimistic=None, confidence=None, r_squared=r_squared,
-            data_points=len(history), span_days=span_days,
+            status="not_growing",
+            days_estimate=None,
+            days_optimistic=None,
+            days_pessimistic=None,
+            confidence=None,
+            r_squared=r_squared,
+            data_points=len(history),
+            span_days=span_days,
         )
 
     latest_x = xs[-1]
@@ -124,9 +132,14 @@ def forecast_days_until_full(history, drive_capacity_bytes, now=None):
 
     if remaining_bytes <= 0:
         return Forecast(
-            status="ok", days_estimate=0, days_optimistic=0, days_pessimistic=0,
+            status="ok",
+            days_estimate=0,
+            days_optimistic=0,
+            days_pessimistic=0,
             confidence=_confidence_level(len(history), span_days, r_squared),
-            r_squared=r_squared, data_points=len(history), span_days=span_days,
+            r_squared=r_squared,
+            data_points=len(history),
+            span_days=span_days,
         )
 
     days_estimate = remaining_bytes / slope

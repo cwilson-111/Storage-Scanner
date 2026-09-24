@@ -65,7 +65,10 @@ def _last_touched(node):
 
 
 def find_protected_and_review_candidates(
-    root_node, now=None, old_days=DEFAULT_OLD_DAYS, large_bytes=DEFAULT_LARGE_BYTES,
+    root_node,
+    now=None,
+    old_days=DEFAULT_OLD_DAYS,
+    large_bytes=DEFAULT_LARGE_BYTES,
 ):
     """Walk the scanned tree and flag Protected and Review-candidate files.
 
@@ -94,25 +97,34 @@ def find_protected_and_review_candidates(
                 if node.is_cloud_placeholder
                 else "Located in an OS or application-managed path."
             )
-            recommendations.append(Recommendation(
-                node=node, category=CATEGORY_PROTECTED, reason=reason,
-                risk="N/A", recoverable_bytes=0, action="Leave alone",
-            ))
+            recommendations.append(
+                Recommendation(
+                    node=node,
+                    category=CATEGORY_PROTECTED,
+                    reason=reason,
+                    risk="N/A",
+                    recoverable_bytes=0,
+                    action="Leave alone",
+                )
+            )
             continue
 
         if node.size >= large_bytes and _last_touched(node) < cutoff:
             days_old = int((now - _last_touched(node)) / 86400)
-            recommendations.append(Recommendation(
-                node=node, category=CATEGORY_REVIEW,
-                reason=(
-                    f"Large file ({node.size / (1024**2):,.0f} MB) not modified "
-                    f"or accessed in ~{days_old:,} days — worth checking "
-                    f"whether you still need it."
-                ),
-                risk="Medium — not verified safe, just a candidate to look at",
-                recoverable_bytes=node.size,
-                action="Review, then delete or archive if unneeded",
-            ))
+            recommendations.append(
+                Recommendation(
+                    node=node,
+                    category=CATEGORY_REVIEW,
+                    reason=(
+                        f"Large file ({node.size / (1024**2):,.0f} MB) not modified "
+                        f"or accessed in ~{days_old:,} days — worth checking "
+                        f"whether you still need it."
+                    ),
+                    risk="Medium — not verified safe, just a candidate to look at",
+                    recoverable_bytes=node.size,
+                    action="Review, then delete or archive if unneeded",
+                )
+            )
 
     recommendations.sort(key=lambda r: r.recoverable_bytes, reverse=True)
     return recommendations
@@ -176,12 +188,15 @@ def build_duplicate_recommendations(duplicate_groups):
         for node in nodes:
             if node is keeper:
                 continue
-            recommendations.append(Recommendation(
-                node=node, category=CATEGORY_DUPLICATE,
-                reason=f"Identical content to {keeper.path} — recommended keeper.",
-                risk="Low — exact content match, confirmed by full hash",
-                recoverable_bytes=size,
-                action="Delete this copy (to Recycle Bin/Trash)",
-            ))
+            recommendations.append(
+                Recommendation(
+                    node=node,
+                    category=CATEGORY_DUPLICATE,
+                    reason=f"Identical content to {keeper.path} — recommended keeper.",
+                    risk="Low — exact content match, confirmed by full hash",
+                    recoverable_bytes=size,
+                    action="Delete this copy (to Recycle Bin/Trash)",
+                )
+            )
     recommendations.sort(key=lambda r: r.recoverable_bytes, reverse=True)
     return recommendations

@@ -3,6 +3,7 @@
 ever constructing a real Tk window (nothing else in main_window.py has
 that property, hence no broader UI test suite exists for this file).
 """
+
 import os
 import sys
 from pathlib import Path

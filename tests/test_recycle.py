@@ -5,6 +5,7 @@ are covered by tests/test_elevation.py (elevation) and exercised manually
 via this project's own real-machine validation elsewhere; this file only
 adds what didn't exist before.
 """
+
 import os
 import subprocess
 import sys
@@ -66,7 +67,9 @@ def test_recycle_linux_falls_back_to_manual_when_gio_is_missing(monkeypatch, tmp
 
 
 def test_recycle_linux_falls_back_to_manual_when_gio_exits_nonzero(monkeypatch, tmp_path):
-    monkeypatch.setattr(subprocess, "run", lambda args, capture_output=False: _FakeCompletedProcess(1))
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, capture_output=False: _FakeCompletedProcess(1)
+    )
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
 
     target = tmp_path / "doomed.txt"
@@ -101,7 +104,7 @@ def test_recycle_linux_manual_handles_a_name_collision(monkeypatch, tmp_path):
 
     assert file_ops._recycle_linux_manual(str(target)) is True
     assert (trash_files / "dup.txt").read_text() == "already here"  # untouched
-    assert (trash_files / "dup.txt.2").read_text() == "new one"     # the new arrival, renamed
+    assert (trash_files / "dup.txt.2").read_text() == "new one"  # the new arrival, renamed
 
 
 def test_recycle_linux_manual_returns_false_on_a_real_failure(monkeypatch, tmp_path):

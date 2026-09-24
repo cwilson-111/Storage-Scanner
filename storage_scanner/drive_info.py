@@ -45,8 +45,14 @@ def _get_filesystem_name(root_path):
     try:
         fs_name_buffer = ctypes.create_unicode_buffer(_MAX_FILESYSTEM_NAME_LENGTH)
         succeeded = ctypes.windll.kernel32.GetVolumeInformationW(
-            root_path, None, 0, None, None, None,
-            fs_name_buffer, _MAX_FILESYSTEM_NAME_LENGTH,
+            root_path,
+            None,
+            0,
+            None,
+            None,
+            None,
+            fs_name_buffer,
+            _MAX_FILESYSTEM_NAME_LENGTH,
         )
         if not succeeded:
             return None

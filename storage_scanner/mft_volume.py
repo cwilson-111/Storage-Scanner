@@ -96,8 +96,13 @@ def _open_volume(volume_root):
     # already works around for its own pointer-sized HINSTANCE return).
     kernel32.CreateFileW.restype = ctypes.c_void_p
     handle = kernel32.CreateFileW(
-        device_path, _GENERIC_READ, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
-        None, _OPEN_EXISTING, 0, None,
+        device_path,
+        _GENERIC_READ,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+        None,
+        _OPEN_EXISTING,
+        0,
+        None,
     )
     if handle is None or handle == _INVALID_HANDLE_VALUE:
         raise MftVolumeError(
@@ -110,9 +115,14 @@ def _get_ntfs_volume_data(handle):
     buffer = _NTFS_VOLUME_DATA_BUFFER()
     bytes_returned = wintypes.DWORD(0)
     succeeded = ctypes.windll.kernel32.DeviceIoControl(
-        handle, _FSCTL_GET_NTFS_VOLUME_DATA, None, 0,
-        ctypes.byref(buffer), ctypes.sizeof(buffer),
-        ctypes.byref(bytes_returned), None,
+        handle,
+        _FSCTL_GET_NTFS_VOLUME_DATA,
+        None,
+        0,
+        ctypes.byref(buffer),
+        ctypes.sizeof(buffer),
+        ctypes.byref(bytes_returned),
+        None,
     )
     if not succeeded:
         raise MftVolumeError("FSCTL_GET_NTFS_VOLUME_DATA failed")
@@ -125,7 +135,10 @@ def _set_file_pointer(handle, offset):
     distance = ctypes.c_int64(offset)
     new_position = ctypes.c_int64(0)
     succeeded = ctypes.windll.kernel32.SetFilePointerEx(
-        handle, distance, ctypes.byref(new_position), _FILE_BEGIN,
+        handle,
+        distance,
+        ctypes.byref(new_position),
+        _FILE_BEGIN,
     )
     if not succeeded:
         raise MftVolumeError(f"SetFilePointerEx failed seeking to offset {offset}")
@@ -136,16 +149,19 @@ def _read_bytes(handle, offset, length):
     buffer = ctypes.create_string_buffer(length)
     bytes_read = wintypes.DWORD(0)
     succeeded = ctypes.windll.kernel32.ReadFile(
-        handle, buffer, length, ctypes.byref(bytes_read), None,
+        handle,
+        buffer,
+        length,
+        ctypes.byref(bytes_read),
+        None,
     )
     if not succeeded:
         raise MftVolumeError(f"ReadFile failed at offset {offset} (length {length})")
     if bytes_read.value != length:
         raise MftVolumeError(
-            f"ReadFile returned {bytes_read.value} bytes, expected {length}, "
-            f"at offset {offset}"
+            f"ReadFile returned {bytes_read.value} bytes, expected {length}, " f"at offset {offset}"
         )
-    return buffer.raw[:bytes_read.value]
+    return buffer.raw[: bytes_read.value]
 
 
 def _close_handle(handle):
@@ -176,7 +192,8 @@ def _resolve_mft_extents(handle, mft_start_lcn, bytes_per_cluster, record_size, 
     record0_bytes = _read_bytes(handle, record0_offset, record_size)
 
     runs_bytes = mft_parser.get_nonresident_data_runs_bytes(
-        record0_bytes, sector_size=bytes_per_sector,
+        record0_bytes,
+        sector_size=bytes_per_sector,
     )
     if not runs_bytes:
         raise MftVolumeError(
@@ -259,8 +276,11 @@ class RecordSource:
             # size instead of assuming 512 -- see mft_parser._apply_fixups.
             self.bytes_per_sector = volume_data.BytesPerSector
             self._extents = _resolve_mft_extents(
-                self._handle, volume_data.MftStartLcn,
-                self._bytes_per_cluster, self._record_size, self.bytes_per_sector,
+                self._handle,
+                volume_data.MftStartLcn,
+                self._bytes_per_cluster,
+                self._record_size,
+                self.bytes_per_sector,
             )
         except MftVolumeError:
             _close_handle(self._handle)
@@ -325,8 +345,7 @@ class RecordSource:
         # 94.3% of scan time, measured against a real C:\Windows -- no
         # better than before the split existed).
         is_sequential = (
-            self._sequential_position is None
-            or record_number == self._sequential_position + 1
+            self._sequential_position is None or record_number == self._sequential_position + 1
         )
         if is_sequential:
             self._sequential_position = record_number
@@ -344,7 +363,7 @@ class RecordSource:
 
     def _slice(self, data, start_record, record_number):
         local_offset = (record_number - start_record) * self._record_size
-        return data[local_offset:local_offset + self._record_size]
+        return data[local_offset : local_offset + self._record_size]
 
     def read_clusters(self, lcn, cluster_count):
         """Read `cluster_count` clusters starting at LCN `lcn` straight off
@@ -381,8 +400,7 @@ class RecordSource:
         records_to_read = min(chunk_records, extent_count - chunk_start_in_extent)
 
         byte_offset = (
-            extent_lcn * self._bytes_per_cluster
-            + chunk_start_in_extent * self._record_size
+            extent_lcn * self._bytes_per_cluster + chunk_start_in_extent * self._record_size
         )
         length = records_to_read * self._record_size
         data = _read_bytes(self._handle, byte_offset, length)

@@ -1,0 +1,51 @@
+# Tooling config only. Storage Scanner is not installed as a package (it runs
+# from a checkout or as a frozen PyInstaller binary), so there is deliberately
+# no [project] table or build backend here.
+
+[tool.ruff]
+line-length = 100
+# 3.9 is the oldest interpreter this code is run on locally; CI builds on 3.12.
+# Keeping the floor here stops ruff from suggesting 3.10+-only syntax (match,
+# `X | Y` annotations) that would break that local run.
+target-version = "py39"
+extend-exclude = ["build", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+# E/W/F cover what pyflakes used to (F) plus pycodestyle. I = import order,
+# UP = pyupgrade, B = bugbear, C4 = comprehensions, SIM/RET = simplifications.
+# PTH (pathlib-over-os.path) is deliberately NOT enabled: the scanner's hot
+# loops use os.scandir/os.path.join on purpose, and pathlib allocates a Path
+# object per entry — exactly the overhead a disk scanner cannot pay.
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RET"]
+
+[tool.ruff.lint.per-file-ignores]
+# Every test module inserts the repo root on sys.path before importing
+# storage_scanner, so imports genuinely cannot all sit at the top.
+"tests/*" = ["E402"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.mypy]
+# No `python_version` pin: current mypy refuses anything below 3.10, and CI
+# type-checks on 3.12. Ruff's `target-version = "py39"` is what keeps the
+# source runnable on the older interpreter used locally.
+# Deliberately not --strict: this is a largely unannotated Tkinter codebase,
+# and the value is catching real type contradictions in the code that *is*
+# annotated, not forcing annotations onto 45 modules at once.
+ignore_missing_imports = true
+exclude = ["build/", "dist/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Coverage floor, deliberately conservative: a full local run on macOS — where
+# the Windows-only NTFS/Turbo Scan, schedule and drive-letter suites cannot
+# execute — measures 49%. A Windows CI run exercises those modules too and so
+# lands higher; raise this to just under whatever the first green CI run
+# reports rather than guessing upward now.
+addopts = "--cov=storage_scanner --cov-report=term-missing --cov-fail-under=45"
+
+[tool.coverage.run]
+branch = true
+omit = ["*/__pycache__/*", "tests/*"]

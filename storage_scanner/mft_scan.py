@@ -123,14 +123,12 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
         if record.frn == root_record.frn:
             continue
         for name_attr in record.names:
-            children_by_parent.setdefault(name_attr.parent_frn, []).append(
-                (record, name_attr)
-            )
+            children_by_parent.setdefault(name_attr.parent_frn, []).append((record, name_attr))
             total_occurrences += 1
 
     root_path = os.path.abspath(root_path)
-    root_name = root_path if root_path.endswith(os.sep) else (
-        os.path.basename(root_path) or root_path
+    root_name = (
+        root_path if root_path.endswith(os.sep) else (os.path.basename(root_path) or root_path)
     )
     root_node = _make_node(root_record, root_name, is_root=True)
     root_node.path = root_path
@@ -201,7 +199,9 @@ def reroot_if_reparse_point(node, target_path, records, frn_by_node_id):
 
     record_number = frn & _FRN_RECORD_NUMBER_MASK
     new_root, _orphan_count, new_frn_by_node_id = build_tree(
-        records, root_path=target_path, root_record_number=record_number,
+        records,
+        root_path=target_path,
+        root_record_number=record_number,
     )
     if new_root is None:
         return node

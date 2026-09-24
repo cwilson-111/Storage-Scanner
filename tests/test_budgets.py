@@ -20,7 +20,8 @@ def _init_db(tmp_path, monkeypatch):
 def _insert_scan(db_path, scan_path, total_size, created_at):
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, folder_count, created_at) "
+        "INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, "
+        "folder_count, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (scan_path, total_size, 1_000_000, 10, 3, created_at),
     )
@@ -83,8 +84,8 @@ def test_check_all_budgets_flags_only_exceeded_budgets(tmp_path, monkeypatch):
     _insert_scan(db_path, "/Users/me/Downloads", 100 * 1024**3, "2024-01-01T00:00:00")
     _insert_scan(db_path, "/Users/me/Documents", 5 * 1024**3, "2024-01-01T00:00:00")
 
-    history.set_budget("/Users/me/Downloads", 50 * 1024**3)   # exceeded
-    history.set_budget("/Users/me/Documents", 50 * 1024**3)   # within budget
+    history.set_budget("/Users/me/Downloads", 50 * 1024**3)  # exceeded
+    history.set_budget("/Users/me/Documents", 50 * 1024**3)  # within budget
 
     breaches = budgets.check_all_budgets()
 

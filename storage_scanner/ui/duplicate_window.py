@@ -10,18 +10,35 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import (
-    BOTH, BOTTOM, E, END, LEFT, Menu, RIGHT, StringVar, TOP, Toplevel, W, X,
-    messagebox, ttk,
+    BOTH,
+    BOTTOM,
+    END,
+    LEFT,
+    RIGHT,
+    TOP,
+    E,
+    Menu,
+    StringVar,
+    Toplevel,
+    W,
+    X,
+    messagebox,
+    ttk,
 )
 
-from storage_scanner.cleanup_recommendations import (
-    is_protected_path, keeper_reason, pick_keeper,
-)
 from storage_scanner.audit import recycle_and_log
+from storage_scanner.cleanup_recommendations import (
+    is_protected_path,
+    keeper_reason,
+    pick_keeper,
+)
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
-    FILE_MANAGER_NAME, IS_MACOS, TRASH_NAME, resource_path,
+    FILE_MANAGER_NAME,
+    IS_MACOS,
+    TRASH_NAME,
+    resource_path,
 )
 from storage_scanner.settings import COLORS
 
@@ -30,7 +47,6 @@ class DuplicatesMixin:
     def _should_skip_duplicate_scan(self, path):
         """Return True if this path should be ignored during duplicate scans."""
         return is_protected_path(path)
-
 
     # -- Delete to Recycle Bin --------------------------------------------- #
     def _partial_hash_file(self, path, cancel_event=None, chunk_size=1024 * 1024):
@@ -77,7 +93,8 @@ class DuplicatesMixin:
 
         except (OSError, PermissionError):
             return None, None
-    def _full_hash_file(self, path, cancel_event = None, chunk_size=1024 * 1024):
+
+    def _full_hash_file(self, path, cancel_event=None, chunk_size=1024 * 1024):
         """
         Full-file hash used only after size and partial hash match.
 
@@ -101,6 +118,7 @@ class DuplicatesMixin:
 
         except (OSError, PermissionError):
             return None
+
     def _find_duplicate_files(self, progress_q=None, cancel_event=None):
         """
         Find duplicate files under the scanned root.
@@ -169,10 +187,12 @@ class DuplicatesMixin:
                     stats["bytes_skipped"] += skipped_bytes
 
                     if progress_q:
-                        progress_q.put((
-                            "stats",
-                            dict(stats),
-                        ))
+                        progress_q.put(
+                            (
+                                "stats",
+                                dict(stats),
+                            )
+                        )
 
                     continue
 
@@ -189,30 +209,29 @@ class DuplicatesMixin:
                         stats["bytes_skipped"] += node.size
 
                         if progress_q:
-                            progress_q.put((
-                                "stats",
-                                dict(stats),
-                            ))
+                            progress_q.put(
+                                (
+                                    "stats",
+                                    dict(stats),
+                                )
+                            )
                     else:
                         all_files.append(node)
 
         stats["files_checked"] = len(all_files)
 
         if progress_q:
-            progress_q.put((
-                "stats",
-                dict(stats),
-            ))
+            progress_q.put(
+                (
+                    "stats",
+                    dict(stats),
+                )
+            )
 
         total_files = max(1, len(all_files))
 
         if progress_q:
-            progress_q.put((
-                "progress",
-                0,
-                total_files,
-                f"Collecting files … 0/{total_files:,}"
-            ))
+            progress_q.put(("progress", 0, total_files, f"Collecting files … 0/{total_files:,}"))
 
         # ------------------------------------------------------------
         # Phase 1: group files by size
@@ -226,18 +245,17 @@ class DuplicatesMixin:
             by_size[node.size].append(node)
 
             if progress_q and (index % 1000 == 0 or index == total_files):
-                progress_q.put((
-                    "progress",
-                    index,
-                    total_files,
-                    f"Checking file sizes … {index:,}/{total_files:,}"
-                ))
+                progress_q.put(
+                    (
+                        "progress",
+                        index,
+                        total_files,
+                        f"Checking file sizes … {index:,}/{total_files:,}",
+                    )
+                )
 
         # Only files with matching size can be duplicates
-        same_size_groups = [
-            nodes for nodes in by_size.values()
-            if len(nodes) > 1
-        ]
+        same_size_groups = [nodes for nodes in by_size.values() if len(nodes) > 1]
 
         files_to_partial_hash = []
         for nodes in same_size_groups:
@@ -249,12 +267,14 @@ class DuplicatesMixin:
             return []
 
         if progress_q:
-            progress_q.put((
-                "progress",
-                0,
-                total_partial_files,
-                f"Partial hashing possible duplicates … 0/{total_partial_files:,}"
-            ))
+            progress_q.put(
+                (
+                    "progress",
+                    0,
+                    total_partial_files,
+                    f"Partial hashing possible duplicates … 0/{total_partial_files:,}",
+                )
+            )
 
         # ------------------------------------------------------------
         # Phase 2: partial hash
@@ -267,7 +287,9 @@ class DuplicatesMixin:
         # reuse it instead of reopening and re-reading the same file.
         full_digest_cache = {}
 
-        max_workers = min(8, (os.cpu_count() or 4) * 2) # Change max workers to 4 if it gets sluggish
+        max_workers = min(
+            8, (os.cpu_count() or 4) * 2
+        )  # Change max workers to 4 if it gets sluggish
 
         def partial_job(node):
             if cancel_event.is_set():
@@ -279,10 +301,7 @@ class DuplicatesMixin:
         completed = 0
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(partial_job, node)
-                for node in files_to_partial_hash
-            ]
+            futures = [executor.submit(partial_job, node) for node in files_to_partial_hash]
 
             for future in as_completed(futures):
                 if cancel_event.is_set():
@@ -299,12 +318,15 @@ class DuplicatesMixin:
                         full_digest_cache[node] = full_digest
 
                 if progress_q and (completed % 50 == 0 or completed == total_partial_files):
-                    progress_q.put((
-                        "progress",
-                        completed,
-                        total_partial_files,
-                        f"Partial hashing possible duplicates … {completed:,}/{total_partial_files:,}"
-                    ))
+                    progress_q.put(
+                        (
+                            "progress",
+                            completed,
+                            total_partial_files,
+                            "Partial hashing possible duplicates … "
+                            f"{completed:,}/{total_partial_files:,}",
+                        )
+                    )
 
         # ------------------------------------------------------------
         # Phase 3: full hash only files that matched partial hash
@@ -321,12 +343,14 @@ class DuplicatesMixin:
             return []
 
         if progress_q:
-            progress_q.put((
-                "progress",
-                0,
-                total_full_files,
-                f"Full hashing confirmed candidates … 0/{total_full_files:,}"
-            ))
+            progress_q.put(
+                (
+                    "progress",
+                    0,
+                    total_full_files,
+                    f"Full hashing confirmed candidates … 0/{total_full_files:,}",
+                )
+            )
 
         by_full_hash = defaultdict(list)
 
@@ -344,10 +368,7 @@ class DuplicatesMixin:
         completed = 0
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(full_job, node)
-                for node in files_to_full_hash
-            ]
+            futures = [executor.submit(full_job, node) for node in files_to_full_hash]
 
             for future in as_completed(futures):
                 if cancel_event.is_set():
@@ -362,12 +383,15 @@ class DuplicatesMixin:
                     by_full_hash[(node.size, digest)].append(node)
 
                 if progress_q and (completed % 10 == 0 or completed == total_full_files):
-                    progress_q.put((
-                        "progress",
-                        completed,
-                        total_full_files,
-                        f"Full hashing confirmed candidates … {completed:,}/{total_full_files:,}"
-                    ))
+                    progress_q.put(
+                        (
+                            "progress",
+                            completed,
+                            total_full_files,
+                            "Full hashing confirmed candidates … "
+                            f"{completed:,}/{total_full_files:,}",
+                        )
+                    )
 
         # ------------------------------------------------------------
         # Phase 4: build final duplicate list
@@ -384,15 +408,13 @@ class DuplicatesMixin:
         )
 
         return duplicates
+
     def show_duplicates(self):
         if not self.root_node:
             return
 
         if self.dup_thread and self.dup_thread.is_alive():
-            messagebox.showinfo(
-                "Storage Scanner",
-                "Duplicate scan is already running."
-            )
+            messagebox.showinfo("Storage Scanner", "Duplicate scan is already running.")
             return
 
         self.dup_cancel_event.clear()
@@ -420,6 +442,7 @@ class DuplicatesMixin:
         self.dup_thread.start()
 
         self.root.after(100, self._poll_duplicate_progress)
+
     def _duplicate_worker(self):
         try:
             duplicates = self._find_duplicate_files(
@@ -430,18 +453,18 @@ class DuplicatesMixin:
             if self.dup_cancel_event.is_set():
                 self.dup_progress_q.put(("cancelled", None))
                 return
-            else:
-                self.duplicates = duplicates
-                # Tied to the exact root_node these results came from, so a
-                # rescan of a different path (which sets root_node to a new
-                # object) can never be mistaken for still having a valid
-                # cached duplicate set -- see start_scan's matching reset.
-                self._duplicates_scan_root = self.root_node
-                self.dup_progress_q.put(("done", duplicates))
+            self.duplicates = duplicates
+            # Tied to the exact root_node these results came from, so a
+            # rescan of a different path (which sets root_node to a new
+            # object) can never be mistaken for still having a valid
+            # cached duplicate set -- see start_scan's matching reset.
+            self._duplicates_scan_root = self.root_node
+            self.dup_progress_q.put(("done", duplicates))
 
         except Exception as exc:
             logger.exception("Duplicate scan failed")
             self.dup_progress_q.put(("error", str(exc)))
+
     def _poll_duplicate_progress(self):
         try:
             while True:
@@ -461,7 +484,7 @@ class DuplicatesMixin:
                         f"{text}  ({percent:5.1f}%)  |  "
                         f"Skipped: {skipped:,} files / {human_size(skipped_bytes)}"
                     )
-                
+
                 elif kind == "stats":
                     _kind, stats = msg
                     self.dup_stats = stats
@@ -487,17 +510,15 @@ class DuplicatesMixin:
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
                     self.status_var.set("Duplicate scan failed.")
-                    messagebox.showerror(
-                        "Storage Scanner",
-                        f"Duplicate scan failed:\n{error_msg}"
-                    )
+                    messagebox.showerror("Storage Scanner", f"Duplicate scan failed:\n{error_msg}")
                     return
 
         except queue.Empty:
             pass
 
         self.root.after(100, self._poll_duplicate_progress)
-    def _show_duplicates_window(self,duplicates):
+
+    def _show_duplicates_window(self, duplicates):
 
         existing = getattr(self, "_duplicates_win", None)
         if existing is not None and existing.winfo_exists():
@@ -582,7 +603,7 @@ class DuplicatesMixin:
         # a warning label asking the user to be careful.
         iid_to_node = {}
         iid_to_group = {}
-        group_nodes = {}       # group_num -> [nodes...]
+        group_nodes = {}  # group_num -> [nodes...]
         group_keeper_iid = {}  # group_num -> iid currently marked "keep"
 
         details_var = StringVar(value="Select a row to see why it was flagged.")
@@ -603,9 +624,13 @@ class DuplicatesMixin:
                 stripe = "odd" if row_index % 2 else "even"
 
                 iid = tv.insert(
-                    "", END,
+                    "",
+                    END,
                     values=_row_values(
-                        group_num, node, size, len(nodes),
+                        group_num,
+                        node,
+                        size,
+                        len(nodes),
                         "Keeper" if is_keeper else "Duplicate",
                     ),
                     tags=(tag_type, stripe),
@@ -626,9 +651,13 @@ class DuplicatesMixin:
                 return
 
             if old_keeper_iid and tv.exists(old_keeper_iid):
-                tv.item(old_keeper_iid, tags=(
-                    "dupe", tv.item(old_keeper_iid, "tags")[1],
-                ))
+                tv.item(
+                    old_keeper_iid,
+                    tags=(
+                        "dupe",
+                        tv.item(old_keeper_iid, "tags")[1],
+                    ),
+                )
                 tv.set(old_keeper_iid, "role", "Duplicate")
 
             tv.item(iid, tags=("keep", tv.item(iid, "tags")[1]))
@@ -667,7 +696,8 @@ class DuplicatesMixin:
             row_menu.delete(0, END)
             if group_keeper_iid.get(iid_to_group.get(iid)) != iid:
                 row_menu.add_command(
-                    label="Make this the keeper", command=lambda: make_keeper(iid),
+                    label="Make this the keeper",
+                    command=lambda: make_keeper(iid),
                 )
             else:
                 row_menu.add_command(label="This copy is already the keeper", state="disabled")
@@ -676,7 +706,10 @@ class DuplicatesMixin:
         tv.bind("<Button-2>" if IS_MACOS else "<Button-3>", show_row_menu)
 
         ttk.Label(
-            win, textvariable=details_var, style="Accent.TLabel", padding=(10, 4),
+            win,
+            textvariable=details_var,
+            style="Accent.TLabel",
+            padding=(10, 4),
         ).pack(side=BOTTOM, fill=X)
 
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
@@ -701,10 +734,7 @@ class DuplicatesMixin:
             # The keeper in each group is never a valid deletion target,
             # even if selected (e.g. via select-all) — this is what actually
             # guarantees at least one copy survives per group.
-            targets = [
-                iid for iid in selected
-                if iid in iid_to_node and iid not in keeper_iids
-            ]
+            targets = [iid for iid in selected if iid in iid_to_node and iid not in keeper_iids]
             skipped_keepers = len(selected) - len(targets)
 
             if not targets:
@@ -718,7 +748,8 @@ class DuplicatesMixin:
             note = (
                 f" ({skipped_keepers} selected keeper file(s) were skipped — "
                 "keepers are protected and can't be deleted here.)"
-                if skipped_keepers else ""
+                if skipped_keepers
+                else ""
             )
             if not messagebox.askyesno(
                 "Delete selected duplicates",
@@ -746,9 +777,7 @@ class DuplicatesMixin:
                 else:
                     failed.append(node.path)
 
-            self.status_var.set(
-                f"Deleted {deleted_count:,} duplicate file(s) to {TRASH_NAME}."
-            )
+            self.status_var.set(f"Deleted {deleted_count:,} duplicate file(s) to {TRASH_NAME}.")
 
             if failed:
                 messagebox.showerror(
@@ -784,6 +813,7 @@ class DuplicatesMixin:
                 f"Found {len(duplicates):,} duplicate groups. "
                 f"Potential cleanup: {human_size(total_wasted)}"
             )
+
     def _remove_from_duplicate_cache(self, target_node):
         """Keep self.duplicates (the last completed "Find Duplicate Files"
         result, reused by Cleanup Recommendations -- see
@@ -825,6 +855,7 @@ class DuplicatesMixin:
 
         if changed:
             self.duplicates = updated
+
     def _remove_node_from_scan_tree(self, target_node):
         """Remove a deleted file node from the in-memory scan tree and update sizes.
 
@@ -853,6 +884,7 @@ class DuplicatesMixin:
             if node.is_dir:
                 for child in node.children:
                     stack.append((child, node))
+
     def _subtract_from_ancestors(self, current, target):
         """Subtract target's size/count from every ancestor containing it."""
         if not current.is_dir:

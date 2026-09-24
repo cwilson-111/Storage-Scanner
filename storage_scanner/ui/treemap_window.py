@@ -9,7 +9,7 @@ explorer, not a single all-levels-at-once view.
 A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
-from tkinter import BOTH, Canvas, LEFT, TOP, Toplevel, X, ttk
+from tkinter import BOTH, LEFT, TOP, Canvas, Toplevel, X, ttk
 
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
@@ -64,15 +64,23 @@ class TreemapMixin:
             if node.is_dir:
                 text += f"\n{node.file_count:,} files"
             text_id = canvas.create_text(
-                event.x + 14, event.y + 14, anchor="nw", text=text,
-                fill="#ffffff", font=FONT,
+                event.x + 14,
+                event.y + 14,
+                anchor="nw",
+                text=text,
+                fill="#ffffff",
+                font=FONT,
             )
             bbox = canvas.bbox(text_id)
             bg_id = None
             if bbox:
                 bg_id = canvas.create_rectangle(
-                    bbox[0] - 5, bbox[1] - 3, bbox[2] + 5, bbox[3] + 3,
-                    fill=COLORS["accent2"], outline="",
+                    bbox[0] - 5,
+                    bbox[1] - 3,
+                    bbox[2] + 5,
+                    bbox[3] + 3,
+                    fill=COLORS["accent2"],
+                    outline="",
                 )
                 canvas.tag_lower(bg_id, text_id)
             tooltip_ids.extend(i for i in (bg_id, text_id) if i is not None)
@@ -83,7 +91,9 @@ class TreemapMixin:
             for index, node in enumerate(stack):
                 label = node.name if len(node.name) <= 22 else node.name[:19] + "…"
                 ttk.Button(
-                    nav_bar, text=label, command=lambda i=index: navigate_to(i),
+                    nav_bar,
+                    text=label,
+                    command=lambda i=index: navigate_to(i),
                 ).pack(side=LEFT)
                 if index < len(stack) - 1:
                     ttk.Label(nav_bar, text=" › ").pack(side=LEFT)
@@ -101,8 +111,11 @@ class TreemapMixin:
             children = [c for c in node.children if c.size > 0]
             if not children:
                 canvas.create_text(
-                    w / 2, h / 2, text="(empty)",
-                    fill=COLORS["muted"], font=FONT,
+                    w / 2,
+                    h / 2,
+                    text="(empty)",
+                    fill=COLORS["muted"],
+                    font=FONT,
                 )
             else:
                 layout = compute_layout([(c, c.size) for c in children], 0, 0, w, h)
@@ -112,7 +125,13 @@ class TreemapMixin:
                     fraction = child.size / max_size
                     fill = heat_color(fraction)
                     rect_id = canvas.create_rectangle(
-                        rx, ry, rx + rw, ry + rh, fill=fill, outline=COLORS["panel"], width=2,
+                        rx,
+                        ry,
+                        rx + rw,
+                        ry + rh,
+                        fill=fill,
+                        outline=COLORS["panel"],
+                        width=2,
                     )
                     canvas.tag_bind(rect_id, "<Button-1>", lambda e, n=child: on_click(n))
                     canvas.tag_bind(rect_id, "<Double-1>", lambda e, n=child: on_double(n))
@@ -123,22 +142,30 @@ class TreemapMixin:
                         label = child.name if len(child.name) <= 22 else child.name[:19] + "…"
                         text_color = contrast_text_color(fill)
                         canvas.create_text(
-                            rx + 4, ry + 3, anchor="nw", text=label,
-                            fill=text_color, font=FONT,
+                            rx + 4,
+                            ry + 3,
+                            anchor="nw",
+                            text=label,
+                            fill=text_color,
+                            font=FONT,
                         )
                         if rh >= _MIN_LABEL_H * 2:
                             canvas.create_text(
-                                rx + 4, ry + 17, anchor="nw", text=human_size(child.size),
-                                fill=text_color, font=FONT,
+                                rx + 4,
+                                ry + 17,
+                                anchor="nw",
+                                text=human_size(child.size),
+                                fill=text_color,
+                                font=FONT,
                             )
 
             info_label.config(
                 text=f"{node.path}  —  {human_size(node.size)} in {node.file_count:,} files"
-                     f"  ({len(children)} item(s) shown at this level)"
+                f"  ({len(children)} item(s) shown at this level)"
             )
 
         def navigate_to(index):
-            del stack[index + 1:]
+            del stack[index + 1 :]
             redraw_breadcrumb()
             redraw_canvas()
 

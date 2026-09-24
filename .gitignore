@@ -5,6 +5,12 @@ __pycache__/
 .venv/
 venv/
 
+# Test/coverage output
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 # PyInstaller build output
 build/
 dist/

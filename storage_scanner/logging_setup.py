@@ -37,9 +37,9 @@ def setup_logging():
             backupCount=3,
             encoding="utf-8",
         )
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)-8s [%(threadName)s] %(name)s: %(message)s"
-        ))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)-8s [%(threadName)s] %(name)s: %(message)s")
+        )
         logger.addHandler(handler)
     except OSError:
         # Can't write logs at all (read-only volume, locked-down profile,

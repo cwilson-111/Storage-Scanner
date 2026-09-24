@@ -11,8 +11,17 @@ from storage_scanner.serialization import node_to_dict
 FORMATS = ("json", "csv")
 
 CSV_FIELDS = (
-    "path", "name", "is_dir", "size", "alloc_size", "file_count", "mtime",
-    "is_link", "hardlink_dup", "is_cloud_placeholder", "error",
+    "path",
+    "name",
+    "is_dir",
+    "size",
+    "alloc_size",
+    "file_count",
+    "mtime",
+    "is_link",
+    "hardlink_dup",
+    "is_cloud_placeholder",
+    "error",
 )
 
 

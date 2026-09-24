@@ -20,16 +20,14 @@ MIN_DELTAS_FOR_BASELINE = 3
 DEFAULT_Z_THRESHOLD = 2.0
 
 Anomaly = namedtuple(
-    "Anomaly", ["created_at", "kind", "growth_bytes", "z_score", "message"],
+    "Anomaly",
+    ["created_at", "kind", "growth_bytes", "z_score", "message"],
 )
 
 
 def _deltas(history):
     """[(created_at, delta_bytes), ...] between consecutive scans."""
-    return [
-        (history[i][0], history[i][1] - history[i - 1][1])
-        for i in range(1, len(history))
-    ]
+    return [(history[i][0], history[i][1] - history[i - 1][1]) for i in range(1, len(history))]
 
 
 def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
@@ -58,7 +56,7 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
 
     anomalies = []
     for index, (created_at, delta) in enumerate(deltas):
-        others = values[:index] + values[index + 1:]
+        others = values[:index] + values[index + 1 :]
         baseline_mean = statistics.mean(others)
         try:
             baseline_stdev = statistics.stdev(others)
@@ -76,7 +74,11 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
             if abs(z) < z_threshold:
                 continue
 
-        score_text = "far outside its usual pattern" if z in (float("inf"), float("-inf")) else f"z-score {z:+.1f}"
+        score_text = (
+            "far outside its usual pattern"
+            if z in (float("inf"), float("-inf"))
+            else f"z-score {z:+.1f}"
+        )
         # "spike"/"drop" and the faster-/more-than-usual framing describe
         # the deviation from this folder's own baseline trend (sign of z),
         # not the raw sign of delta -- a folder that steadily grows ~1GB/
@@ -97,10 +99,15 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
         else:
             amount_text = f"Shrank by {human_size(abs(delta))}"
         message = f"{amount_text} in one scan — {trend_text} ({score_text})."
-        anomalies.append(Anomaly(
-            created_at=created_at, kind=kind, growth_bytes=delta,
-            z_score=z, message=message,
-        ))
+        anomalies.append(
+            Anomaly(
+                created_at=created_at,
+                kind=kind,
+                growth_bytes=delta,
+                z_score=z,
+                message=message,
+            )
+        )
 
     return anomalies
 

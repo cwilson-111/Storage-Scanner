@@ -145,6 +145,7 @@ def test_missing_required_arguments_exit_with_usage_error():
 # this CLI directly from an already-elevated terminal, bypassing the
 # actual ShellExecuteExW/UAC GUI flow that's the common case).
 
+
 def test_progress_file_writer_writes_the_latest_progress_count(tmp_path):
     progress_path = tmp_path / "progress.txt"
     writer = mft_scan_cli._ProgressFileWriter(str(progress_path))

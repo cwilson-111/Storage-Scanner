@@ -127,31 +127,48 @@ def _build_mft_record0(extents):
     bytes_in_use = _FIRST_ATTR_OFFSET + len(attrs)
     header = struct.pack(
         "<4sHHQHHHHIIQHHI",
-        b"FILE", _USA_OFFSET, _USA_SIZE, 0, 1, 1,
-        _FIRST_ATTR_OFFSET, _RECORD_FLAG_IN_USE, bytes_in_use, _RECORD_SIZE,
-        0, 0, 0, 0,
+        b"FILE",
+        _USA_OFFSET,
+        _USA_SIZE,
+        0,
+        1,
+        1,
+        _FIRST_ATTR_OFFSET,
+        _RECORD_FLAG_IN_USE,
+        bytes_in_use,
+        _RECORD_SIZE,
+        0,
+        0,
+        0,
+        0,
     )
     buf = bytearray(_RECORD_SIZE)
-    buf[0:len(header)] = header
-    buf[_FIRST_ATTR_OFFSET:_FIRST_ATTR_OFFSET + len(attrs)] = attrs
+    buf[0 : len(header)] = header
+    buf[_FIRST_ATTR_OFFSET : _FIRST_ATTR_OFFSET + len(attrs)] = attrs
     return _stamp_fixups(bytes(buf))
 
 
 def _stamp_fixups(record):
     record = bytearray(record)
     usn = b"\x01\x00"
-    record[_USA_OFFSET:_USA_OFFSET + 2] = usn
+    record[_USA_OFFSET : _USA_OFFSET + 2] = usn
     for i in range(1, _USA_SIZE):
         sector_end = i * _SECTOR_SIZE - 2
-        original = bytes(record[sector_end:sector_end + 2])
-        record[_USA_OFFSET + 2 * i:_USA_OFFSET + 2 * i + 2] = original
-        record[sector_end:sector_end + 2] = usn
+        original = bytes(record[sector_end : sector_end + 2])
+        record[_USA_OFFSET + 2 * i : _USA_OFFSET + 2 * i + 2] = original
+        record[sector_end : sector_end + 2] = usn
     return bytes(record)
 
 
 def _build_record(
-    record_number, *, is_directory, sequence_number, file_name=None,
-    file_names=None, data=None, is_reparse_point=False,
+    record_number,
+    *,
+    is_directory,
+    sequence_number,
+    file_name=None,
+    file_names=None,
+    data=None,
+    is_reparse_point=False,
 ):
     """`file_name` is a convenience for the common single-name case;
     `file_names` (a list) supports a genuinely hard-linked record with
@@ -170,25 +187,47 @@ def _build_record(
     flags = _RECORD_FLAG_IN_USE | (_RECORD_FLAG_IS_DIRECTORY if is_directory else 0)
     header = struct.pack(
         "<4sHHQHHHHIIQHHI",
-        b"FILE", _USA_OFFSET, _USA_SIZE, 0, sequence_number, 1,
-        _FIRST_ATTR_OFFSET, flags, _FIRST_ATTR_OFFSET + len(attrs), _RECORD_SIZE,
-        0, 0, 0, record_number,
+        b"FILE",
+        _USA_OFFSET,
+        _USA_SIZE,
+        0,
+        sequence_number,
+        1,
+        _FIRST_ATTR_OFFSET,
+        flags,
+        _FIRST_ATTR_OFFSET + len(attrs),
+        _RECORD_SIZE,
+        0,
+        0,
+        0,
+        record_number,
     )
     buf = bytearray(_RECORD_SIZE)
-    buf[0:len(header)] = header
-    buf[_FIRST_ATTR_OFFSET:_FIRST_ATTR_OFFSET + len(attrs)] = attrs
+    buf[0 : len(header)] = header
+    buf[_FIRST_ATTR_OFFSET : _FIRST_ATTR_OFFSET + len(attrs)] = attrs
     return _stamp_fixups(bytes(buf))
 
 
 def _unused_record(record_number):
     header = struct.pack(
         "<4sHHQHHHHIIQHHI",
-        b"FILE", _USA_OFFSET, _USA_SIZE, 0, 1, 0,
-        _FIRST_ATTR_OFFSET, 0, _FIRST_ATTR_OFFSET, _RECORD_SIZE,  # flags=0: not in use
-        0, 0, 0, record_number,
+        b"FILE",
+        _USA_OFFSET,
+        _USA_SIZE,
+        0,
+        1,
+        0,
+        _FIRST_ATTR_OFFSET,
+        0,
+        _FIRST_ATTR_OFFSET,
+        _RECORD_SIZE,  # flags=0: not in use
+        0,
+        0,
+        0,
+        record_number,
     )
     buf = bytearray(_RECORD_SIZE)
-    buf[0:len(header)] = header
+    buf[0 : len(header)] = header
     return _stamp_fixups(bytes(buf))
 
 
@@ -211,15 +250,38 @@ def _build_fake_volume():
     record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
 
     records = [record0] + [_unused_record(n) for n in range(1, 5)]
-    records.append(_build_record(5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")))
-    records.append(_build_record(6, is_directory=False, sequence_number=1, file_name=_file_name_value(root_frn, "hello.txt"), data=b"hi!"))
-    records.append(_build_record(7, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, "Sub")))
-    records.append(_build_record(8, is_directory=False, sequence_number=1, file_name=_file_name_value(sub_frn, "inside.txt"), data=b"xyz12"))
+    records.append(
+        _build_record(
+            5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")
+        )
+    )
+    records.append(
+        _build_record(
+            6,
+            is_directory=False,
+            sequence_number=1,
+            file_name=_file_name_value(root_frn, "hello.txt"),
+            data=b"hi!",
+        )
+    )
+    records.append(
+        _build_record(
+            7, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, "Sub")
+        )
+    )
+    records.append(
+        _build_record(
+            8,
+            is_directory=False,
+            sequence_number=1,
+            file_name=_file_name_value(sub_frn, "inside.txt"),
+            data=b"xyz12",
+        )
+    )
 
     mft_bytes = b"".join(records)
     mft_bytes = mft_bytes.ljust(length_clusters * _RECORDS_PER_CLUSTER * _RECORD_SIZE, b"\x00")
-    volume = (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
-    return volume
+    return (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
 
 
 def _build_fake_volume_with_cross_subtree_hardlink():
@@ -239,21 +301,32 @@ def _build_fake_volume_with_cross_subtree_hardlink():
     record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
 
     records = [record0] + [_unused_record(n) for n in range(1, 5)]
-    records.append(_build_record(5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")))
-    records.append(_build_record(6, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, "Sub")))
-    records.append(_build_record(
-        7, is_directory=False, sequence_number=1,
-        file_names=[
-            _file_name_value(root_frn, "in_root.bin"),
-            _file_name_value(sub_frn, "in_sub.bin"),
-        ],
-        data=b"hello world",
-    ))
+    records.append(
+        _build_record(
+            5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")
+        )
+    )
+    records.append(
+        _build_record(
+            6, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, "Sub")
+        )
+    )
+    records.append(
+        _build_record(
+            7,
+            is_directory=False,
+            sequence_number=1,
+            file_names=[
+                _file_name_value(root_frn, "in_root.bin"),
+                _file_name_value(sub_frn, "in_sub.bin"),
+            ],
+            data=b"hello world",
+        )
+    )
 
     mft_bytes = b"".join(records)
     mft_bytes = mft_bytes.ljust(length_clusters * _RECORDS_PER_CLUSTER * _RECORD_SIZE, b"\x00")
-    volume = (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
-    return volume
+    return (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
 
 
 def _build_fake_volume_with_reparse_point_scan_target():
@@ -272,20 +345,33 @@ def _build_fake_volume_with_reparse_point_scan_target():
     record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
 
     records = [record0] + [_unused_record(n) for n in range(1, 5)]
-    records.append(_build_record(5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")))
-    records.append(_build_record(
-        6, is_directory=True, sequence_number=1, is_reparse_point=True,
-        file_name=_file_name_value(root_frn, "Link"),
-    ))
-    records.append(_build_record(
-        7, is_directory=False, sequence_number=1,
-        file_name=_file_name_value(link_frn, "inside.txt"), data=b"hello",
-    ))
+    records.append(
+        _build_record(
+            5, is_directory=True, sequence_number=1, file_name=_file_name_value(root_frn, ".")
+        )
+    )
+    records.append(
+        _build_record(
+            6,
+            is_directory=True,
+            sequence_number=1,
+            is_reparse_point=True,
+            file_name=_file_name_value(root_frn, "Link"),
+        )
+    )
+    records.append(
+        _build_record(
+            7,
+            is_directory=False,
+            sequence_number=1,
+            file_name=_file_name_value(link_frn, "inside.txt"),
+            data=b"hello",
+        )
+    )
 
     mft_bytes = b"".join(records)
     mft_bytes = mft_bytes.ljust(length_clusters * _RECORDS_PER_CLUSTER * _RECORD_SIZE, b"\x00")
-    volume = (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
-    return volume
+    return (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
 
 
 class _FakeCreateFileW:
@@ -330,9 +416,13 @@ class _FakeKernel32:
         fs_name_buffer.value = "NTFS"
         return 1
 
-    def DeviceIoControl(self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped):
+    def DeviceIoControl(
+        self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped
+    ):
         if code == mft_volume._FSCTL_GET_NTFS_VOLUME_DATA:
-            info = ctypes.cast(out_ref, ctypes.POINTER(mft_volume._NTFS_VOLUME_DATA_BUFFER)).contents
+            info = ctypes.cast(
+                out_ref, ctypes.POINTER(mft_volume._NTFS_VOLUME_DATA_BUFFER)
+            ).contents
             info.VolumeSerialNumber = self.volume_serial
             info.BytesPerSector = _SECTOR_SIZE
             info.BytesPerCluster = _BYTES_PER_CLUSTER
@@ -356,11 +446,14 @@ class _FakeKernel32:
             return 1
 
         if code == usn_journal._FSCTL_READ_USN_JOURNAL:
-            request = ctypes.cast(in_buf, ctypes.POINTER(usn_journal._READ_USN_JOURNAL_DATA_V0)).contents
+            request = ctypes.cast(
+                in_buf, ctypes.POINTER(usn_journal._READ_USN_JOURNAL_DATA_V0)
+            ).contents
             if request.UsnJournalID != self.usn_journal_id:
                 return 0
             payload = (
-                self.usn_read_responses.pop(0) if self.usn_read_responses
+                self.usn_read_responses.pop(0)
+                if self.usn_read_responses
                 else struct.pack("<q", self.usn_next_usn)  # caught up: no records
             )
             out_ref.raw = payload.ljust(out_size, b"\x00")
@@ -375,7 +468,7 @@ class _FakeKernel32:
 
     def ReadFile(self, handle, buffer, length, bytes_read_ref, overlapped):
         self.read_file_calls += 1
-        data = self.volume_bytes[self._file_pointer:self._file_pointer + length]
+        data = self.volume_bytes[self._file_pointer : self._file_pointer + length]
         buffer.raw = data.ljust(length, b"\x00")
         ctypes.cast(bytes_read_ref, ctypes.POINTER(wintypes.DWORD)).contents.value = length
         return 1
@@ -405,7 +498,10 @@ def test_full_pipeline_scans_a_subfolder_through_the_real_engine(monkeypatch, tm
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Sub", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\Sub",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
 
     assert report.engine == turbo_scan.ENGINE_TURBO
@@ -430,18 +526,23 @@ def test_full_pipeline_scans_the_whole_volume(monkeypatch, tmp_path):
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
 
     assert report.engine == turbo_scan.ENGINE_TURBO
     assert node.file_count == 2  # hello.txt + Sub/inside.txt
-    assert node.size == 3 + 5    # "hi!" + "xyz12"
+    assert node.size == 3 + 5  # "hi!" + "xyz12"
 
     child_names = {c.name for c in node.children}
     assert child_names == {"hello.txt", "Sub"}
 
 
-def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_full(monkeypatch, tmp_path):
+def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_full(
+    monkeypatch, tmp_path
+):
     # The exact real-world bug the validation gate caught: without the
     # fix, scanning just "C:\Sub" would zero out "in_sub.bin" because the
     # SAME file's other occurrence ("in_root.bin", outside this subtree
@@ -456,7 +557,10 @@ def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_f
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Sub", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\Sub",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
 
     assert report.engine == turbo_scan.ENGINE_TURBO
@@ -488,7 +592,10 @@ def test_scanning_a_reparse_point_directly_still_reveals_its_contents(monkeypatc
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
     node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Link", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\Link",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
 
     assert report.engine == turbo_scan.ENGINE_TURBO
@@ -509,12 +616,23 @@ def test_scanning_a_reparse_point_directly_still_reveals_its_contents(monkeypatc
 # tests (test_turbo_cache.py, test_usn_journal.py) can't see, by driving the
 # real, unmocked orchestration through two scans of the same fake volume.
 
+
 def _pack_usn_record(frn, parent_frn, usn, reason):
     return struct.pack(
         usn_journal._USN_RECORD_HEADER_FORMAT,
-        usn_journal._USN_RECORD_HEADER_SIZE, 2, 0,
-        frn, parent_frn, usn, 0,
-        reason, 0, 0, 0, 0, usn_journal._USN_RECORD_HEADER_SIZE,
+        usn_journal._USN_RECORD_HEADER_SIZE,
+        2,
+        0,
+        frn,
+        parent_frn,
+        usn,
+        0,
+        reason,
+        0,
+        0,
+        0,
+        0,
+        usn_journal._USN_RECORD_HEADER_SIZE,
     )
 
 
@@ -533,7 +651,10 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
     first_node, first_report = turbo_scan.scan_with_best_engine(
-        "C:\\", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
     assert first_report.engine == turbo_scan.ENGINE_TURBO
     reads_for_full_scan = kernel32.read_file_calls
@@ -541,7 +662,10 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
 
     kernel32.read_file_calls = 0
     second_node, second_report = turbo_scan.scan_with_best_engine(
-        "C:\\", queue.Queue(), threading.Event(), turbo_enabled=True,
+        "C:\\",
+        queue.Queue(),
+        threading.Event(),
+        turbo_enabled=True,
     )
 
     assert second_report.engine == turbo_scan.ENGINE_TURBO
@@ -555,7 +679,9 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
     assert kernel32.read_file_calls < reads_for_full_scan
 
 
-def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(monkeypatch, tmp_path):
+def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(
+    monkeypatch, tmp_path
+):
     _init_cache_db(tmp_path, monkeypatch)
     volume_bytes = bytearray(_build_fake_volume())
     kernel32 = _FakeKernel32(bytes(volume_bytes))
@@ -566,7 +692,10 @@ def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(m
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
     first_node, first_report = turbo_scan.scan_with_best_engine(
-        "C:\\", progress_q, cancel_event, turbo_enabled=True,
+        "C:\\",
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
     assert first_report.engine == turbo_scan.ENGINE_TURBO
     assert {c.name for c in first_node.children} == {"hello.txt", "Sub"}
@@ -578,11 +707,14 @@ def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(m
     # NTFS reusing free MFT slots for a newly created file in real life.
     root_frn = _pack_frn(1, 5)
     new_record = _build_record(
-        9, is_directory=False, sequence_number=1,
-        file_name=_file_name_value(root_frn, "new.txt"), data=b"NEW",
+        9,
+        is_directory=False,
+        sequence_number=1,
+        file_name=_file_name_value(root_frn, "new.txt"),
+        data=b"NEW",
     )
     new_record_offset = _MFT_BYTE_OFFSET + 9 * _RECORD_SIZE
-    volume_bytes[new_record_offset:new_record_offset + _RECORD_SIZE] = new_record
+    volume_bytes[new_record_offset : new_record_offset + _RECORD_SIZE] = new_record
     kernel32.volume_bytes = bytes(volume_bytes)
 
     new_file_frn = _pack_frn(1, 9)
@@ -593,7 +725,10 @@ def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(m
     ]
 
     second_node, second_report = turbo_scan.scan_with_best_engine(
-        "C:\\", queue.Queue(), threading.Event(), turbo_enabled=True,
+        "C:\\",
+        queue.Queue(),
+        threading.Event(),
+        turbo_enabled=True,
     )
 
     assert second_report.engine == turbo_scan.ENGINE_TURBO

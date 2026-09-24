@@ -42,8 +42,13 @@ from storage_scanner.scanner import scan as compatible_scan
 from storage_scanner.turbo_scan import ENGINE_TURBO, scan_with_best_engine
 
 _COMPARED_FIELDS = (
-    "size", "alloc_size", "file_count", "is_dir",
-    "is_link", "is_cloud_placeholder", "hardlink_dup",
+    "size",
+    "alloc_size",
+    "file_count",
+    "is_dir",
+    "is_link",
+    "is_cloud_placeholder",
+    "hardlink_dup",
 )
 
 
@@ -98,7 +103,10 @@ def compare_one(path):
     progress_q, cancel_event = queue.Queue(), threading.Event()
     print("Running Turbo Scan...")
     turbo_root, report = scan_with_best_engine(
-        path, progress_q, cancel_event, turbo_enabled=True,
+        path,
+        progress_q,
+        cancel_event,
+        turbo_enabled=True,
     )
     if report.engine != ENGINE_TURBO:
         print(
@@ -138,7 +146,7 @@ def main(argv):
         return 1
     if not IS_ROOT:
         print(
-            "Must be run from an elevated (\"Run as Administrator\") terminal -- "
+            'Must be run from an elevated ("Run as Administrator") terminal -- '
             "Turbo Scan's in-process path needs admin rights to read the raw "
             "volume, and this tool deliberately never triggers a UAC prompt "
             "mid-run.",

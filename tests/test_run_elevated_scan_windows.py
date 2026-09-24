@@ -36,10 +36,14 @@ class _FakeShellExecuteExW:
 
     def __call__(self, info_ref):
         info = ctypes.cast(info_ref, ctypes.POINTER(file_ops._SHELLEXECUTEINFOW)).contents
-        self.calls.append({
-            "lpVerb": info.lpVerb, "lpFile": info.lpFile,
-            "lpParameters": info.lpParameters, "nShow": info.nShow,
-        })
+        self.calls.append(
+            {
+                "lpVerb": info.lpVerb,
+                "lpFile": info.lpFile,
+                "lpParameters": info.lpParameters,
+                "nShow": info.nShow,
+            }
+        )
         if not self.succeed:
             return 0
         info.hProcess = self.process_handle
@@ -52,8 +56,8 @@ class _FakeWaitForSingleObject:
         self.restype = None
         self.calls = []
         self.on_call = on_call  # optional callback(call_index) -- lets a
-                                 # test simulate the elevated child writing
-                                 # a new progress value between poll ticks
+        # test simulate the elevated child writing
+        # a new progress value between poll ticks
 
     def __call__(self, handle, timeout_ms):
         index = len(self.calls)
@@ -115,7 +119,8 @@ class _FakeWinDLL:
 
 def _patch(monkeypatch, shell_execute_ex_w, kernel32):
     monkeypatch.setattr(
-        ctypes, "windll",
+        ctypes,
+        "windll",
         _FakeWinDLL(_FakeShell32(shell_execute_ex_w), kernel32),
         raising=False,
     )

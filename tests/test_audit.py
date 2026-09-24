@@ -12,7 +12,8 @@ def test_recycle_and_log_records_success(monkeypatch):
     monkeypatch.setattr(audit, "recycle", lambda path: True)
     recorded = {}
     monkeypatch.setattr(
-        audit, "record_audit_entry",
+        audit,
+        "record_audit_entry",
         lambda **kwargs: recorded.update(kwargs),
     )
 
@@ -32,7 +33,8 @@ def test_recycle_and_log_records_failure(monkeypatch):
     monkeypatch.setattr(audit, "recycle", lambda path: False)
     recorded = {}
     monkeypatch.setattr(
-        audit, "record_audit_entry",
+        audit,
+        "record_audit_entry",
         lambda **kwargs: recorded.update(kwargs),
     )
 

@@ -1,5 +1,6 @@
 """Recycle Bin / Trash deletion and elevated-relaunch support."""
 
+import contextlib
 import ctypes
 import json
 import os
@@ -15,13 +16,12 @@ from urllib.parse import quote
 from storage_scanner.drive_info import get_volume_root
 from storage_scanner.platform_support import IS_LINUX, IS_MACOS
 
-
 _FO_DELETE = 3
 _FOF_SILENT = 0x0004
 _FOF_NOCONFIRMATION = 0x0010
-_FOF_ALLOWUNDO = 0x0040          # the bit that routes deletes to the Recycle Bin
+_FOF_ALLOWUNDO = 0x0040  # the bit that routes deletes to the Recycle Bin
 _FOF_NOERRORUI = 0x0400
-_FOF_NORECURSEREPARSE = 0x8000   # don't follow into a junction/symlink's target
+_FOF_NORECURSEREPARSE = 0x8000  # don't follow into a junction/symlink's target
 
 _SEE_MASK_NOCLOSEPROCESS = 0x00000040
 _SW_HIDE = 0
@@ -46,8 +46,8 @@ class _SHELLEXECUTEINFOW(ctypes.Structure):
         ("lpClass", wintypes.LPCWSTR),
         ("hkeyClass", wintypes.HKEY),
         ("dwHotKey", wintypes.DWORD),
-        ("hIconOrMonitor", wintypes.HANDLE),   # a union in the real struct;
-                                                # neither member is used here
+        ("hIconOrMonitor", wintypes.HANDLE),  # a union in the real struct;
+        # neither member is used here
         ("hProcess", wintypes.HANDLE),
     ]
 
@@ -58,7 +58,7 @@ class _SHFILEOPSTRUCTW(ctypes.Structure):
         ("wFunc", wintypes.UINT),
         ("pFrom", wintypes.LPCWSTR),
         ("pTo", wintypes.LPCWSTR),
-        ("fFlags", ctypes.c_uint16),   # FILEOP_FLAGS is a WORD
+        ("fFlags", ctypes.c_uint16),  # FILEOP_FLAGS is a WORD
         ("fAnyOperationsAborted", wintypes.BOOL),
         ("hNameMappings", wintypes.LPVOID),
         ("lpszProgressTitle", wintypes.LPCWSTR),
@@ -78,8 +78,7 @@ def _recycle_windows(path):
     op.pFrom = os.path.abspath(path) + "\x00\x00"
     op.pTo = None
     op.fFlags = (
-        _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI
-        | _FOF_NORECURSEREPARSE
+        _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI | _FOF_NORECURSEREPARSE
     )
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
@@ -135,8 +134,9 @@ def _recycle_linux_manual(path):
         # exact same free name is astronomically unlikely for a
         # single-user desktop tool.
         dest_name, suffix = name, 1
-        while (os.path.exists(os.path.join(files_dir, dest_name))
-               or os.path.exists(os.path.join(info_dir, dest_name + ".trashinfo"))):
+        while os.path.exists(os.path.join(files_dir, dest_name)) or os.path.exists(
+            os.path.join(info_dir, dest_name + ".trashinfo")
+        ):
             suffix += 1
             dest_name = f"{name}.{suffix}"
 
@@ -167,7 +167,8 @@ def _recycle_linux(path):
     """
     try:
         result = subprocess.run(
-            ["gio", "trash", os.path.abspath(path)], capture_output=True,
+            ["gio", "trash", os.path.abspath(path)],
+            capture_output=True,
         )
         if result.returncode == 0:
             return True
@@ -245,9 +246,7 @@ def run_elevated_scan_macos(path):
     escaped = quoted.replace("\\", "\\\\").replace('"', '\\"')
     apple_script = f'do shell script "{escaped}" with administrator privileges'
 
-    result = subprocess.run(
-        ["osascript", "-e", apple_script], capture_output=True, text=True
-    )
+    result = subprocess.run(["osascript", "-e", apple_script], capture_output=True, text=True)
     if result.returncode != 0:
         return False, (result.stderr or "Authorization was cancelled or failed.").strip()
     return True, result.stdout
@@ -329,8 +328,12 @@ def relaunch_elevated_windows(initial_path=None):
     shell32 = ctypes.windll.shell32
     shell32.ShellExecuteW.restype = ctypes.c_void_p
     shell32.ShellExecuteW.argtypes = [
-        wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
-        wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int,
+        wintypes.HWND,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
     ]
 
     if getattr(sys, "frozen", False):
@@ -368,7 +371,7 @@ def _relay_progress_file(progress_path, progress_q, last_value):
     if progress_q is None:
         return last_value
     try:
-        with open(progress_path, "r", encoding="utf-8") as f:
+        with open(progress_path, encoding="utf-8") as f:
             text = f.read().strip()
         if not text:
             return last_value
@@ -429,15 +432,27 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
         if getattr(sys, "frozen", False):
             target = sys.executable
             args = [
-                "--mft-scan", volume_root, "--subtree", path, "--output", output_path,
-                "--progress-file", progress_path,
+                "--mft-scan",
+                volume_root,
+                "--subtree",
+                path,
+                "--output",
+                output_path,
+                "--progress-file",
+                progress_path,
             ]
         else:
             target = sys.executable
             args = [
-                os.path.abspath(sys.argv[0]), "--mft-scan", volume_root,
-                "--subtree", path, "--output", output_path,
-                "--progress-file", progress_path,
+                os.path.abspath(sys.argv[0]),
+                "--mft-scan",
+                volume_root,
+                "--subtree",
+                path,
+                "--output",
+                output_path,
+                "--progress-file",
+                progress_path,
             ]
         params = subprocess.list2cmdline(args)
 
@@ -483,16 +498,12 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
             return False, f"Turbo Scan helper exited with code {exit_code.value}."
 
         try:
-            with open(output_path, "r", encoding="utf-8") as f:
+            with open(output_path, encoding="utf-8") as f:
                 return True, json.load(f)
         except (OSError, ValueError) as exc:
             return False, f"Could not read Turbo Scan result: {exc}"
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(output_path)
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             os.remove(progress_path)
-        except OSError:
-            pass

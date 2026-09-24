@@ -41,8 +41,8 @@ def _by_name(node):
 @pytest.mark.skipif(
     not hasattr(os.stat_result, "st_blocks"),
     reason="st_blocks doesn't exist on this platform (e.g. Windows) -- "
-           "_measure_alloc_size's own Windows path is covered separately "
-           "by the test_windows_alloc_size_* tests below.",
+    "_measure_alloc_size's own Windows path is covered separately "
+    "by the test_windows_alloc_size_* tests below.",
 )
 def test_alloc_size_matches_real_disk_usage_via_st_blocks(tmp_path):
     f = tmp_path / "a.bin"
@@ -125,9 +125,7 @@ def test_windows_alloc_size_already_cluster_aligned_is_unchanged(monkeypatch):
 
 
 def test_windows_alloc_size_falls_back_on_invalid_file_size(monkeypatch):
-    fake_windll = SimpleNamespace(
-        kernel32=_FakeKernel32(low=0xFFFFFFFF)
-    )
+    fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=0xFFFFFFFF))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     monkeypatch.setattr(ctypes, "GetLastError", lambda: 5, raising=False)
 
@@ -172,8 +170,12 @@ class _FakeGetDiskFreeSpaceW:
         self.calls.append(root_path)
         if self.fails:
             return 0
-        ctypes.cast(sectors_ref, ctypes.POINTER(ctypes.c_ulong)).contents.value = self.sectors_per_cluster
-        ctypes.cast(bytes_ref, ctypes.POINTER(ctypes.c_ulong)).contents.value = self.bytes_per_sector
+        ctypes.cast(sectors_ref, ctypes.POINTER(ctypes.c_ulong)).contents.value = (
+            self.sectors_per_cluster
+        )
+        ctypes.cast(bytes_ref, ctypes.POINTER(ctypes.c_ulong)).contents.value = (
+            self.bytes_per_sector
+        )
         return 1
 
 
@@ -209,9 +211,9 @@ def test_get_cluster_size_returns_none_on_failure(monkeypatch):
     "attrs,expected",
     [
         (0, False),
-        (0x00040000, True),   # FILE_ATTRIBUTE_RECALL_ON_OPEN
-        (0x00400000, True),   # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
-        (0x00001000, True),   # FILE_ATTRIBUTE_OFFLINE
+        (0x00040000, True),  # FILE_ATTRIBUTE_RECALL_ON_OPEN
+        (0x00400000, True),  # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+        (0x00001000, True),  # FILE_ATTRIBUTE_OFFLINE
         (0x00000020, False),  # FILE_ATTRIBUTE_ARCHIVE - unrelated bit
     ],
 )

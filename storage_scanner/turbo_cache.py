@@ -145,7 +145,8 @@ def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO cached_volumes
             (volume_serial, volume_root, root_frn, record_size,
              full_scan_completed_at, last_refreshed_at)
@@ -156,14 +157,21 @@ def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
             record_size = excluded.record_size,
             full_scan_completed_at = excluded.full_scan_completed_at,
             last_refreshed_at = excluded.last_refreshed_at
-    """, (volume_serial, volume_root, root_frn, record_size, now, now))
+    """,
+        (volume_serial, volume_root, root_frn, record_size, now, now),
+    )
 
     cur.execute("DELETE FROM cached_records WHERE volume_serial = ?", (volume_serial,))
     cur.executemany(
         "INSERT INTO cached_records (volume_serial, record_number, frn, record_blob) "
         "VALUES (?, ?, ?, ?)",
         (
-            (volume_serial, record.frn & _FRN_RECORD_NUMBER_MASK, record.frn, _record_to_blob(record))
+            (
+                volume_serial,
+                record.frn & _FRN_RECORD_NUMBER_MASK,
+                record.frn,
+                _record_to_blob(record),
+            )
             for record in records
         ),
     )
@@ -172,7 +180,8 @@ def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
     conn.close()
     logger.debug(
         "turbo_cache: saved full scan of volume %s (%d records)",
-        volume_serial, len(records),
+        volume_serial,
+        len(records),
     )
 
 
@@ -182,11 +191,14 @@ def save_journal_cursor(volume_serial, usn_journal_id, next_usn):
     now = datetime.now().isoformat(timespec="seconds")
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE cached_volumes
         SET usn_journal_id = ?, next_usn = ?, last_refreshed_at = ?
         WHERE volume_serial = ?
-    """, (usn_journal_id, next_usn, now, volume_serial))
+    """,
+        (usn_journal_id, next_usn, now, volume_serial),
+    )
     conn.commit()
     conn.close()
 
@@ -199,33 +211,46 @@ def apply_incremental_changes(volume_serial, upserts, deletes, new_next_usn):
     conn = _connect()
     cur = conn.cursor()
 
-    cur.executemany("""
+    cur.executemany(
+        """
         INSERT INTO cached_records (volume_serial, record_number, frn, record_blob)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(volume_serial, record_number) DO UPDATE SET
             frn = excluded.frn,
             record_blob = excluded.record_blob
-    """, (
-        (volume_serial, record.frn & _FRN_RECORD_NUMBER_MASK, record.frn, _record_to_blob(record))
-        for record in upserts
-    ))
+    """,
+        (
+            (
+                volume_serial,
+                record.frn & _FRN_RECORD_NUMBER_MASK,
+                record.frn,
+                _record_to_blob(record),
+            )
+            for record in upserts
+        ),
+    )
 
     cur.executemany(
         "DELETE FROM cached_records WHERE volume_serial = ? AND record_number = ?",
         ((volume_serial, record_number) for record_number in deletes),
     )
 
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE cached_volumes
         SET next_usn = ?, last_refreshed_at = ?
         WHERE volume_serial = ?
-    """, (new_next_usn, now, volume_serial))
+    """,
+        (new_next_usn, now, volume_serial),
+    )
 
     conn.commit()
     conn.close()
     logger.debug(
         "turbo_cache: applied incremental refresh to volume %s (%d upserts, %d deletes)",
-        volume_serial, len(upserts), len(deletes),
+        volume_serial,
+        len(upserts),
+        len(deletes),
     )
 
 
