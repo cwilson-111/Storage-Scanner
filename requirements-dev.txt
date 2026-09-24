@@ -1,6 +1,6 @@
 # Build-time only. Storage Scanner itself has no third-party runtime
 # dependencies (matplotlib is optional, used only for growth-history charts).
-pyinstaller>=6.0
+pyinstaller>=6.22.3
 
 # Only needed to regenerate the app icon via make_icon.py (icon.ico is
 # already committed, so this is not required just to build the .exe).
