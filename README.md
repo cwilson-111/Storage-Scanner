@@ -143,13 +143,15 @@ packages were bundled.
   file. Files up to 3 MB are fully covered by those windows, so matches are
   byte-exact. Above 3 MB a match is *sampled*: two files with the same size
   and identical first, middle and last 1 MB are grouped even if they differ
-  somewhere in between — the window and Cleanup Recommendations label those
-  groups as sampled (medium risk) instead of exact, so review before
-  deleting. Each group gets an automatic **keeper recommendation** (prefers
-  a copy outside Downloads/Desktop/Temp, then the oldest) with the reasoning
-  shown — and the keeper is genuinely protected: it can never be deleted
-  from that window, even via select-all, though you can manually override
-  which copy is the keeper.
+  somewhere in between. The Duplicate Files window says how many groups
+  that applies to and explains it on each such row, and Cleanup
+  Recommendations rates those copies medium rather than low risk, so review
+  before deleting. A file that changed size since the scan is left out
+  rather than compared. Each group gets an automatic **keeper
+  recommendation** (prefers a copy outside Downloads/Desktop/Temp, then the
+  oldest) with the reasoning shown — and the keeper is genuinely protected:
+  it can never be deleted from that window, even via select-all, though you
+  can manually override which copy is the keeper.
 - **Cleanup Recommendations** — a review-first view across the whole scan:
   **Protected** paths (OS/app-managed locations, cloud placeholders — never
   suggested for deletion), **Review candidates** (large files untouched for
@@ -165,6 +167,10 @@ packages were bundled.
   shrink much, and the UI tells you that before you commit.
 - **Everything goes through the Recycle Bin/Trash.** Nothing in this app
   permanently deletes a file.
+- **Getting Started guide** — shown once on first launch, and reopenable
+  from Tools ▸ Help ▸ Getting Started…: what Delete actually does on your OS,
+  which folders a scan can't read (and what Run as Admin changes), how
+  cloud placeholders are handled, and which locations are protected.
 
 ### History and trust
 - **Growth History** — compare any two saved snapshots of a path (not just
@@ -285,13 +291,13 @@ folder rescan loads get more than 15% worse than `benchmarks/baseline.json`.
 ### Benchmarking the scanner
 
 `benchmarks/scale.py` (above) gates how memory and database sizes grow on
-synthetic volumes; `benchmark_scan.py` is the on-disk counterpart, checking
+synthetic volumes; `benchmarks/scan.py` is the on-disk counterpart, checking
 scan correctness on edge cases and timing real scans across versions:
 
 ```bash
-python benchmark_scan.py --profile medium --output bench-before.json
+python benchmarks/scan.py --profile medium --output bench-before.json
 # ...change the scanner...
-python benchmark_scan.py --profile medium --baseline bench-before.json
+python benchmarks/scan.py --profile medium --baseline bench-before.json
 ```
 
 Generates a folder tree from a fixed seed (`small` ≈ 2k files, `medium` ≈
@@ -299,8 +305,11 @@ Generates a folder tree from a fixed seed (`small` ≈ 2k files, `medium` ≈
 what was generated (totals, per-folder rollups, hard links counted once,
 symlinks/junctions not followed), then times several scans and measures
 peak memory. It exits 2 if the scan doesn't match the tree, and 3 if the
-median is more than `--max-slowdown` (default 25%) slower than the baseline.
-Compare only runs from the same machine; `--dir` picks the drive to test.
+median is more than `--max-slowdown` (default 25%) slower than the baseline;
+a baseline from another profile or seed is refused (exit 1) before anything
+is generated. Compare only runs from the same machine; `--dir` picks the
+drive to test. The same correctness checks run on a small generated tree in
+the test suite (`tests/test_benchmark_scan.py`), so CI gates them too.
 
 ## Privacy & trust
 

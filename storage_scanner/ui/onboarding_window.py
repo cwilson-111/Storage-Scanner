@@ -2,10 +2,11 @@
 
 A mixin composed into StorageScannerApp (storage_scanner/app.py). Shown
 once automatically, shortly after the main window first comes up, and
-reopenable any time from Help ▸ Getting Started…. What it says and whether
-it's due are decided in storage_scanner/onboarding.py (no Tk there); this
-file only lays it out. Closing it any way at all (OK, Escape, the window's
-close button) marks it seen.
+reopenable any time from Tools ▸ Help ▸ Getting Started… (built in
+main_window._build_toolbar). What it says and whether it's due are decided
+in storage_scanner/onboarding.py (no Tk there); this file only lays it out.
+Closing it any way at all (OK, Escape, Return, the window's close button)
+marks it seen.
 """
 
 from tkinter import BOTTOM, LEFT, RIGHT, TOP, TclError, Toplevel, X, ttk
@@ -38,7 +39,7 @@ class OnboardingMixin:
         self._onboarding_win = win
         win.withdraw()  # position before showing, so it doesn't flash at 0,0
         win.configure(bg=COLORS["bg"])
-        win.title("Before You Start")
+        win.title("Getting Started")
         win.resizable(False, False)
         win.transient(self.root)
         try:
@@ -68,7 +69,7 @@ class OnboardingMixin:
 
         ttk.Label(
             body,
-            text="Reopen this any time from Help ▸ Getting Started…",
+            text="Reopen this any time from Tools ▸ Help ▸ Getting Started…",
             foreground=COLORS["muted"],
             wraplength=_WRAP,
         ).pack(side=TOP, anchor="w", pady=(12, 0))

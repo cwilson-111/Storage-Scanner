@@ -62,8 +62,24 @@ def test_unreadable_file_hashes_to_none(tmp_path):
     app = DuplicatesMixin()
     missing = str(tmp_path / "does_not_exist.bin")
 
-    assert app._partial_hash_file(missing) is None
-    assert app._middle_hash_file(missing) is None
+    assert app._partial_hash_file(missing, 10) is None
+    assert app._middle_hash_file(missing, 10) is None
+
+
+def test_files_that_changed_size_since_the_scan_are_not_matched(tmp_path, monkeypatch):
+    """The scan saw two-chunk files, which head + tail alone cover exactly;
+    both have since grown to five chunks and now differ only in the middle.
+    Hashing the head and tail of the grown files would call them a
+    byte-exact match, so a file whose size no longer matches the scan is
+    left out instead."""
+    chunk = 4
+    monkeypatch.setattr(duplicate_window, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
+    grown = bytes(5 * chunk)
+    app = _make_app(tmp_path, [("a.bin", grown), ("b.bin", _flip(grown, len(grown) // 2))])
+    for node in app.root_node.children:
+        node.size = 2 * chunk
+
+    assert _groups(app) == []
 
 
 def test_any_single_byte_difference_splits_files_up_to_three_chunks(tmp_path, monkeypatch):

@@ -50,34 +50,41 @@ class DuplicatesMixin:
         return is_protected_path(path)
 
     # -- Content sampling --------------------------------------------------- #
-    def _partial_hash_file(self, path, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES):
-        """BLAKE2b of the first and last `chunk_size` bytes of a file.
+    # Both digests read at offsets derived from `size`: the size the scan
+    # recorded, which candidates are grouped on and is_sampled_duplicate()
+    # judges. A file that's no longer that size changed since the scan; its
+    # windows would no longer be the ones `size` implies, and a match could
+    # claim a byte-exact coverage it never had, so it hashes to None instead.
+    def _partial_hash_file(
+        self, path, size, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES
+    ):
+        """BLAKE2b of the first and last `chunk_size` bytes of a file the
+        scan recorded as `size` bytes.
 
         For a file no larger than 2 * chunk_size those two windows overlap
         or touch, so this digest already covers every byte. None if the
-        file can't be read or the scan was cancelled.
+        file can't be read, is no longer `size` bytes, or the scan was
+        cancelled.
         """
+        if cancel_event and cancel_event.is_set():
+            return None
         try:
-            if cancel_event and cancel_event.is_set():
-                return None
-
-            file_size = os.path.getsize(path)
-            h = hashlib.blake2b(digest_size=32)
-
             with open(path, "rb") as f:
-                h.update(f.read(chunk_size))
-
-                if file_size > chunk_size:
-                    f.seek(file_size - chunk_size)
+                if os.fstat(f.fileno()).st_size != size:
+                    return None
+                h = hashlib.blake2b(f.read(chunk_size), digest_size=32)
+                if size > chunk_size:
+                    f.seek(size - chunk_size)
                     h.update(f.read(chunk_size))
-
-            return h.hexdigest()
-
+                return h.hexdigest()
         except OSError:
             return None
 
-    def _middle_hash_file(self, path, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES):
-        """BLAKE2b of the `chunk_size` bytes centered on the file's midpoint.
+    def _middle_hash_file(
+        self, path, size, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES
+    ):
+        """BLAKE2b of the `chunk_size` bytes centered on the midpoint of a
+        file the scan recorded as `size` bytes.
 
         The window starts at (size - chunk_size) // 2. For any file of
         2 * chunk_size < size <= 3 * chunk_size that start is <= chunk_size
@@ -85,18 +92,16 @@ class DuplicatesMixin:
         tail windows every byte is covered and a match is byte-exact.
         Above 3 * chunk_size the bytes between the windows are never read:
         a match there is sampled, not verified. None if the file can't be
-        read or the scan was cancelled.
+        read, is no longer `size` bytes, or the scan was cancelled.
         """
+        if cancel_event and cancel_event.is_set():
+            return None
         try:
-            if cancel_event and cancel_event.is_set():
-                return None
-
-            file_size = os.path.getsize(path)
-
             with open(path, "rb") as f:
-                f.seek(max(0, (file_size - chunk_size) // 2))
+                if os.fstat(f.fileno()).st_size != size:
+                    return None
+                f.seek(max(0, (size - chunk_size) // 2))
                 return hashlib.blake2b(f.read(chunk_size), digest_size=32).hexdigest()
-
         except OSError:
             return None
 
@@ -276,7 +281,7 @@ class DuplicatesMixin:
             if cancel_event.is_set():
                 return node, None
 
-            return node, self._partial_hash_file(node.path, cancel_event, chunk_size)
+            return node, self._partial_hash_file(node.path, node.size, cancel_event, chunk_size)
 
         completed = 0
 
@@ -342,7 +347,7 @@ class DuplicatesMixin:
             return (
                 node,
                 partial_digest,
-                self._middle_hash_file(node.path, cancel_event, chunk_size),
+                self._middle_hash_file(node.path, node.size, cancel_event, chunk_size),
             )
 
         completed = 0
@@ -528,7 +533,9 @@ class DuplicatesMixin:
         bytes_skipped = stats.get("bytes_skipped", 0)
         partial_hashed = stats.get("partial_hashed", 0)
         middle_hashed = stats.get("middle_hashed", 0)
-        sampled_groups = sum(1 for size, _digest, _nodes in duplicates if is_sampled_duplicate(size))
+        sampled_groups = sum(
+            1 for size, _digest, _nodes in duplicates if is_sampled_duplicate(size)
+        )
         window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
         sampled_note = (
             f"  ({sampled_groups:,} over {human_size(3 * DUPLICATE_HASH_CHUNK_BYTES)} matched "

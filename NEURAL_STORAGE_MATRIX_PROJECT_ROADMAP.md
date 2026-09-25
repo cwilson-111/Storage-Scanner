@@ -97,7 +97,7 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
   2. Hash the first and last 1 MB with BLAKE2b.
   3. For survivors larger than 2 MB, hash the middle 1 MB (centered on the file's midpoint). A file over 3 MB is never read in full.
   4. Group matches on (size, first+last digest, middle digest) and rank groups by potential recoverable space.
-- Tradeoff: files up to 3 MB are fully covered by the three windows, so those matches are byte-exact. Above 3 MB a match is sampled: files identical in size and in those three windows are grouped even if they differ elsewhere. The Duplicate Files window and Cleanup Recommendations label such groups as sampled, with medium rather than low risk.
+- Tradeoff: files up to 3 MB are fully covered by the three windows, so those matches are byte-exact. Above 3 MB a match is sampled: files identical in size and in those three windows are grouped even if they differ elsewhere. The Duplicate Files window counts such groups and explains each such row; Cleanup Recommendations rates them medium rather than low risk. Window offsets come from the size the scan recorded, so a file whose size has changed since is left out rather than compared on the wrong windows.
 - Parallel head/tail and middle hashing.
 - Default exclusions for sensitive or low-value Windows/system paths.
 - Duplicate-scan statistics for checked, skipped, head/tail-hashed, and middle-hashed files.
@@ -328,6 +328,8 @@ Add saved scan profiles, recent locations, global result search, advanced filter
 
 Add a first-run explanation of safe deletion, permission limitations, cloud placeholders, and Windows-protected locations. The interface should communicate what is happening instead of merely displaying activity.
 
+**✅ Done: first-run guide.** `storage_scanner/onboarding.py` (the text and the show-once decision, no Tk) and `ui/onboarding_window.py` (the dialog). It opens by itself shortly after the first launch and can be reopened from Tools ▸ Help ▸ Getting Started…. Closing it by any route records `onboarding_seen` in `history.py`'s `app_metadata` table. If that table can't be read, the guide shows again rather than staying hidden. It has four sections, worded for the running OS (and for whether the app is already elevated), each describing what the code actually does: safe deletion (Recycle Bin/Trash, Audit Log, the protected duplicate keeper), permission limits (⚠ folders, Run as Admin), cloud placeholders (recognized only on Windows, where Find Duplicate Files skips them), and protected locations (skipped by Find Duplicate Files and listed as Protected in Cleanup Recommendations, but not checked by Delete in the main tree or in Search & Filter).
+
 ### 8. Add cloud-awareness without causing hydration
 
 OneDrive and similar placeholders must be distinguished from fully local files. Show logical size, local allocated size, online-only state, and sync state when Windows exposes those attributes. Avoid accidentally downloading online-only content during hashing or preview. Offer safe actions such as “Free up local space” separately from deletion.
@@ -460,11 +462,12 @@ as two complementary tools:
   how memory, the history database, the Turbo cache and folder rescans grow
   with file count. See "Scale benchmarks and folder rescans from the cache"
   at the end.
-- `benchmark_scan.py` checks on-disk correctness on edge cases and times
-  real scans, as described below.
+- `benchmarks/scan.py` (with the tree generator and checker in
+  `benchmarks/generated_tree.py`) checks on-disk correctness on edge cases
+  and times real scans, as described below.
 
-**`benchmark_scan.py`: on-disk edge-case correctness and timing.**
-`benchmark_scan.py` builds a folder tree from a seed (`small`/`medium`/`large`
+**`benchmarks/scan.py`: on-disk edge-case correctness and timing.**
+`benchmarks/scan.py` builds a folder tree from a seed (`small`/`medium`/`large`
 profiles, about 2k/20k/100k files), so the same seed always produces the same
 files, names and sizes. The tree includes a random nested tree, empty folders, a
 deep chain, hard links, a symlink and a junction pointing at a folder with files
@@ -474,9 +477,11 @@ generated: totals, folder count, hard-link duplicates, per-top-level-folder
 rollups, and that each link stayed a leaf. It then times several warm-cache
 scans and measures peak memory in a separate tracemalloc run. `--output`
 writes a JSON result stamped with the app version and git revision.
-`--baseline` compares against an earlier result: it refuses one from a
-different profile/seed/tree, warns when the machine or Python differs, and
-exits 3 when the median is more than `--max-slowdown` (default 25%) slower.
+`--baseline` compares against an earlier result. It refuses a file that isn't
+a usable result, or one from a different profile/seed, before generating
+anything, and one from a different tree after the run. It warns when the
+machine or Python differs, and exits 3 when the median is more than
+`--max-slowdown` (default 25%) slower.
 
 - `tests/test_benchmark_scan.py` runs the real scanner against a small
   generated tree on every CI run, so the same checks gate releases.
@@ -513,7 +518,7 @@ steps have since run green too (`build-macos`/`build-linux` on `80220b7`).
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (443 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release, and `benchmark_scan.py` checks the scanner against generated trees across versions.
+5. ✅ Add unit tests (544 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release, and `benchmarks/scan.py` checks the scanner against generated trees across versions.
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
 ### Phase 2: Competitive core — ✅ done
@@ -537,7 +542,7 @@ steps have since run green too (`build-macos`/`build-linux` on `80220b7`).
 1. ❌ Sign the executable and installer — needs a purchased code-signing certificate; not something that can be built without one.
 2. 🚧 Produce an installer plus portable ZIP — portable ZIP done; no MSI/installer built.
 3. ✅ Publish SHA-256 checksums and an SBOM.
-4. 🚧 Create polished onboarding, documentation, screenshots, and benchmark results — benchmark tooling done (`benchmark_scan.py`, see item 10); no published benchmark results, onboarding, or screenshots yet.
+4. 🚧 Create polished onboarding, documentation, screenshots, and benchmark results — onboarding done (the first-run guide; see item 7 above) and benchmark tooling done (`benchmarks/scan.py`, see item 10); no published benchmark results or screenshots yet.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
 6. ✅ Ship packaged macOS (`.dmg`) and Linux builds — see item 9a above; v1.5.0 ships all three platforms.
 

@@ -1,3 +1,5 @@
+import importlib.util
+import json
 import os
 import queue
 import sys
@@ -8,9 +10,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+# benchmarks/scan.py imports its sibling generated_tree.py the way running it
+# as a script allows: from its own folder on sys.path.
+sys.path.insert(0, str(ROOT / "benchmarks"))
 
-from benchmark_scan import TreeSpec, compare_to_baseline, generate_tree, remove_tree, verify
+from generated_tree import TreeSpec, generate_tree, remove_tree, verify
+
 from storage_scanner.scanner import scan
+
+_spec = importlib.util.spec_from_file_location("benchmark_scan", ROOT / "benchmarks" / "scan.py")
+bench = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(bench)
+compare_to_baseline = bench.compare_to_baseline
 
 SPEC = TreeSpec(dirs=15, files=60, hardlinks=5, chain_depth=10)
 
@@ -115,3 +126,41 @@ def test_baseline_from_other_environment_warns_but_still_compares():
     )
     assert not regressed
     assert len(warnings) == 1 and "python" in warnings[0]
+
+
+def _must_not_run(*_args, **_kwargs):
+    raise AssertionError("generated and scanned a tree for a run that can't succeed")
+
+
+@pytest.mark.parametrize(
+    "baseline",
+    [
+        [],  # valid JSON, but not a result
+        _result(0.0),  # no usable denominator for the slowdown ratio
+        {k: v for k, v in _result(1.0).items() if k != "median_seconds"},
+        _result(1.0, profile="medium"),
+        _result(1.0, seed=2),
+        _result(1.0, schema=bench.SCHEMA_VERSION + 1),
+    ],
+)
+def test_unusable_baseline_is_refused_before_any_tree_is_generated(tmp_path, monkeypatch, baseline):
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps(baseline), encoding="utf-8")
+    monkeypatch.setattr(bench, "run_benchmark", _must_not_run)
+
+    assert bench.main(["--profile", "small", "--seed", "1", "--baseline", str(path)]) == 1
+
+
+def test_missing_dir_is_refused_before_any_tree_is_generated(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench, "run_benchmark", _must_not_run)
+
+    assert bench.main(["--dir", str(tmp_path / "no-such-folder")]) == 1
+
+
+def test_matching_baseline_is_compared_after_the_run(tmp_path, monkeypatch):
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps(_result(1.0)), encoding="utf-8")
+    slower = _result(1.3, correct=True, problems=[], files_per_second=1, peak_traced_bytes=0)
+    monkeypatch.setattr(bench, "run_benchmark", lambda *_args, **_kwargs: slower)
+
+    assert bench.main(["--profile", "small", "--seed", "1", "--baseline", str(path)]) == 3

@@ -170,6 +170,13 @@ class MainWindowMixin:
             )
             self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
 
+        # Last, where a Help menu conventionally sits: the first-run guide
+        # (storage_scanner/ui/onboarding_window.py) opens itself once and
+        # tells the user it can be reopened from here.
+        help_menu = Menu(self.tools_menu, tearoff=0)
+        help_menu.add_command(label="Getting Started…", command=self.show_onboarding)
+        self.tools_menu.add_cascade(label="Help", menu=help_menu)
+
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
             bar_frame,
