@@ -1004,6 +1004,20 @@ rescan: in this checkout before the change, and against a checkout of the
 previous commit. Timings are local and indicative only; the sizes and
 record counts are exact.
 
+**At 1,000,000 files / 20,000 folders** (same benchmark, `--files 1000000`):
+
+| | Before | After |
+|---|---|---|
+| Cache bytes per record | 405.3 | **130.3** |
+| Records loaded to rescan one 50-file folder | 1,020,001 | **51** |
+| One-folder rescan time | 11.5 s | **0.004 s** |
+| Whole-volume rescan time | 11.4 s | **10.6 s** |
+| Peak memory (turbo scenario) | 1.78 GB | **1.19 GB** |
+
+The same 1M run exposed the next bottleneck: **saving one scan to history
+takes 38 s** at 20,001 folder rows, and each of the 30 scheduled scans
+stored 2.5 MB. That's the history-retention and compact-schema step.
+
 Verified: `test_turbo_cache.py` covers the round trip of every field,
 subtree-only loading, reparse-point expansion, case-insensitive path lookup
 that stops at files and links, rename and delete, old-cache migration and
