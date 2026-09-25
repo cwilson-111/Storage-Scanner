@@ -272,12 +272,37 @@ mypy storage_scanner/  # type checking
 ```
 
 All four read their settings from `pyproject.toml`, and CI runs the same
-four commands as the `test` job every release build depends on.
+four commands as the `test` job every release build depends on, plus
+`python benchmarks/scale.py --check`, which fails the build if memory per
+file, history size per scan, Turbo cache size per record, or the records a
+folder rescan loads get more than 15% worse than `benchmarks/baseline.json`.
 
 ## Privacy & trust
 
 - [PRIVACY.md](PRIVACY.md) — what the app reads, stores, and (doesn't) send anywhere.
 - [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md) — exactly how a release binary is built, and what that does/doesn't guarantee.
+
+## Roadmap
+
+The full plan, with what's done and what's next, is in
+[NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
+
+**Next: scale for very large drives and long histories.** History that
+doesn't grow forever (retention plus a compact layout), then a smaller
+in-memory tree, measured by `benchmarks/scale.py`.
+
+**Then: enterprise monitoring for computers and databases** (Phase 5 in the
+roadmap). The desktop app stays free and local-first; the fleet pieces are
+separate and reuse the same scan engine.
+
+| Step | What it adds |
+|---|---|
+| **Agent** | Runs as a Windows service, macOS launchd daemon or Linux systemd service. Takes a central policy, scans incrementally, and sends only small summaries: folder totals, top files, and changes since last time. Works offline and deploys through Intune, GPO, SCCM or Jamf. |
+| **Central store** | An HTTPS ingest API with per-device certificates, backed by PostgreSQL + TimescaleDB. Keeps full detail for 30 days, then daily and weekly summaries, so 10,000 machines stay affordable. |
+| **Database monitoring** | Read-only connectors for SQL Server, PostgreSQL, MySQL/MariaDB, Oracle and MongoDB. Track data, index, log and free space per database and table, bloat, and log or WAL growth. Uses monitoring roles only, never table data. |
+| **Console and alerts** | A fleet dashboard, fill-date forecasts with confidence levels, and alert rules that extend today's budgets. Sends to email, Teams/Slack, PagerDuty or ServiceNow/Jira, with scheduled reports. |
+| **Security** | SSO (Entra ID, Okta), role-based access, an exportable audit trail, and an option to hash user folder names. Signed builds are required. |
+| **Remote cleanup** (opt-in) | Cleanup plans built from the existing recommendations. Each is dry-run first, approved by a second person, sent to the Recycle Bin or quarantine only (never deleted outright), and fully audited. Databases stay alert-only. |
 
 ## License
 

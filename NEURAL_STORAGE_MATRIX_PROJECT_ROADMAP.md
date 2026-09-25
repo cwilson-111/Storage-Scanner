@@ -317,6 +317,9 @@ A clear IT-focused edition could support:
 - Audit logs, role separation, and exportable remediation evidence.
 
 This direction aligns especially well with real help-desk and endpoint-management workflows.
+Scheduled headless scans, JSON output and exit codes are already built. The full plan to take
+the rest to thousands of machines, and to add database storage monitoring, is **Phase 5:
+Enterprise scale** under "Recommended delivery sequence" below.
 
 ### 7. Improve the everyday experience
 
@@ -496,6 +499,229 @@ steps haven't run yet; they run on the next push to `main`.
 4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
 6. ✅ Ship packaged macOS (`.dmg`) and Linux builds — see item 9a above; v1.5.0 ships all three platforms.
+
+### Phase 5: Enterprise scale — fleet and database storage monitoring — 📋 planned
+
+**Goal:** one console that shows storage across thousands of computers
+*and* the databases running on them: what's filling up, how fast, when it
+will run out, and why. It alerts before an outage and turns cleanup into
+an approved, audited action. The desktop app stays free and local-first;
+the fleet parts are separate components that reuse its engine.
+
+**Ground rules**, carried over from the desktop app:
+
+- **Read-only by default.** Agents and database connectors observe; nothing
+  is deleted or changed without an explicit, approved, audited remediation
+  (E6).
+- **Least privilege.** Agents run as a service account that can read
+  metadata, not file contents. Database connectors use monitoring roles
+  that can't read table data.
+- **Summaries, not trees.** A machine sends folder roll-ups, top files and
+  file-type totals, never its full file list. That keeps payloads small and
+  limits what a central server knows.
+- **Uncertainty shown, never hidden.** Forecasts keep their ranges and
+  confidence levels at fleet scale too.
+
+**Already built** (the reason this is realistic): headless `--cli` with
+JSON/CSV output and exit codes; `--save-history`, scheduling, budgets and
+`--notify`; Turbo Scan with USN-journal incremental refresh and
+folder-only rescans; forecasting with confidence levels; anomaly detection;
+an audit log; and `benchmarks/scale.py` gated in CI.
+
+```mermaid
+flowchart LR
+    subgraph Endpoints
+        A1[Agent<br/>Windows service]
+        A2[Agent<br/>macOS / Linux daemon]
+        DB[(SQL Server / Postgres /<br/>MySQL / Oracle / Mongo)]
+        A1 -- read-only monitor role --> DB
+    end
+    A1 -- "HTTPS + device cert<br/>compressed summaries" --> I[Ingest API]
+    A2 --> I
+    I --> Q[[Queue]]
+    Q --> W[Workers:<br/>rollups, forecasts,<br/>anomalies, alert rules]
+    W --> S[(Time-series store<br/>Postgres + TimescaleDB)]
+    S --> C[Web console + API]
+    W --> N[Alerts: email, Teams/Slack,<br/>PagerDuty, ServiceNow/Jira]
+    C -- approved remediation plans --> A1
+```
+
+#### E1 — Agent (headless, managed)
+
+- A service/daemon wrapping today's scan engine: a Windows Service,
+  launchd on macOS, systemd on Linux. It replaces per-user Task Scheduler
+  and cron entries.
+- **Central policy file:** which volumes and paths to scan and how often,
+  exclusions, how much history to keep locally, and the CPU/IO limits
+  below. Pushed from the console, with a local file as fallback.
+- **Incremental by default:** on NTFS, Turbo Scan's USN refresh plus
+  folder-only rescans, so a daily scan of a mostly unchanged drive costs
+  seconds. Compatible scan elsewhere.
+- **Small, low-impact scans:** low IO priority, a CPU cap, allowed time
+  windows, and pausing on battery or when the user is active.
+- **Payload:** folder roll-ups at or above a threshold, top-N files,
+  file-type totals and volume capacity, and only folders that changed
+  since the last upload. Measured: about 1,100 folder rows per scan on a
+  real machine, about 100 bytes per row. That's about 110 KB raw per full
+  scan and much less as a delta.
+- **Offline queue** for laptops: store and forward, with idempotent upload
+  IDs so retries never double-count.
+- **Heartbeat and self-health:** version, last scan, errors, unreadable
+  path count (the scan details strip, fleet-wide).
+- **Deployment:** MSI for Intune, GPO and SCCM; a signed `.pkg` for Jamf;
+  `.deb`/`.rpm` for Linux. Auto-update that verifies the signature before
+  installing. Blocked on the code-signing certificate (Phase 4), which
+  becomes mandatory at this stage.
+
+#### E2 — Central ingest and storage
+
+- **Ingest API:** HTTPS with mutual TLS or per-device certificates issued
+  at enrollment. Schema-versioned payloads, rate limits, and backpressure
+  through a queue so a Monday-morning burst doesn't drop data.
+- **Store:** PostgreSQL with TimescaleDB. Hypertables partitioned by time,
+  native compression for old chunks, and continuous aggregates (daily,
+  weekly, monthly) so dashboards never scan raw rows. ClickHouse is the
+  alternative if query volume outgrows it.
+- **Data model:** tenant → site/group → machine → volume → scan →
+  folder_snapshot. Folder paths are stored once in a path dictionary and
+  referenced by id (the same fix planned for local history). Databases fit
+  the same model (E3): instance → database → schema/table.
+- **Sizing math, and why retention matters:** 10,000 machines × 1 scan a day
+  × ~1,100 rows ≈ 11 million rows a day, or about 4 billion a year raw. Two
+  things keep that manageable:
+  1. **Delta storage:** only changed folders get a row; unchanged ones carry
+     forward.
+  2. **Downsampling:** raw rows for 30 days, daily for a year, weekly
+     after that.
+
+  Both must be in place before the first large pilot.
+- **Multi-tenancy** for managed service providers: tenant isolation at
+  the schema or row level, and per-tenant retention and encryption keys.
+
+#### E3 — Database storage monitoring
+
+A connector framework in the agent (or on a central poller, for managed
+or cloud databases). Each connector reads **catalog and statistics views
+only**, never table data.
+
+| Engine | Reads (read-only) | Minimum role |
+|---|---|---|
+| SQL Server | `sys.master_files`, `sys.dm_db_file_space_usage`, `sys.dm_db_log_space_usage`, `sys.dm_db_partition_stats` | `VIEW SERVER STATE` + `VIEW ANY DEFINITION` |
+| PostgreSQL | `pg_database_size`, `pg_total_relation_size`, `pg_stat_user_tables` (dead tuples → bloat), `pg_ls_waldir()` | `pg_monitor` |
+| MySQL / MariaDB | `information_schema.TABLES` (data, index, `DATA_FREE`), `SHOW BINARY LOGS`; or, from a local agent, the `.ibd` file sizes in the data directory | `REPLICATION CLIENT` for binary logs. `TABLES` only lists tables the account holds a privilege on, so the least-privilege route is the local file sizes |
+| Oracle | `DBA_DATA_FILES`, `DBA_SEGMENTS`, `DBA_FREE_SPACE`, `V$RECOVERY_FILE_DEST` | `SELECT_CATALOG_ROLE` |
+| MongoDB | `dbStats`, `collStats` | `clusterMonitor` |
+| SQLite / file-based | file size plus page/freelist counts | file read |
+
+- **What it tracks:** data vs. index vs. log vs. free/reclaimable space;
+  per-database and per-table growth; data files approaching their
+  autogrowth limit or the disk they sit on; top tables by growth; and
+  bloat or reclaimable space (Postgres dead tuples, MySQL `DATA_FREE`).
+- **Database-specific alerts:**
+  - A transaction log that keeps growing because it never truncates,
+    usually a failing log backup.
+  - WAL piling up behind a stalled replication slot.
+  - A table that grew 10× overnight.
+  - A data file that hits its maximum size before the disk fills.
+- **Correlation:** show a database's files next to the disk they live on,
+  so "D: fills in 12 days" and "the Sales DB log grows 8 GB a day" appear
+  as one finding, not two.
+- **Secrets:** credentials live in the OS vault (Windows Credential
+  Manager, macOS Keychain, libsecret) or a central store (Azure Key Vault,
+  HashiCorp Vault). They are never kept in the policy file or logs.
+
+#### E4 — Console, alerting and reporting
+
+- **Fleet dashboard:** fullest volumes, fastest growers, soonest to fill
+  (forecast range plus confidence), unhealthy agents, and database hot
+  spots. Drill down from fleet to site to machine to folder, or to
+  instance, database and table.
+- **Alert rules** generalize today's budgets:
+  - % full;
+  - bytes free;
+  - days until full below N, only above a minimum confidence;
+  - growth anomaly;
+  - database-specific rules (E3).
+
+  With deduplication, quiet hours and escalation.
+- **Integrations:** email, Teams/Slack webhooks, PagerDuty/Opsgenie,
+  ServiceNow/Jira ticket creation, and a REST API plus a PowerShell module
+  for scripting.
+- **Reports:** scheduled CSV, JSON, HTML and PDF (capacity planning,
+  top growers, reclaimable space), and machine-to-machine comparisons.
+
+#### E5 — Security and compliance
+
+- **Identity:** SSO through OIDC/SAML (Entra ID, Okta, Google). RBAC
+  roles (viewer, operator, approver, admin) scoped by site or group.
+- **Audit trail** for every login, policy change, alert acknowledgement
+  and remediation. Exportable as evidence (extends today's local audit
+  log).
+- **Data minimization:** an option to hash or truncate user-profile paths,
+  and to exclude paths entirely. Per-tenant retention; encryption in
+  transit (TLS 1.2+) and at rest.
+- **Trust:** signed binaries (Phase 4), the SBOM and checksums already
+  published, dependency and secret scanning already in CI, an external
+  penetration test before general availability, and SOC 2 readiness if
+  sold as a hosted service.
+
+#### E6 — Approved remote remediation (opt-in)
+
+- The console builds a **cleanup plan** from the review-first
+  recommendations the desktop app already makes: duplicates with a
+  protected keeper, old installers, orphaned install folders, and
+  cache/temp folders.
+- **Checks before anything runs:**
+  - a dry run on the agent;
+  - approval by a second person for anything above a size or risk
+    threshold;
+  - execution only to the Recycle Bin/Trash or a quarantine, never a
+    permanent delete;
+  - `audit.check_stale` refusing any file that changed since the plan was
+    built;
+  - a full audit record of every item.
+- **Databases stay alert-only.** No automatic shrink, purge or truncate.
+  At most a suggested, reviewed runbook step.
+
+#### How scale gets proven (extends `benchmarks/scale.py`)
+
+- **Agent:** payload bytes per scan, incremental scan time and peak memory
+  on a 1M-file volume; gated in CI like today's metrics.
+- **Ingest:** a load test replaying synthetic agents at 1k, 10k and 50k
+  machines. Target: at least 10,000 uploads a minute sustained with p95
+  ingest under 1 s.
+- **Queries:** dashboard p95 under 2 s over a year of downsampled data for
+  10,000 machines.
+- **Before the first pilot, the in-memory tree must get smaller** (394
+  bytes per file today, measured). That's the compact-tree step of the
+  scale plan, so a 10M-file server volume fits in an agent's memory
+  budget.
+
+#### Suggested order and exit criteria
+
+| Step | Delivers | Done when |
+|---|---|---|
+| E0 | Local history retention and compact schema; compact in-memory tree; code signing | Benchmarks show bounded history growth and < 150 bytes per file; signed builds ship |
+| E1 | Agent service, policy file, delta payloads, offline queue, MSI/pkg | 100-machine internal pilot runs 30 days with no data loss |
+| E2 | Ingest API, Timescale store, retention and downsampling | Load test passes at 10k synthetic machines |
+| E3 | SQL Server + PostgreSQL connectors first, then MySQL, Oracle, Mongo | Log-growth and bloat alerts fire correctly against test instances |
+| E4 | Console, alert rules, integrations, reports | A pilot customer's on-call team runs on it for a quarter |
+| E5 | SSO, RBAC, audit export, pen test | Findings closed; audit export accepted by a compliance reviewer |
+| E6 | Approved remote remediation | 0 irreversible actions; every action traceable end to end |
+
+**Risks to decide early:**
+
+1. **Path privacy:** user folder names can be sensitive, so decide the
+   default hashing policy before the first pilot.
+2. **Agent impact on laptops:** it must be invisible, or it gets
+   uninstalled.
+3. **Cloud placeholders:** OneDrive "online-only" files must never be
+   downloaded by a scan (already handled locally; must stay true in the
+   agent).
+4. **Database permissions:** some DBAs won't grant server-level views, so
+   each connector must degrade gracefully to what it can see.
+5. **Hosted vs. self-hosted:** self-hosted first fits the local-first
+   promise and avoids running customers' data.
 
 ## Product positioning
 
