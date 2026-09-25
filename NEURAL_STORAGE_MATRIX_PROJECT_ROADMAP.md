@@ -217,10 +217,17 @@ refresh (`turbo_cache.py`/`usn_journal.py`) means a repeat scan of an
 unchanged volume reaches parity with Compatible's own speed instead of
 re-reading the whole MFT every time.
 
-Not built: the "achieved throughput / confidence-completeness indicators"
-UI polish from the original scope — the engine and its fallback are surfaced
-functionally (status text, automatic fallback with no user action needed)
-but there's no dedicated indicator panel.
+**✅ Done: scan details strip.** After every scan, a strip above the status
+bar shows the engine that ran (including "Turbo Scan fell back"), elapsed
+time, throughput in files/s, the unreadable-path count with a **View**
+button, and a Complete/Incomplete result (`turbo_scan.scan_indicators`).
+It stays until the next scan starts. The status bar alone couldn't do this:
+the history save overwrites it about a second after the scan finishes. A
+Turbo Scan never returns a partial tree, so unreadable paths are the only
+thing that marks a finished scan incomplete. macOS/Linux elevated-helper
+scans return no timing, so they show "—" for elapsed and throughput. Not
+shown: whether a Turbo Scan used the cache's incremental refresh or read
+the whole MFT, since `ScanReport` doesn't carry that yet.
 
 Off by default behind a "Turbo Scan (Experimental)" toggle (Tools ▸
 Settings) pending more real-world mileage before it's recommended broadly —
