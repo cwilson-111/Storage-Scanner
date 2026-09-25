@@ -225,9 +225,28 @@ It stays until the next scan starts. The status bar alone couldn't do this:
 the history save overwrites it about a second after the scan finishes. A
 Turbo Scan never returns a partial tree, so unreadable paths are the only
 thing that marks a finished scan incomplete. macOS/Linux elevated-helper
-scans return no timing, so they show "—" for elapsed and throughput. Not
-shown: whether a Turbo Scan used the cache's incremental refresh or read
-the whole MFT, since `ScanReport` doesn't carry that yet.
+scans return no timing, so they show "—" for elapsed and throughput.
+
+**✅ Done (2026-09-24): how a Turbo Scan read the MFT.** The strip now adds
+an **MFT read** field after a Turbo Scan: "Incremental (USN journal)" when
+the cache was refreshed from the journal, or "Full (…)" with why, such as
+first scan of this drive, USN journal wrapped since last scan, USN journal
+was recreated, cache was corrupt, or cache unavailable. That makes a slow
+repeat scan explainable at a glance, which the small-subtree incremental
+performance follow-up below needs. `get_records_using_cache` returns
+`(records, MftRead)`, `ScanReport.mft_read` carries it, and the elevated
+helper's `--output` JSON is now `{"node": …, "mft_read": …}`, so it crosses
+the process boundary too. The helper is always the same build as the GUI
+that launches it, so there's no older format to support. The reasons are
+fixed short phrases, and the underlying exception text still goes to the
+log. The strip is now two rows, how the scan ran and then what it found:
+one row already needed 989 px against the 960 px default window whenever
+the View button showed, which clipped the Result field. The widest case
+now measures 774 px. Verified by unit tests for every full-read reason, the
+helper envelope from both sides, the real cache/USN orchestration on a
+faked NTFS volume (first scan full, second incremental), and headless
+measurement of the real strip widgets. Not verified: a Turbo Scan on real
+hardware showing the field, which needs admin rights and a UAC prompt.
 
 Off by default behind a "Turbo Scan (Experimental)" toggle (Tools ▸
 Settings) pending more real-world mileage before it's recommended broadly —

@@ -19,6 +19,13 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import mft_scan_cli
 from storage_scanner.models import Node
+from storage_scanner.turbo_scan import MftRead
+
+_FULL_READ = MftRead(incremental=False, full_read_reason="first scan of this drive")
+
+
+def _no_records(*_args, **_kwargs):
+    return [], _FULL_READ
 
 
 class _FakeRecordSource:
@@ -49,7 +56,7 @@ def test_successful_scan_writes_json_output_and_closes_the_source(monkeypatch, t
     fake_node = _make_node()
 
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", _no_records)
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
     monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
 
@@ -60,9 +67,12 @@ def test_successful_scan_writes_json_output_and_closes_the_source(monkeypatch, t
     assert fake_source.closed is True
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
-    assert data["path"] == "C:\\Data"
-    assert data["size"] == 123
-    assert data["file_count"] == 5
+    assert data["node"]["path"] == "C:\\Data"
+    assert data["node"]["size"] == 123
+    assert data["node"]["file_count"] == 5
+    # How the MFT was read crosses the process boundary too, for the
+    # unelevated GUI's scan-details strip.
+    assert MftRead.from_dict(data["mft_read"]) == _FULL_READ
 
 
 def test_source_is_closed_even_if_parsing_raises(monkeypatch, tmp_path):
@@ -85,7 +95,7 @@ def test_source_is_closed_even_if_parsing_raises(monkeypatch, tmp_path):
 def test_missing_root_record_is_a_scan_error(monkeypatch, tmp_path, capsys):
     fake_source = _FakeRecordSource(record_count=1)
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", _no_records)
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (None, 0, {}))
 
     output_path = tmp_path / "out.json"
@@ -100,7 +110,7 @@ def test_subtree_not_found_is_a_scan_error(monkeypatch, tmp_path):
     fake_source = _FakeRecordSource(record_count=1)
     fake_node = _make_node()
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", _no_records)
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
 
     def missing(root, path):
@@ -119,7 +129,7 @@ def test_unwritable_output_path_is_a_scan_error(monkeypatch, tmp_path):
     fake_source = _FakeRecordSource(record_count=1)
     fake_node = _make_node()
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
-    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", lambda *a, **k: [])
+    monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", _no_records)
     monkeypatch.setattr(mft_scan_cli, "build_tree", lambda records, root_path: (fake_node, 0, {}))
     monkeypatch.setattr(mft_scan_cli, "find_subtree_node", lambda root, path: fake_node)
 
@@ -174,7 +184,7 @@ def test_run_mft_scan_wires_progress_file_into_get_records_using_cache(monkeypat
 
     def fake_get_records(record_source, volume_root, progress_q, cancel_event):
         captured["progress_q"] = progress_q
-        return []
+        return [], _FULL_READ
 
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
     monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", fake_get_records)
@@ -199,7 +209,7 @@ def test_run_mft_scan_without_progress_file_passes_none(monkeypatch, tmp_path):
 
     def fake_get_records(record_source, volume_root, progress_q, cancel_event):
         captured["progress_q"] = progress_q
-        return []
+        return [], _FULL_READ
 
     monkeypatch.setattr(mft_scan_cli, "open_record_source", lambda drive: fake_source)
     monkeypatch.setattr(mft_scan_cli, "get_records_using_cache", fake_get_records)
