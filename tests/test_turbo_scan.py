@@ -11,12 +11,16 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import turbo_scan, usn_journal
 from storage_scanner.models import Node
+from storage_scanner.serialization import node_to_dict
 from storage_scanner.turbo_scan import (
+    MftRead,
     ScanReport,
     choose_engine,
     find_subtree_node,
     scan_indicators,
 )
+
+INCREMENTAL = MftRead(incremental=True)
 
 # -- scan_indicators: what the scan-details strip shows ---------------------- #
 
@@ -60,6 +64,25 @@ def test_indicators_without_report_from_elevated_helper():
     assert dict(fields)["Engine"] == "Compatible (elevated helper)"
     assert dict(fields)["Elapsed"] == "—"
     assert dict(fields)["Throughput"] == "—"
+
+
+def test_indicators_say_how_a_turbo_scan_read_the_mft():
+    def mft_field(mft_read):
+        report = ScanReport(
+            engine=turbo_scan.ENGINE_TURBO,
+            elapsed_seconds=1.0,
+            file_count=1,
+            mft_read=mft_read,
+        )
+        fields, _ = scan_indicators(report, 0)
+        assert [label for label, _ in fields][:2] == ["Engine", "MFT read"]
+        return dict(fields)["MFT read"]
+
+    assert mft_field(INCREMENTAL) == "Incremental (USN journal)"
+    assert (
+        mft_field(MftRead(incremental=False, full_read_reason="first scan of this drive"))
+        == "Full (first scan of this drive)"
+    )
 
 
 # -- choose_engine: the full decision matrix -------------------------------- #
@@ -161,7 +184,7 @@ def test_successful_turbo_scan_reports_turbo_engine_and_skips_compatible(monkeyp
     fake_node = Node("C:\\Data", "Data", True)
     fake_node.file_count = 123
     monkeypatch.setattr(turbo_scan, "choose_engine", lambda *a, **k: turbo_scan.ENGINE_TURBO)
-    monkeypatch.setattr(turbo_scan, "_attempt_turbo_scan", lambda *a, **k: fake_node)
+    monkeypatch.setattr(turbo_scan, "_attempt_turbo_scan", lambda *a, **k: (fake_node, INCREMENTAL))
     monkeypatch.setattr(
         turbo_scan.scanner,
         "scan",
@@ -180,6 +203,7 @@ def test_successful_turbo_scan_reports_turbo_engine_and_skips_compatible(monkeyp
     assert report.engine == turbo_scan.ENGINE_TURBO
     assert report.file_count == 123
     assert report.fallback_reason is None
+    assert report.mft_read == INCREMENTAL
 
 
 def test_turbo_failure_falls_back_to_compatible_with_a_reason(monkeypatch):
@@ -232,7 +256,7 @@ def test_already_elevated_uses_in_process_path(monkeypatch):
 
     def fake_in_process(path, progress_q, cancel_event):
         called["in_process"] = path
-        return fake_node
+        return fake_node, INCREMENTAL
 
     monkeypatch.setattr(turbo_scan, "_run_turbo_in_process", fake_in_process)
     monkeypatch.setattr(
@@ -244,7 +268,7 @@ def test_already_elevated_uses_in_process_path(monkeypatch):
     progress_q, cancel_event = _progress_and_cancel()
     result = turbo_scan._attempt_turbo_scan("C:\\Data", progress_q, cancel_event)
 
-    assert result is fake_node
+    assert result == (fake_node, INCREMENTAL)
     assert called["in_process"] == "C:\\Data"
 
 
@@ -260,15 +284,33 @@ def test_not_elevated_uses_elevated_helper_path(monkeypatch):
 
     def fake_via_helper(path, progress_q, cancel_event):
         called["via_helper"] = path
-        return fake_node
+        return fake_node, INCREMENTAL
 
     monkeypatch.setattr(turbo_scan, "_run_turbo_via_elevated_helper", fake_via_helper)
 
     progress_q, cancel_event = _progress_and_cancel()
     result = turbo_scan._attempt_turbo_scan("C:\\Data", progress_q, cancel_event)
 
-    assert result is fake_node
+    assert result == (fake_node, INCREMENTAL)
     assert called["via_helper"] == "C:\\Data"
+
+
+def test_elevated_helper_result_carries_the_node_and_how_the_mft_was_read(monkeypatch):
+    # The helper runs in another process; this is the far side of the
+    # envelope mft_scan_cli.run_mft_scan writes.
+    node = Node("C:\\Data", "Data", True)
+    node.file_count = 4
+    mft_read = MftRead(incremental=False, full_read_reason="USN journal was recreated")
+    monkeypatch.setattr(
+        turbo_scan,
+        "run_elevated_scan_windows",
+        lambda *a: (True, {"node": node_to_dict(node), "mft_read": mft_read.to_dict()}),
+    )
+
+    result_node, result_read = turbo_scan._run_turbo_via_elevated_helper("C:\\Data", None, None)
+
+    assert (result_node.path, result_node.file_count) == ("C:\\Data", 4)
+    assert result_read == mft_read
 
 
 # -- get_records_using_cache: the cache/incremental-refresh decision logic --
@@ -328,9 +370,10 @@ def test_no_cache_yet_does_a_full_scan(monkeypatch):
         lambda handle: pytest.fail("no journal on a first scan in this test"),
     )
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert len(records) == 3  # one per record_number 0, 1, 2
+    assert mft_read == MftRead(incremental=False, full_read_reason="first scan of this drive")
 
 
 def test_cancelling_mid_full_scan_raises_instead_of_returning_a_partial_list(monkeypatch):
@@ -441,9 +484,10 @@ def test_cache_with_no_journal_cursor_does_a_full_scan(monkeypatch):
         lambda handle: pytest.fail("should not touch the journal"),
     )
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert len(records) == 2
+    assert mft_read.full_read_reason == "no journal position cached"
 
 
 def test_cache_with_valid_journal_and_no_changes_uses_incremental_path(monkeypatch):
@@ -479,9 +523,10 @@ def test_cache_with_valid_journal_and_no_changes_uses_incremental_path(monkeypat
         lambda n, s: pytest.fail("a full scan should not run on the incremental path"),
     )
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert records is cached_records
+    assert mft_read == INCREMENTAL
 
 
 def test_incremental_refresh_posts_status_and_progress_messages(monkeypatch):
@@ -524,7 +569,9 @@ def test_incremental_refresh_posts_status_and_progress_messages(monkeypatch):
     monkeypatch.setattr(turbo_scan.turbo_cache, "load_all_records", lambda serial: cached_records)
 
     progress_q = queue.Queue()
-    records = turbo_scan.get_records_using_cache(source, "C:\\", progress_q, threading.Event())
+    records, _mft_read = turbo_scan.get_records_using_cache(
+        source, "C:\\", progress_q, threading.Event()
+    )
 
     assert records is cached_records
     messages = []
@@ -614,10 +661,11 @@ def test_journal_id_mismatch_falls_back_to_full_scan_and_invalidates(monkeypatch
         lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")),
     )
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert len(records) == 1  # fell all the way through to a full scan
     assert invalidated == [1]
+    assert mft_read.full_read_reason == "USN journal was recreated"
 
 
 def test_corrupt_cached_record_falls_back_to_full_scan_and_invalidates(monkeypatch):
@@ -678,10 +726,11 @@ def test_corrupt_cached_record_falls_back_to_full_scan_and_invalidates(monkeypat
         lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")),
     )
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert len(records) == 1  # fell all the way through to a full scan
     assert invalidated == [1]
+    assert mft_read.full_read_reason == "cache was corrupt"
 
 
 def test_wrapped_journal_falls_back_to_full_scan(monkeypatch):
@@ -715,9 +764,10 @@ def test_wrapped_journal_falls_back_to_full_scan(monkeypatch):
         lambda handle: (_ for _ in ()).throw(usn_journal.UsnJournalError("no journal")),
     )
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert len(records) == 1
+    assert mft_read.full_read_reason == "USN journal wrapped since last scan"
 
 
 def test_dirty_record_that_no_longer_parses_is_deleted_not_upserted(monkeypatch):
@@ -781,6 +831,6 @@ def test_cache_write_failure_after_a_full_scan_does_not_lose_the_scan_result(mon
 
     monkeypatch.setattr(turbo_scan.turbo_cache, "save_full_scan", boom)
 
-    records = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
+    records, _mft_read = turbo_scan.get_records_using_cache(source, "C:\\", None, threading.Event())
 
     assert len(records) == 6  # caching failed silently; the scan's own result is untouched

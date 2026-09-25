@@ -21,6 +21,7 @@ failure anywhere in that path (a locked/corrupt cache DB, no USN journal
 support, a wrapped/recreated journal) just falls back to the plain full
 scan this module always did before caching existed -- never raises out of
 get_records_using_cache, and never changes what records a scan returns.
+It does report which path it took (MftRead), for the scan-details strip.
 """
 
 import os
@@ -48,6 +49,38 @@ _ROOT_RECORD_NUMBER = 5
 _FRN_RECORD_NUMBER_MASK = 0x0000FFFFFFFFFFFF
 
 
+class _CacheOutdated(usn_journal.UsnJournalError):
+    """The USN journal works but can't account for everything since the
+    cache was built. Its message is short enough for the scan-details strip."""
+
+
+@dataclass(frozen=True)
+class MftRead:
+    """How a Turbo Scan got the volume's records: the cache refreshed from
+    the USN journal, or a full MFT read -- and, for a full read, why the
+    cache couldn't be used (a short phrase; the log has the detail).
+    Crosses the elevated helper's process boundary as a dict
+    (to_dict/from_dict)."""
+
+    incremental: bool
+    full_read_reason: Optional[str] = None  # None when incremental
+
+    def describe(self):
+        if self.incremental:
+            return "Incremental (USN journal)"
+        return f"Full ({self.full_read_reason})" if self.full_read_reason else "Full"
+
+    def to_dict(self):
+        return {"incremental": self.incremental, "full_read_reason": self.full_read_reason}
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            incremental=bool(data.get("incremental")),
+            full_read_reason=data.get("full_read_reason"),
+        )
+
+
 @dataclass
 class ScanReport:
     """Travels alongside the Node returned by scan_with_best_engine(),
@@ -59,6 +92,7 @@ class ScanReport:
     elapsed_seconds: float
     file_count: int
     fallback_reason: Optional[str] = None
+    mft_read: Optional[MftRead] = None  # Turbo Scan only
 
 
 def scan_indicators(report, unreadable_count):
@@ -86,13 +120,16 @@ def scan_indicators(report, unreadable_count):
         )
     complete = unreadable_count == 0
     result = "Complete" if complete else "Incomplete (some paths unreadable)"
-    return [
-        ("Engine", engine),
+    fields = [("Engine", engine)]
+    if report is not None and report.mft_read is not None:
+        fields.append(("MFT read", report.mft_read.describe()))
+    fields += [
         ("Elapsed", elapsed),
         ("Throughput", throughput),
         ("Unreadable paths", f"{unreadable_count:,}"),
         ("Result", result),
-    ], complete
+    ]
+    return fields, complete
 
 
 def choose_engine(path, turbo_enabled):
@@ -139,11 +176,12 @@ def find_subtree_node(root_node, target_path):
 
 
 def get_records_using_cache(record_source, volume_root, progress_q, cancel_event):
-    """The whole volume's flat ParsedRecord list -- from a cached,
-    incrementally-refreshed copy when one exists and is still valid for
-    this volume, or a full MFT read+parse otherwise (which then populates
-    the cache for next time). `progress_q` may be None (the headless
-    mft_scan_cli.py elevated-helper path has no progress reporting).
+    """(records, MftRead): the whole volume's flat ParsedRecord list -- from
+    a cached, incrementally-refreshed copy when one exists and is still
+    valid for this volume, or a full MFT read+parse otherwise (which then
+    populates the cache for next time) -- plus which of the two happened.
+    `progress_q` may be None (the headless mft_scan_cli.py elevated-helper
+    path has no progress reporting).
 
     Never raises for a cache/journal-layer problem specifically: no cache
     yet, a locked or corrupt cache DB, no USN journal on this volume, a
@@ -167,14 +205,18 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
         # startup (see history.init_history_db()'s call site there) at all.
         turbo_cache.init_cache_db()
         cached = turbo_cache.get_cached_volume(volume_serial)
+        reason = "first scan of this drive"
     except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
         logger.warning(
             "Turbo Scan cache is unavailable for %r; scanning without it",
             volume_root,
             exc_info=True,
         )
+        reason = "cache unavailable"
 
-    if cached is not None and cached["record_size"] == record_source.record_size:
+    if cached is not None and cached["record_size"] != record_source.record_size:
+        reason = "drive layout changed"
+    elif cached is not None:
         try:
             records = _try_incremental_refresh(record_source, cached, progress_q, cancel_event)
         except (usn_journal.UsnJournalError, turbo_cache.TurboCacheCorruptError) as exc:
@@ -184,6 +226,12 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
                 volume_root,
                 exc,
             )
+            if isinstance(exc, turbo_cache.TurboCacheCorruptError):
+                reason = "cache was corrupt"
+            elif isinstance(exc, _CacheOutdated):
+                reason = str(exc)
+            else:
+                reason = "USN journal unreadable"
             try:
                 turbo_cache.invalidate_volume(volume_serial)
             except Exception:  # noqa: BLE001 - best-effort cleanup only
@@ -194,9 +242,13 @@ def get_records_using_cache(record_source, volume_root, progress_q, cancel_event
                 )
         else:
             if records is not None:
-                return records
+                return records, MftRead(incremental=True)
+            reason = "no journal position cached"
 
-    return _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, cancel_event)
+    records = _full_scan_and_cache(
+        record_source, volume_serial, volume_root, progress_q, cancel_event
+    )
+    return records, MftRead(incremental=False, full_read_reason=reason)
 
 
 def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, cancel_event):
@@ -274,9 +326,9 @@ def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
     handle = record_source.raw_handle
     state = usn_journal.query_journal(handle)  # raises UsnJournalError if no journal exists
     if state.journal_id != cached["usn_journal_id"]:
-        raise usn_journal.UsnJournalError("USN journal ID changed since this volume was cached")
+        raise _CacheOutdated("USN journal was recreated")
     if cached["next_usn"] < state.lowest_valid_usn:
-        raise usn_journal.UsnJournalError("USN journal has wrapped past this volume's saved cursor")
+        raise _CacheOutdated("USN journal wrapped since last scan")
 
     dirty, new_next_usn = usn_journal.read_journal_changes(
         handle,
@@ -314,11 +366,13 @@ def _try_incremental_refresh(record_source, cached, progress_q, cancel_event):
 
 def _run_turbo_in_process(path, progress_q, cancel_event):
     """Already elevated: read the volume and build the tree in this same
-    process, skipping the subprocess bridge entirely."""
+    process, skipping the subprocess bridge entirely. Returns (Node, MftRead)."""
     volume_root = get_volume_root(path)
     record_source = mft_volume.open_record_source(volume_root)
     try:
-        records = get_records_using_cache(record_source, volume_root, progress_q, cancel_event)
+        records, mft_read = get_records_using_cache(
+            record_source, volume_root, progress_q, cancel_event
+        )
     finally:
         record_source.close()
 
@@ -355,15 +409,17 @@ def _run_turbo_in_process(path, progress_q, cancel_event):
         finalized.size,
         finalized.file_count,
     )
-    return finalized
+    return finalized, mft_read
 
 
 def _run_turbo_via_elevated_helper(path, progress_q, cancel_event):
     """Not yet elevated: hand the raw-volume read off to a headless
     elevated helper process and reconstruct its result. The helper's own
     `--subtree` handling already resolves the subtree via find_subtree_node
-    before ever serializing, so `result` on success is that subtree's dict,
-    ready for dict_to_node -- see storage_scanner/mft_scan_cli.py.
+    before ever serializing, so `result["node"]` on success is that
+    subtree's dict, ready for dict_to_node, and `result["mft_read"]` is the
+    helper's MftRead -- see storage_scanner/mft_scan_cli.py. Returns
+    (Node, MftRead).
 
     `progress_q` is relayed live record counts from the elevated process
     via a polled progress file -- see run_elevated_scan_windows's and
@@ -373,10 +429,11 @@ def _run_turbo_via_elevated_helper(path, progress_q, cancel_event):
     ok, result = run_elevated_scan_windows(path, progress_q, cancel_event)
     if not ok:
         raise RuntimeError(result)
-    return dict_to_node(result)
+    return dict_to_node(result["node"]), MftRead.from_dict(result["mft_read"])
 
 
 def _attempt_turbo_scan(path, progress_q, cancel_event):
+    """(Node, MftRead) from whichever Turbo path fits this process."""
     if IS_ROOT:
         return _run_turbo_in_process(path, progress_q, cancel_event)
     return _run_turbo_via_elevated_helper(path, progress_q, cancel_event)
@@ -405,7 +462,7 @@ def scan_with_best_engine(path, progress_q, cancel_event, workers=None, turbo_en
     if engine == ENGINE_TURBO:
         start = time.perf_counter()
         try:
-            root_node = _attempt_turbo_scan(path, progress_q, cancel_event)
+            root_node, mft_read = _attempt_turbo_scan(path, progress_q, cancel_event)
         except Exception as exc:  # noqa: BLE001 - any Turbo failure falls back
             logger.warning(
                 "Turbo Scan of %r failed, falling back to Compatible Scan: %s",
@@ -421,6 +478,7 @@ def scan_with_best_engine(path, progress_q, cancel_event, workers=None, turbo_en
                 elapsed_seconds=elapsed,
                 file_count=root_node.file_count,
                 fallback_reason=None,
+                mft_read=mft_read,
             )
 
     start = time.perf_counter()

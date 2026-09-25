@@ -57,6 +57,10 @@ from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
 
+# The scan-details strip's second row: what the scan found, as opposed to
+# how it ran. One row of everything outgrew the default window width.
+_SCAN_OUTCOME_FIELDS = ("Unreadable paths", "Result")
+
 
 class MainWindowMixin:
     def _build_toolbar(self):
@@ -250,7 +254,7 @@ class MainWindowMixin:
         self.progress = ttk.Progressbar(status, mode="indeterminate", length=220)
 
         # Scan details strip: engine, timing and completeness of the last
-        # finished scan. Packed just above the status bar by
+        # finished scan, on two rows. Packed just above the status bar by
         # _show_scan_details, removed again when the next scan starts.
         self._scan_details_frame = ttk.Frame(self.root, padding=(8, 2))
 
@@ -261,20 +265,27 @@ class MainWindowMixin:
 
         self._last_inaccessible_paths = inaccessible_nodes
         fields, complete = turbo_scan.scan_indicators(report, len(inaccessible_nodes))
-        for label, value in fields:
-            ttk.Label(frame, text=f"{label}:", foreground=COLORS["muted"]).pack(side=LEFT)
-            if label == "Result":
-                color = COLORS["good"] if complete else COLORS["warning"]
-            else:
-                color = COLORS["fg"]
-            ttk.Label(frame, text=value, foreground=color).pack(side=LEFT, padx=(4, 0))
-            if label == "Unreadable paths" and inaccessible_nodes:
-                ttk.Button(frame, text="View", command=self._show_inaccessible_paths_window).pack(
-                    side=LEFT, padx=(6, 0)
-                )
-            ttk.Label(frame, text="·", foreground=COLORS["muted"]).pack(side=LEFT, padx=8)
-        # Drop the trailing separator after the last field.
-        frame.winfo_children()[-1].destroy()
+        rows = (
+            [field for field in fields if field[0] not in _SCAN_OUTCOME_FIELDS],
+            [field for field in fields if field[0] in _SCAN_OUTCOME_FIELDS],
+        )
+        for row_fields in rows:
+            row = ttk.Frame(frame)
+            row.pack(side=TOP, fill=X)
+            for label, value in row_fields:
+                ttk.Label(row, text=f"{label}:", foreground=COLORS["muted"]).pack(side=LEFT)
+                if label == "Result":
+                    color = COLORS["good"] if complete else COLORS["warning"]
+                else:
+                    color = COLORS["fg"]
+                ttk.Label(row, text=value, foreground=color).pack(side=LEFT, padx=(4, 0))
+                if label == "Unreadable paths" and inaccessible_nodes:
+                    ttk.Button(row, text="View", command=self._show_inaccessible_paths_window).pack(
+                        side=LEFT, padx=(6, 0)
+                    )
+                ttk.Label(row, text="·", foreground=COLORS["muted"]).pack(side=LEFT, padx=8)
+            # Drop the trailing separator after the row's last field.
+            row.winfo_children()[-1].destroy()
 
         frame.pack(side=BOTTOM, fill=X, after=self._statusbar_frame)
 

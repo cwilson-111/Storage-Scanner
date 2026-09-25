@@ -657,6 +657,9 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
         turbo_enabled=True,
     )
     assert first_report.engine == turbo_scan.ENGINE_TURBO
+    assert first_report.mft_read == turbo_scan.MftRead(
+        incremental=False, full_read_reason="first scan of this drive"
+    )
     reads_for_full_scan = kernel32.read_file_calls
     assert reads_for_full_scan > 0
 
@@ -669,6 +672,7 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
     )
 
     assert second_report.engine == turbo_scan.ENGINE_TURBO
+    assert second_report.mft_read == turbo_scan.MftRead(incremental=True)
     assert second_node.file_count == first_node.file_count == 2
     assert second_node.size == first_node.size == 3 + 5
     assert {c.name for c in second_node.children} == {"hello.txt", "Sub"}
@@ -732,6 +736,7 @@ def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(
     )
 
     assert second_report.engine == turbo_scan.ENGINE_TURBO
+    assert second_report.mft_read == turbo_scan.MftRead(incremental=True)
     assert {c.name for c in second_node.children} == {"hello.txt", "Sub", "new.txt"}
     assert second_node.file_count == 3  # hello.txt + Sub/inside.txt + new.txt
     assert second_node.size == 3 + 5 + 3  # "hi!" + "xyz12" + "NEW"

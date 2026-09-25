@@ -116,7 +116,7 @@ def run_mft_scan(argv):
         progress_q = _ProgressFileWriter(args.progress_file) if args.progress_file else None
         record_source = open_record_source(args.drive)
         try:
-            records = get_records_using_cache(
+            records, mft_read = get_records_using_cache(
                 record_source,
                 args.drive,
                 progress_q=progress_q,
@@ -139,7 +139,9 @@ def run_mft_scan(argv):
         finalize_subtree(subtree_node, frn_by_node_id)
 
         with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(node_to_dict(subtree_node), f)
+            # The GUI launching this helper is always the same build, so the
+            # envelope's shape never has to be negotiated.
+            json.dump({"node": node_to_dict(subtree_node), "mft_read": mft_read.to_dict()}, f)
     except Exception as exc:  # noqa: BLE001 - report any failure to the caller
         print(f"Turbo Scan failed: {exc}", file=sys.stderr)
         return EXIT_SCAN_ERROR
