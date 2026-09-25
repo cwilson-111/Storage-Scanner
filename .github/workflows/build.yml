@@ -48,6 +48,12 @@ jobs:
       - name: Run test suite with coverage
         run: pytest tests/
 
+      # Scale regressions: bytes per scanned file, per history scan and per
+      # Turbo cache record, and how many records a small-folder rescan loads,
+      # against benchmarks/baseline.json. Timings are printed, never gated.
+      - name: Scale benchmark gate
+        run: python benchmarks/scale.py --check
+
   build:
     needs: test
     runs-on: windows-latest

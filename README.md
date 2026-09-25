@@ -106,10 +106,11 @@ packages were bundled.
 - **Turbo Scan (Experimental, Windows only)** — an opt-in toggle (Tools ▸
   Settings) that reads the NTFS Master File Table directly instead of
   walking directories one at a time, with a persistent cache and NTFS USN
-  Journal incremental refresh so a repeat scan of an unchanged volume is
-  much faster than the first one. Falls back to the normal scan engine
-  automatically on anything it can't handle (non-NTFS volumes, network
-  shares, any failure). Off by default while it gets more real-world
+  Journal incremental refresh: a repeat scan of an unchanged volume is much
+  faster than the first one, and a repeat scan of one folder loads only
+  that folder from the cache, not the whole drive. Falls back to the normal
+  scan engine automatically on anything it can't handle (non-NTFS volumes,
+  network shares, any failure). Off by default while it gets more real-world
   mileage.
 
 ### Admin/elevated scanning
@@ -162,7 +163,9 @@ packages were bundled.
 
 ### History and trust
 - **Growth History** — compare any two saved snapshots of a path (not just
-  the two most recent), with per-folder growth/shrink breakdowns.
+  the two most recent), with per-folder growth/shrink breakdowns. Available
+  as soon as the app opens, from scans saved by earlier runs and earlier
+  versions; no rescan needed.
 - **Confidence-aware capacity forecasting** — fits a regression across your
   full scan history and reports a range and an explicit confidence level
   ("low"/"medium"/"high"), instead of a single number presented as certain.
