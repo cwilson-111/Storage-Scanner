@@ -2,9 +2,10 @@
 Task Scheduler / cron entries that run it.
 
 A scheduled scan is just the documented headless CLI
-(`--cli <path> --save-history --format none`), so it lands in scan history
-exactly like a scan run from the app — growth, forecasts, anomaly detection
-and budgets all pick it up. Nothing here runs a scan itself.
+(`--cli <path> --save-history --notify --format none`), so it lands in scan
+history exactly like a scan run from the app — growth, forecasts, anomaly
+detection and budgets all pick it up — and shows a desktop notification if
+the folder is over its budget. Nothing here runs a scan itself.
 
 On Windows the task is registered from a Task Scheduler XML definition
 (`schtasks /Create /XML`) rather than `/TR "<command line>"`: /TR caps the
@@ -16,7 +17,8 @@ soon as the PC is back on, and don't skip it on battery power.
 
 Kept free of Tk so every command and XML document can be unit-tested. The
 only side effects are create_windows_task()/delete_windows_task(), which
-call schtasks.exe for the current user (no admin needed).
+call schtasks.exe for the current user (no admin needed). Reading the
+registered tasks back is storage_scanner/scheduled_tasks.py.
 """
 
 import contextlib
@@ -44,7 +46,7 @@ ENTRY_SCRIPT = os.path.join(
     "Storage-Scanner.py",
 )
 
-_WEEKDAY_ELEMENTS = {
+WEEKDAY_ELEMENTS = {
     "MON": "Monday",
     "TUE": "Tuesday",
     "WED": "Wednesday",
@@ -116,7 +118,15 @@ def app_launch_args(frozen=None, executable=None, script=None):
 def scan_command(scheduled, launch_args=None):
     """The full argv a scheduler runs for one scheduled scan."""
     launch_args = launch_args if launch_args is not None else app_launch_args()
-    return [*launch_args, "--cli", scheduled.path, "--save-history", "--format", "none"]
+    return [
+        *launch_args,
+        "--cli",
+        scheduled.path,
+        "--save-history",
+        "--notify",
+        "--format",
+        "none",
+    ]
 
 
 def task_name(scheduled):
@@ -150,7 +160,7 @@ def windows_task_xml(scheduled, command=None, today=None):
     else:
         schedule_xml = (
             "<ScheduleByWeek><DaysOfWeek>"
-            f"<{_WEEKDAY_ELEMENTS[scheduled.weekday]} />"
+            f"<{WEEKDAY_ELEMENTS[scheduled.weekday]} />"
             "</DaysOfWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek>"
         )
 
@@ -198,8 +208,8 @@ def windows_create_args(scheduled, xml_path):
     return ["schtasks", "/Create", "/TN", task_name(scheduled), "/XML", xml_path, "/F"]
 
 
-def windows_delete_args(scheduled):
-    return ["schtasks", "/Delete", "/TN", task_name(scheduled), "/F"]
+def windows_delete_args(name):
+    return ["schtasks", "/Delete", "/TN", name, "/F"]
 
 
 def cron_line(scheduled, command=None):
@@ -256,5 +266,6 @@ def create_windows_task(scheduled):
             os.remove(xml_path)
 
 
-def delete_windows_task(scheduled):
-    return _run_schtasks(windows_delete_args(scheduled))
+def delete_windows_task(name):
+    """Removes the task registered under `name` (see task_name())."""
+    return _run_schtasks(windows_delete_args(name))

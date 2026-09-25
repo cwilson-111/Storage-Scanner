@@ -126,3 +126,55 @@ def test_save_history_failure_returns_scan_error(tmp_path, monkeypatch, capsys):
 
     assert code == EXIT_SCAN_ERROR
     assert "disk is full" in capsys.readouterr().err
+
+
+def _over_budget_folder(tmp_path, monkeypatch):
+    import history
+    from storage_scanner.scan_history import normalize_scan_path
+
+    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history.init_history_db()
+    scanned = tmp_path / "scanned"
+    scanned.mkdir()
+    (scanned / "a.txt").write_text("x" * 100)
+    history.set_budget(normalize_scan_path(str(scanned)), 10)
+    return scanned
+
+
+def test_notify_shows_a_notification_when_over_budget(tmp_path, monkeypatch, capsys):
+    from storage_scanner import notify
+
+    scanned = _over_budget_folder(tmp_path, monkeypatch)
+    shown = []
+    monkeypatch.setattr(notify, "notify", lambda title, body: shown.append(body) or (True, ""))
+
+    code = run_cli([str(scanned), "--save-history", "--notify", "--format", "none"])
+
+    assert code == EXIT_OK
+    assert len(shown) == 1
+    assert str(scanned) in shown[0]
+
+
+def test_no_notification_without_the_flag(tmp_path, monkeypatch, capsys):
+    from storage_scanner import notify
+
+    scanned = _over_budget_folder(tmp_path, monkeypatch)
+    shown = []
+    monkeypatch.setattr(notify, "notify", lambda title, body: shown.append(body) or (True, ""))
+
+    run_cli([str(scanned), "--save-history", "--format", "none"])
+
+    assert shown == []
+    assert "Over budget" in capsys.readouterr().err
+
+
+def test_failed_notification_is_reported_but_scan_still_succeeds(tmp_path, monkeypatch, capsys):
+    from storage_scanner import notify
+
+    scanned = _over_budget_folder(tmp_path, monkeypatch)
+    monkeypatch.setattr(notify, "notify", lambda title, body: (False, "no D-Bus session"))
+
+    code = run_cli([str(scanned), "--save-history", "--notify", "--format", "none"])
+
+    assert code == EXIT_OK
+    assert "no D-Bus session" in capsys.readouterr().err

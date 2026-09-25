@@ -8,6 +8,8 @@ storage_scanner/schedule.py — this file is only the windows around them.
 """
 
 import os
+import queue
+import threading
 from tkinter import (
     BOTH,
     BOTTOM,
@@ -30,12 +32,22 @@ from storage_scanner.export import export_to_file
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_WINDOWS, resource_path
+from storage_scanner.scheduled_tasks import list_windows_tasks
 from storage_scanner.settings import COLORS
 
 _EXPORT_FILE_TYPES = {
     "csv": [("CSV (one row per file and folder)", "*.csv")],
     "json": [("JSON (nested folder tree)", "*.json")],
 }
+
+
+def _when_text(scheduled):
+    day = "day" if scheduled.frequency == "daily" else scheduled.weekday.title()
+    return f"Every {day} at {scheduled.time}"
+
+
+def _moment_text(moment):
+    return moment.strftime("%Y-%m-%d %H:%M") if moment is not None else "—"
 
 
 class AutomationMixin:
@@ -85,7 +97,7 @@ class AutomationMixin:
         self._schedule_win = win
         win.configure(bg=COLORS["bg"])
         win.title("Schedule Scans")
-        win.geometry("760x470")
+        win.geometry("860x700" if IS_WINDOWS else "760x470")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -108,9 +120,11 @@ class AutomationMixin:
             text=(
                 f"Runs a headless scan through {scheduler} and saves it to scan history, "
                 "exactly like a scan from this window, so Growth History, forecasts, "
-                "anomalies and budgets include it. It runs as you, without admin rights, "
+                "anomalies and budgets include it. If the folder is over its budget, "
+                "you get a desktop notification. It runs as you, without admin rights, "
                 "so folders only an administrator can read are skipped. The app does "
-                "not need to be open."
+                "not need to be open. Schedules saved before notifications existed "
+                "need to be saved again to get them."
             ),
         ).pack(side=TOP, fill=X)
 
@@ -172,7 +186,7 @@ class AutomationMixin:
             padx=8,
             pady=6,
         )
-        preview.pack(side=TOP, fill=BOTH, expand=True, padx=10)
+        preview.pack(side=TOP, fill=X if IS_WINDOWS else BOTH, expand=not IS_WINDOWS, padx=10)
 
         status_var = StringVar()
         ttk.Label(win, textvariable=status_var, padding=(10, 4), wraplength=720, justify=LEFT).pack(
@@ -193,14 +207,9 @@ class AutomationMixin:
                 return schedule.cron_line(scheduled)
 
             scheduled.validate()
-            when = (
-                "Every day"
-                if scheduled.frequency == "daily"
-                else f"Every {scheduled.weekday.title()}"
-            )
             return (
                 f"Task: {schedule.task_name(scheduled)}\n"
-                f"When: {when} at {scheduled.time}, or as soon as the PC is back on "
+                f"When: {_when_text(scheduled)}, or as soon as the PC is back on "
                 "if that time was missed\n"
                 f"Runs: {schedule.display_command(schedule.scan_command(scheduled))}"
             )
@@ -255,6 +264,7 @@ class AutomationMixin:
                     f'Scheduled "{schedule.task_name(scheduled)}". It appears in Task '
                     "Scheduler under that name; scheduling this folder again replaces it."
                 )
+                load_tasks()
             else:
                 logger.warning("schtasks /Create failed: %s", message)
                 messagebox.showerror(
@@ -263,44 +273,152 @@ class AutomationMixin:
                     parent=win,
                 )
 
-        def remove_task():
-            scheduled = current_schedule()
-
-            if not messagebox.askyesno(
-                "Schedule Scans",
-                f'Remove the scheduled scan "{schedule.task_name(scheduled)}"?',
-                parent=win,
-            ):
-                return
-
-            ok, message = schedule.delete_windows_task(scheduled)
-            status_var.set(
-                "Scheduled scan removed."
-                if ok
-                else f"Nothing removed: {message or 'no scheduled scan for this folder'}"
-            )
-
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
         button_bar.pack(side=BOTTOM, fill=X)
 
-        if IS_WINDOWS:
-            ttk.Button(
-                button_bar,
-                text="Create Scheduled Task",
-                style="Primary.TButton",
-                command=create_task,
-            ).pack(side=LEFT)
-            ttk.Button(button_bar, text="Remove for This Folder", command=remove_task).pack(
-                side=LEFT,
-                padx=6,
-            )
-            ttk.Button(button_bar, text="Copy Command", command=copy_entry).pack(side=RIGHT)
-        else:
+        if not IS_WINDOWS:
             ttk.Button(
                 button_bar,
                 text="Copy Crontab Line",
                 style="Primary.TButton",
                 command=copy_entry,
             ).pack(side=LEFT)
+            refresh()
+            return
+
+        ttk.Button(
+            button_bar,
+            text="Create Scheduled Task",
+            style="Primary.TButton",
+            command=create_task,
+        ).pack(side=LEFT)
+        ttk.Button(button_bar, text="Copy Command", command=copy_entry).pack(side=RIGHT)
+
+        # -- Scans already scheduled on this PC -- #
+
+        list_header = ttk.Frame(win, padding=(10, 6, 10, 2))
+        list_header.pack(side=TOP, fill=X)
+        list_status_var = StringVar()
+        ttk.Label(list_header, text="Scheduled scans on this PC").pack(side=LEFT)
+        ttk.Label(list_header, textvariable=list_status_var, foreground=COLORS["muted"]).pack(
+            side=LEFT,
+            padx=8,
+        )
+
+        list_frame = ttk.Frame(win, padding=(10, 0, 10, 4))
+        list_frame.pack(side=TOP, fill=BOTH, expand=True)
+        cols = ("folder", "when", "last", "result", "next", "notes")
+        tv = ttk.Treeview(list_frame, columns=cols, show="headings", selectmode="browse", height=5)
+        for col, heading, width, stretch in (
+            ("folder", "Folder", 190, True),
+            ("when", "When", 130, False),
+            ("last", "Last run", 115, False),
+            ("result", "Result", 140, False),
+            ("next", "Next run", 115, False),
+            ("notes", "Needs attention", 200, True),
+        ):
+            tv.heading(col, text=heading)
+            tv.column(col, width=width, anchor=W, stretch=stretch)
+        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        tv.tag_configure("even", background=COLORS["panel"])
+        tv.tag_configure("odd", background=COLORS["stripe"])
+        tv.tag_configure("attention", foreground=COLORS["warning"])
+
+        iid_to_task = {}
+        results = queue.Queue()
+
+        def show_tasks(tasks, error):
+            tv.delete(*tv.get_children())
+            iid_to_task.clear()
+
+            if tasks is None:
+                logger.warning("Listing scheduled scans failed: %s", error)
+                list_status_var.set(f"Couldn't read Task Scheduler: {error}")
+                return
+
+            list_status_var.set(
+                f"{len(tasks)} scheduled — select one to change it" if tasks else "None yet"
+            )
+            for index, task in enumerate(tasks):
+                problems = task.problems()
+                scheduled = task.scheduled
+                iid = tv.insert(
+                    "",
+                    END,
+                    values=(
+                        scheduled.path if scheduled else task.name,
+                        _when_text(scheduled) if scheduled else "—",
+                        _moment_text(task.last_run),
+                        task.last_result_text(),
+                        _moment_text(task.next_run),
+                        "; ".join(problems),
+                    ),
+                    tags=("odd" if index % 2 else "even", *(("attention",) if problems else ())),
+                )
+                iid_to_task[iid] = task
+
+        def poll_tasks():
+            if not win.winfo_exists():
+                return
+            try:
+                tasks, error = results.get_nowait()
+            except queue.Empty:
+                win.after(150, poll_tasks)
+                return
+            show_tasks(tasks, error)
+
+        def load_tasks():
+            list_status_var.set("Reading Task Scheduler…")
+            threading.Thread(target=lambda: results.put(list_windows_tasks()), daemon=True).start()
+            win.after(150, poll_tasks)
+
+        def select_task(_event=None):
+            task = iid_to_task.get(next(iter(tv.selection()), None))
+            if task is None or task.scheduled is None:
+                return
+
+            scheduled = task.scheduled
+            path_var.set(scheduled.path)
+            frequency_var.set(scheduled.frequency)
+            weekday_var.set(scheduled.weekday)
+            time_var.set(scheduled.time)
+            status_var.set(
+                "Loaded into the form above. Change it and click Create Scheduled Task "
+                "to replace it" + (" and fix what needs attention." if task.problems() else ".")
+            )
+
+        def remove_task():
+            task = iid_to_task.get(next(iter(tv.selection()), None))
+            if task is None:
+                status_var.set("Select a scheduled scan in the list to remove it.")
+                return
+
+            if not messagebox.askyesno(
+                "Schedule Scans",
+                f'Remove the scheduled scan "{task.name}"?',
+                parent=win,
+            ):
+                return
+
+            ok, message = schedule.delete_windows_task(task.name)
+            if ok:
+                status_var.set("Scheduled scan removed.")
+            else:
+                logger.warning("schtasks /Delete failed: %s", message)
+                status_var.set(f"Nothing removed: {message}")
+            load_tasks()
+
+        tv.bind("<<TreeviewSelect>>", select_task)
+
+        list_buttons = ttk.Frame(win, padding=(10, 0, 10, 6))
+        list_buttons.pack(side=TOP, fill=X)
+        ttk.Button(list_buttons, text="Remove Selected", command=remove_task).pack(side=LEFT)
+        ttk.Button(list_buttons, text="Refresh List", command=load_tasks).pack(side=LEFT, padx=6)
 
         refresh()
+        load_tasks()

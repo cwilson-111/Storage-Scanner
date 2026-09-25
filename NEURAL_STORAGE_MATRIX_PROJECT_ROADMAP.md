@@ -573,6 +573,87 @@ verified:** registering a real task with `schtasks` on this machine (it
 would create a real scheduled task, so left for a deliberate manual test),
 and whether FortiClient objects to task creation or to the scheduled run.
 
-Not built: a list of existing scheduled scans inside the app (they're
-visible in Task Scheduler under "Storage Scanner scan - …"), and scheduling
-elevated scans (a scheduled scan never runs as admin).
+Not built: scheduling elevated scans (a scheduled scan never runs as admin).
+The in-app list of existing scheduled scans is done; see below.
+
+## Over-budget notifications from scheduled scans — ✅ done (2026-09-24)
+
+Before this, a scheduled scan that found its folder over budget only printed
+"Over budget" to stderr, which nobody sees when the scan runs from Task
+Scheduler, so you found out the next time you opened the app.
+
+- **`--notify`** (CLI, with `--save-history`): shows a desktop notification
+  if the scanned folder is over its budget. `schedule.scan_command` now
+  always passes it. Existing tasks keep their old command until the
+  schedule is saved again.
+- **`storage_scanner/notify.py`**, standard library only:
+  - Windows: a toast through Windows PowerShell 5.1's WinRT bridge. It
+    shows as coming from "Windows PowerShell", since an unpackaged app has
+    no AppUserModelID of its own.
+  - macOS: `osascript`.
+  - Linux: `notify-send`.
+  - Folder paths are passed as data, never as code: the toast XML is
+    escaped and goes in an environment variable, and osascript/notify-send
+    get the text as separate arguments.
+- **Failure is reported, not hidden.** Windows accepts a toast and silently
+  drops it when notifications are turned off for the account
+  (`HKCU\...\PushNotifications\ToastEnabled = 0`), so that's checked first.
+  Any failure goes to stderr and the app log; the exit code stays 0, since
+  the scan and history save succeeded. The launch-time budget banner still
+  shows the breach the next time the app opens.
+- **Budget matching is unchanged:** exact path only. A scheduled scan of
+  `C:\` doesn't check a budget on `C:\Users\me\Downloads`. The GUI and the
+  launch-time check behave the same way.
+
+Verified: unit tests for the message, escaping, the macOS/Linux command
+builders, and the CLI calling or not calling notify. The real scheduled argv
+was run end-to-end against an isolated history DB with an over-budget folder
+named `Tom & Jerry's Downloads`. On the dev machine Windows notifications are
+turned off, and the run correctly reported that instead of claiming
+success. The PowerShell toast script itself, run directly with that check
+skipped, loads the WinRT types, parses the escaped XML and posts the toast
+with exit code 0 and no stderr. **Not yet verified:** a toast visibly
+appearing with notifications turned on.
+
+## Scheduled scans list in the app — ✅ done (2026-09-24)
+
+Closes the "Not built: a list of existing scheduled scans" gap above. On
+Windows, Schedule Scans now lists every registered "Storage Scanner scan -
+…" task: folder, schedule, last run, result, next run, and anything that
+needs attention. The flags are:
+
+- saved before over-budget notifications existed (no `--notify`);
+- the app has moved since the task was saved (the `.exe`, or from source
+  the interpreter or `Storage-Scanner.py`, no longer exists);
+- disabled in Task Scheduler;
+- not a scan this app created (edited by hand in Task Scheduler, say).
+
+Results read as plain words ("Succeeded", "Hasn't run yet", "Failed: program
+not found", or the exit code or HRESULT). Selecting a row loads it into the
+form, so saving it again fixes the first three flags. **Remove Selected**
+deletes the task by its registered name. That replaces "Remove for This
+Folder", which rebuilt the name from the form and so could miss a task.
+
+- **`storage_scanner/scheduled_tasks.py`** reads tasks back through
+  PowerShell's `Get-ScheduledTask`/`Export-ScheduledTask`, not `schtasks
+  /Query`. `schtasks` prints in the console's 8-bit code page (non-ASCII
+  folder names come back mangled), and its CSV headers and dates are
+  localized. Each task's own XML is parsed back into a `ScheduledScan`,
+  with a Windows command-line splitter that inverts
+  `subprocess.list2cmdline`. It takes about 3 s (the ScheduledTasks module
+  loads slowly), so the window loads it on a background thread.
+- `schedule.py` stays the writer; `delete_windows_task` now takes a task
+  name.
+
+Verified: unit tests for the splitter (round-trips through `list2cmdline`,
+including trailing backslashes, embedded quotes, UNC and non-ASCII paths),
+saved-schedule round trips, each flag, the result wording, and PowerShell
+failure and unreadable output. The real `list_windows_tasks()` on this
+machine returns an empty list in 3 s. The same pipeline pointed at three
+real third-party tasks parsed their exported XML, timestamps and results
+correctly and flagged them as not created by this app. The real window,
+fed three synthetic tasks, listed and flagged them, and selecting one
+filled the form. **Not verified:** a screenshot of the window, since a
+full-screen app was in the foreground during the test run, and the list
+against a task actually registered by this app, since that still needs the
+deliberate manual `schtasks` test noted above.

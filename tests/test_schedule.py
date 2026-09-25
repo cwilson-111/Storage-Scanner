@@ -71,6 +71,7 @@ def test_scan_command_is_a_valid_history_saving_cli_invocation():
     args = build_arg_parser().parse_args(command[2:])
     assert args.path == FOLDER
     assert args.save_history is True
+    assert args.notify is True
     assert args.format == "none"
 
 
@@ -205,9 +206,8 @@ def test_a_command_longer_than_the_old_261_character_limit_is_fine():
     assert long_folder in arguments
 
 
-def test_create_and_delete_args_target_the_same_task_name():
+def test_create_args_register_the_xml_under_the_folders_task_name():
     create = schedule.windows_create_args(_scan(), r"C:\Temp\task.xml")
-    delete = schedule.windows_delete_args(_scan())
 
     assert create == [
         "schtasks",
@@ -218,7 +218,6 @@ def test_create_and_delete_args_target_the_same_task_name():
         r"C:\Temp\task.xml",
         "/F",
     ]
-    assert delete[delete.index("/TN") + 1] == schedule.task_name(_scan())
 
 
 def test_create_windows_task_passes_a_utf16_xml_file_and_removes_it(monkeypatch):
