@@ -44,12 +44,29 @@ DB_NAME = APP_DATA_DIR / "storage_history.db"
 logging.getLogger("storage_scanner").debug("Using database: %s", DB_NAME)
 
 
+# How long a connection waits for another process's write lock before
+# failing with "database is locked" (Python's default is 5 s). Saves and
+# settings hold that lock for well under a second. The one long holder is
+# the one-time migration in init_history_db (history_schema, plus its
+# VACUUM): 4.9 s for 1.2 million version 1 folder rows and 9.6 s for 1.8
+# million, about 5 us a row. 60 s covers ~11 million rows -- a year and a
+# half of daily 20,000-folder scans with nothing ever pruned, far beyond
+# any real version 1 history -- so a scheduled scan that starts while the
+# app is migrating waits for it instead of losing its save. It only ever
+# delays anything while another process really is holding the lock.
+BUSY_TIMEOUT_SECONDS = 60
+
+
+def _connect(**kwargs):
+    return sqlite3.connect(DB_NAME, timeout=BUSY_TIMEOUT_SECONDS, **kwargs)
+
+
 def init_history_db():
     """Create the history tables, or migrate an older layout to the current
     one (storage_scanner.history_schema), in a single transaction. Cheap
     and safe to call on every startup and before every CLI save: once the
     schema is current it changes nothing."""
-    conn = sqlite3.connect(DB_NAME, isolation_level=None)
+    conn = _connect(isolation_level=None)
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
@@ -85,7 +102,7 @@ def init_history_db():
 def get_app_metadata(key, default=None):
     """Read one value from the app_metadata key/value table (e.g. the
     schema version, or the update-checker's last-checked timestamp)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("SELECT value FROM app_metadata WHERE key = ?", (key,))
     row = cur.fetchone()
@@ -95,7 +112,7 @@ def get_app_metadata(key, default=None):
 
 def set_app_metadata(key, value):
     """Set (or update) one value in the app_metadata key/value table."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute(
         """
@@ -127,7 +144,7 @@ def save_scan_snapshot(
 
     created_at = datetime.now().isoformat(timespec="seconds")
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     conn.execute("PRAGMA temp_store = MEMORY")
     try:
         with conn:
@@ -225,7 +242,7 @@ def _prune_scans(cur, scan_path, newest_scan_id, now_iso):
 
 
 def get_previous_scan_id(scan_path, current_scan_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
@@ -247,7 +264,7 @@ def get_previous_scan_id(scan_path, current_scan_id):
 
 
 def get_latest_scan_id(scan_path):
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
@@ -271,7 +288,7 @@ def get_most_recent_scan_path():
     """The scan_path of the newest saved scan of anything, or None if
     nothing has been scanned yet -- where Growth History opens when there's
     no scan this session to go by."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     row = conn.execute("SELECT scan_path FROM scans ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
     return row[0] if row else None
@@ -284,7 +301,7 @@ def list_scans_for_path(scan_path, limit=200):
     `get_growth_summary` already accept any two scan ids (not just
     "latest"/"previous"), so the UI just needs a list to choose from.
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
@@ -309,7 +326,7 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     ones last), each against the same folder in the previous scan -- or
     against 0 if the previous scan didn't have it. Folders only the
     previous scan had aren't listed. Equal growth is ordered by path."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
@@ -367,7 +384,7 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
 
 
 def get_growth_summary(current_scan_id, previous_scan_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
@@ -456,16 +473,23 @@ def get_growth_summary(current_scan_id, previous_scan_id):
 
 
 def get_scan_history(scan_path, limit=30):
-    conn = sqlite3.connect(DB_NAME)
+    """(created_at, total_size, file_count, folder_count) for the newest
+    `limit` scans of `scan_path`, oldest first -- the order forecasting,
+    anomaly detection and the usage chart read a trend in."""
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
         """
         SELECT created_at, total_size, file_count, folder_count
-        FROM scans
-        WHERE scan_path = ?
-        ORDER BY created_at ASC
-        LIMIT ?
+        FROM (
+            SELECT id, created_at, total_size, file_count, folder_count
+            FROM scans
+            WHERE scan_path = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+        )
+        ORDER BY created_at ASC, id ASC
     """,
         (scan_path, limit),
     )
@@ -478,24 +502,29 @@ def get_scan_history(scan_path, limit=30):
 
 def get_scan_ids_by_created_at(scan_path, limit=30):
     """{created_at: scan_id} for the same window get_scan_history(scan_path,
-    limit) returns. A separate lookup rather than adding an id column to
-    get_scan_history()'s own row shape, since several existing callers
-    (forecasting.py, anomaly_detection.py, the matplotlib chart) already
-    unpack its rows positionally and have no use for the id. Lets a caller
-    that already has anomaly_detection.Anomaly objects (keyed by
-    created_at) map one back to the scan ids whose comparison produced it,
-    e.g. to find which folder was most responsible via get_folder_growth().
+    limit) returns: the newest `limit` scans. A separate lookup rather than
+    adding an id column to get_scan_history()'s own row shape, since
+    several existing callers (forecasting.py, anomaly_detection.py, the
+    matplotlib chart) already unpack its rows positionally and have no use
+    for the id. Lets a caller that already has anomaly_detection.Anomaly
+    objects (keyed by created_at) map one back to the scan ids whose
+    comparison produced it, e.g. to find which folder was most responsible
+    via get_folder_growth().
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
         """
         SELECT created_at, id
-        FROM scans
-        WHERE scan_path = ?
-        ORDER BY created_at ASC
-        LIMIT ?
+        FROM (
+            SELECT id, created_at
+            FROM scans
+            WHERE scan_path = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+        )
+        ORDER BY created_at ASC, id ASC
     """,
         (scan_path, limit),
     )
@@ -515,7 +544,7 @@ def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_
     storage_scanner.audit.recycle_and_log, regardless of which window
     triggered it.
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     created_at = datetime.now().isoformat(timespec="seconds")
@@ -547,7 +576,7 @@ def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_
 
 def get_audit_log(limit=500):
     """Every recorded audit entry, most recent first."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
@@ -568,7 +597,7 @@ def get_audit_log(limit=500):
 
 def set_budget(path, threshold_bytes):
     """Create or update the size budget for `path` (upsert, one per path)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     created_at = datetime.now().isoformat(timespec="seconds")
 
@@ -587,7 +616,7 @@ def set_budget(path, threshold_bytes):
 
 def list_budgets():
     """Every defined budget: [(id, path, threshold_bytes, created_at), ...]."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("SELECT id, path, threshold_bytes, created_at FROM budgets ORDER BY path")
     rows = cur.fetchall()
@@ -596,7 +625,7 @@ def list_budgets():
 
 
 def delete_budget(budget_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
     conn.commit()
@@ -631,7 +660,7 @@ def record_install_locations_snapshot(locations):
     (only then eligible to be zeroed), never both.
     """
     now = datetime.now().isoformat(timespec="seconds")
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
 
     normalized_locations = [
@@ -673,7 +702,7 @@ def get_orphaned_install_locations():
     """[(install_location, display_name, first_seen_at,
     last_seen_installed_at), ...] for every location whose owning app is
     no longer installed as of the most recent snapshot."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("""
         SELECT install_location, display_name, first_seen_at, last_seen_installed_at
@@ -693,7 +722,7 @@ def get_known_install_location_count():
     docstring), so this is what the UI checks to show a "still learning"
     note on a first run rather than silently showing zero results with
     no explanation."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM known_install_locations")
     count = cur.fetchone()[0]
@@ -705,10 +734,11 @@ def get_latest_scan_snapshot(scan_path):
     """(created_at, total_size, file_count, folder_count) for the most
     recent scan of `scan_path`, or None if it's never been scanned.
 
-    Distinct from get_scan_history() (oldest-first, for charting a whole
-    trend) — this is the single latest data point, for budget checks.
+    Distinct from get_scan_history() (a window of scans, oldest first, for
+    charting a trend) — this is the single latest data point, for budget
+    checks.
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute(
         """

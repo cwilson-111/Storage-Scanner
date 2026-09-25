@@ -122,6 +122,47 @@ def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path,
     assert mapping == {"2024-01-01T00:00:00": 1, "2024-02-01T00:00:00": 2}
 
 
+def test_a_limited_scan_history_is_the_newest_scans_oldest_first(tmp_path, monkeypatch):
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+    conn = sqlite3.connect(db_path)
+    for total_size, created_at in [
+        (100, "2024-01-01T00:00:00"),
+        (200, "2024-02-01T00:00:00"),
+        (300, "2024-03-01T00:00:00"),
+        (350, "2024-03-01T00:00:00"),  # saved in the same second as the one before
+        (400, "2024-04-01T00:00:00"),
+    ]:
+        conn.execute(
+            "INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, "
+            "folder_count, created_at) VALUES ('C:/Example', ?, 1000, 10, 3, ?)",
+            (total_size, created_at),
+        )
+    conn.execute(
+        "INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, "
+        "folder_count, created_at) VALUES ('C:/Other', 999, 1000, 10, 3, '2024-05-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    rows = history.get_scan_history("C:/Example", limit=2)
+    ids = history.get_scan_ids_by_created_at("C:/Example", limit=2)
+
+    assert [(created_at, size) for created_at, size, _files, _folders in rows] == [
+        ("2024-03-01T00:00:00", 350),
+        ("2024-04-01T00:00:00", 400),
+    ]
+    assert ids == {"2024-03-01T00:00:00": 4, "2024-04-01T00:00:00": 5}
+    assert [row[1] for row in history.get_scan_history("C:/Example", limit=10)] == [
+        100,
+        200,
+        300,
+        350,
+        400,
+    ]
+
+
 def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
     monkeypatch.setattr(history, "DB_NAME", str(db_path))

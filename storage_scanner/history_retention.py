@@ -23,8 +23,11 @@ What the readers need, and why this policy gives it to them:
   depends on.
 - Anomaly detection (storage_scanner.anomaly_detection) scores each
   scan-to-scan change against the path's other changes. Thinned scans are
-  days, weeks or months apart, so it compares growth per day rather than
-  per scan (see its _deltas) -- a week-long gap is not a spike.
+  days, weeks or months apart, so a gap of k days is scored as k days of
+  growth: expected to be k times the usual daily rate, with k times a
+  day's variance (see its _z_score). A month of ordinary growth is then no
+  spike, and a week's averaged-out growth doesn't make one day's ordinary
+  noise look like one either; evenly spaced scans score as they always did.
 - Growth details and the snapshot picker work on any two scans still kept.
 """
 
