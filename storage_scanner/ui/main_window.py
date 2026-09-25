@@ -105,6 +105,12 @@ class MainWindowMixin:
         )
         self.tools_btn.pack(side=LEFT, padx=6)
 
+        # The Cleanup Cart's own persistent indicator — kept current by
+        # CartMixin._refresh_cart_indicator, called after every
+        # add/remove/clear/execute (see storage_scanner/ui/cart_window.py).
+        self.cart_btn = ttk.Button(bar_frame, text="🛒 Cart", command=self.show_cart)
+        self.cart_btn.pack(side=LEFT)
+
         # Grouped into submenus that follow the order you'd actually use them
         # in — explore what's there, clean some of it up, then check history/
         # trust — rather than one flat, ever-growing list of unrelated tools.
@@ -224,6 +230,7 @@ class MainWindowMixin:
         self.menu.add_command(label=f"Open in {FILE_MANAGER_NAME}", command=self._open_in_explorer)
         self.menu.add_command(label="Copy path", command=self._copy_path)
         self.menu.add_command(label="Set Budget…", command=self._set_budget_for_selected)
+        self.menu.add_command(label="Add to Cart", command=self._add_selected_to_cart)
         self.menu.add_separator()
         self.menu.add_command(label=f"Delete (to {TRASH_NAME})", command=self._delete_selected)
         self.tree.bind("<Button-3>", self._show_menu)
@@ -526,6 +533,8 @@ class MainWindowMixin:
         self._last_live_refresh = 0.0
         self.duplicates = None
         self._duplicates_scan_root = None
+        self.cart.clear()
+        self._refresh_cart_indicator()
 
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
@@ -575,6 +584,8 @@ class MainWindowMixin:
         self._last_live_refresh = 0.0
         self.duplicates = None
         self._duplicates_scan_root = None
+        self.cart.clear()
+        self._refresh_cart_indicator()
 
         self.scan_btn.config(state="disabled")
         self.elevate_btn.config(state="disabled")
@@ -1160,29 +1171,16 @@ class MainWindowMixin:
             self._forget_subtree(child)
         self.node_by_iid.pop(iid, None)
 
-    def _delete_selected(self):
-        iid = self.tree.focus()
+    def _remove_main_tree_row(self, iid):
+        """Remove a node's row from the main tree after it's been deleted,
+        rolling the removed size/count back out of every ancestor and
+        refreshing whatever changed on screen. Shared by _delete_selected
+        and the Cleanup Cart's batch executor (cart_window.py) for any
+        cart item that still has a live row in this tree.
+        """
         node = self.node_by_iid.get(iid)
         if not node:
             return
-        kind = "folder" if node.is_dir else "file"
-        if not messagebox.askyesno(
-            f"Delete to {TRASH_NAME}",
-            f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
-            f"{human_size(node.size)}" + (f" in {node.file_count:,} files" if node.is_dir else ""),
-            icon="warning",
-        ):
-            return
-
-        if not recycle_and_log(node, source="Main tree"):
-            messagebox.showerror(
-                "Storage Scanner",
-                f"Could not delete:\n{node.path}\n\n"
-                "It may be in use, protected, or require admin rights.",
-            )
-            return
-
-        self._remove_from_duplicate_cache(node)
 
         parent_iid = self.tree.parent(iid)
         parent_node = self.node_by_iid.get(parent_iid)
@@ -1217,6 +1215,31 @@ class MainWindowMixin:
                 f"in {self.root_node.file_count:,} files"
             )
 
+    def _delete_selected(self):
+        iid = self.tree.focus()
+        node = self.node_by_iid.get(iid)
+        if not node:
+            return
+        kind = "folder" if node.is_dir else "file"
+        if not messagebox.askyesno(
+            f"Delete to {TRASH_NAME}",
+            f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
+            f"{human_size(node.size)}" + (f" in {node.file_count:,} files" if node.is_dir else ""),
+            icon="warning",
+        ):
+            return
+
+        if not recycle_and_log(node, source="Main tree"):
+            messagebox.showerror(
+                "Storage Scanner",
+                f"Could not delete:\n{node.path}\n\n"
+                "It may be in use, protected, or require admin rights.",
+            )
+            return
+
+        self._remove_from_duplicate_cache(node)
+        self._remove_main_tree_row(iid)
+
     # -- Context menu actions ---------------------------------------------- #
     def _show_tools_menu(self):
         """Show the Tools dropdown under the Tools button."""
@@ -1236,6 +1259,12 @@ class MainWindowMixin:
 
     def _selected_node(self):
         return self.node_by_iid.get(self.tree.focus())
+
+    def _add_selected_to_cart(self):
+        node = self._selected_node()
+        if node:
+            self.cart.add(node, "Main tree")
+            self._refresh_cart_indicator()
 
     def _reveal(self, path, is_dir):
         try:

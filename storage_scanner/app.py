@@ -16,12 +16,14 @@ import webbrowser
 from tkinter import TOP, Tk, X, ttk
 
 from history import init_history_db
+from storage_scanner.cart import CartManager
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
 from storage_scanner.ui.audit_window import AuditMixin
 from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
+from storage_scanner.ui.cart_window import CartMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
@@ -43,6 +45,7 @@ class StorageScannerApp(
     AuditMixin,
     BudgetMixin,
     AutomationMixin,
+    CartMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root
@@ -99,6 +102,12 @@ class StorageScannerApp(
         self.duplicates = None
         self._duplicates_scan_root = None
 
+        # The Cleanup Cart: a cross-window queue of items to delete
+        # together (storage_scanner/cart.py). Session-only, same as
+        # self.duplicates above — reset alongside it wherever a rescan
+        # replaces self.root_node, since cart entries hold Node references
+        # tied to the old tree.
+        self.cart = CartManager()
         self.dup_stats = {
             "files_total": 0,
             "files_checked": 0,

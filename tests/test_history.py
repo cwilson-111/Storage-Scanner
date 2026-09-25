@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -181,3 +182,116 @@ def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
 
     assert len(history.get_audit_log(limit=3)) == 3
     assert len(history.get_audit_log(limit=100)) == 5
+
+
+def test_fresh_snapshot_has_no_orphans(tmp_path, monkeypatch):
+    """The very first snapshot ever taken can't find any orphans -- there's
+    nothing to compare against yet, by design (see history.py's own
+    known_install_locations docstring)."""
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+
+    history.record_install_locations_snapshot(
+        [
+            ("An App", "C:/Program Files/An App"),
+        ]
+    )
+
+    assert history.get_orphaned_install_locations() == []
+
+
+def test_a_location_missing_from_the_next_snapshot_becomes_orphaned(tmp_path, monkeypatch):
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+
+    # Snapshot 1: the app is installed.
+    history.record_install_locations_snapshot(
+        [
+            ("An App", "C:/Program Files/An App"),
+        ]
+    )
+    assert history.get_orphaned_install_locations() == []
+
+    # Snapshot 2: the app is gone -- its location is now an orphan candidate.
+    history.record_install_locations_snapshot([])
+
+    orphans = history.get_orphaned_install_locations()
+    assert len(orphans) == 1
+    install_location, display_name, first_seen_at, last_seen_installed_at = orphans[0]
+    assert install_location == os.path.normcase(os.path.normpath("C:/Program Files/An App"))
+    assert display_name == "An App"
+    assert first_seen_at == last_seen_installed_at  # only ever seen installed once
+
+
+def test_a_location_still_present_in_the_next_snapshot_is_not_orphaned(tmp_path, monkeypatch):
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+
+    history.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
+    history.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
+
+    assert history.get_orphaned_install_locations() == []
+
+
+def test_an_orphan_that_gets_reinstalled_is_no_longer_orphaned(tmp_path, monkeypatch):
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+
+    history.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
+    history.record_install_locations_snapshot([])  # now orphaned
+    assert len(history.get_orphaned_install_locations()) == 1
+
+    history.record_install_locations_snapshot(
+        [("An App", "C:/Program Files/An App")]
+    )  # reinstalled
+    assert history.get_orphaned_install_locations() == []
+
+
+def test_an_app_never_seen_installed_never_appears_as_an_orphan(tmp_path, monkeypatch):
+    """Guards against a same-session false positive: a location that has
+    never once been observed as currently_installed = 1 has no row at all
+    until it's actually seen installed, so it can never spontaneously
+    appear as an orphan just because it's absent from a snapshot."""
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+
+    # A location that was never in any prior snapshot, and isn't in this
+    # one either -- there's no row for it at all, so nothing can flag it.
+    history.record_install_locations_snapshot([("Other App", "C:/Program Files/Other App")])
+
+    assert history.get_orphaned_install_locations() == []
+
+
+def test_snapshot_upsert_updates_display_name_and_last_seen(tmp_path, monkeypatch):
+    """A location can legitimately be reused by a different app over time
+    (uninstall, then something else installs to the same path) -- the
+    stored display_name and last_seen_installed_at should always reflect
+    the most recent snapshot, not the first one ever seen."""
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+
+    history.record_install_locations_snapshot([("Old App", "C:/Program Files/Shared Path")])
+    history.record_install_locations_snapshot([])  # orphaned
+    history.record_install_locations_snapshot([("New App", "C:/Program Files/Shared Path")])
+
+    # Reinstalled (under a different app) -- no longer an orphan, and the
+    # stored name reflects whichever app is there now.
+    assert history.get_orphaned_install_locations() == []
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT display_name, currently_installed FROM known_install_locations "
+        "WHERE install_location = ?",
+        (os.path.normcase(os.path.normpath("C:/Program Files/Shared Path")),),
+    )
+    display_name, currently_installed = cur.fetchone()
+    conn.close()
+    assert display_name == "New App"
+    assert currently_installed == 1

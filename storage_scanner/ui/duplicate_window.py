@@ -772,7 +772,7 @@ class DuplicatesMixin:
                     iid_to_node.pop(iid, None)
                     iid_to_group.pop(iid, None)
                     tv.delete(iid)
-                    self._remove_node_from_scan_tree(node)
+                    self._remove_search_result_from_tree(node)
                     self._remove_from_duplicate_cache(node)
                 else:
                     failed.append(node.path)
@@ -786,6 +786,25 @@ class DuplicatesMixin:
                     parent=win,
                 )
 
+        def add_selected_to_cart():
+            selected = list(tv.selection())
+            keeper_iids = set(group_keeper_iid.values())
+            # Same exclusion as delete: a group's keeper can never be
+            # queued for deletion, even via the cart.
+            targets = [iid for iid in selected if iid in iid_to_node and iid not in keeper_iids]
+            if not targets:
+                messagebox.showinfo(
+                    "Storage Scanner",
+                    "Select at least one duplicate copy that isn't a group's keeper.",
+                    parent=win,
+                )
+                return
+            for iid in targets:
+                node = iid_to_node.get(iid)
+                if node:
+                    self.cart.add(node, "Duplicate Files")
+            self._refresh_cart_indicator()
+
         ttk.Button(
             button_bar,
             text=f"Reveal in {FILE_MANAGER_NAME}",
@@ -797,6 +816,12 @@ class DuplicatesMixin:
             text="Copy Path",
             command=copy_selected_path,
         ).pack(side=LEFT, padx=6)
+
+        ttk.Button(
+            button_bar,
+            text="Add Selected to Cart",
+            command=add_selected_to_cart,
+        ).pack(side=LEFT)
 
         ttk.Button(
             button_bar,
@@ -855,35 +880,6 @@ class DuplicatesMixin:
 
         if changed:
             self.duplicates = updated
-
-    def _remove_node_from_scan_tree(self, target_node):
-        """Remove a deleted file node from the in-memory scan tree and update sizes.
-
-        This keeps the current scan somewhat accurate after deleting from the
-        duplicate window. It does not fully refresh every visible tree row;
-        press F5 to rescan for a perfect view.
-        """
-        if not self.root_node or target_node.is_dir:
-            return
-
-        stack = [(self.root_node, None)]
-
-        while stack:
-            node, parent = stack.pop()
-
-            if node is target_node:
-                # Subtract size and count from ancestors before unlinking —
-                # the search below finds target_node by identity, walking
-                # from parent.children, so it must still be attached.
-                self._subtract_from_ancestors(self.root_node, target_node)
-
-                if parent and target_node in parent.children:
-                    parent.children.remove(target_node)
-                return
-
-            if node.is_dir:
-                for child in node.children:
-                    stack.append((child, node))
 
     def _subtract_from_ancestors(self, current, target):
         """Subtract target's size/count from every ancestor containing it."""

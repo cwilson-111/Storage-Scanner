@@ -25,7 +25,7 @@ Windows/macOS), and a "Data Tools" menu (Compress CSV to Parquet, Convert
 CSV to Excel), shipped only in a separate Windows "Data build" — see the
 CSV-to-Parquet section near the end of this doc.
 
-Two gaps flagged in an earlier pass here are now closed:
+Gaps flagged in earlier passes here are now closed:
 - **Naming consistency.** The in-app window title now reads "Storage
   Scanner" (matching the repo, README, and executable name) instead of
   the old "Neural Storage Matrix" — the P1 naming-consistency item below
@@ -39,6 +39,13 @@ Two gaps flagged in an earlier pass here are now closed:
   adds CodeQL, `pip-audit`, and gitleaks (full history) on every push/PR
   and weekly; `.github/dependabot.yml` keeps the toolchain and the pinned
   Action SHAs current. See item 9 below.
+- **16 correctness bugs across delete safety, Turbo Scan data integrity,
+  and forecast/anomaly UI labels**, found via a full-codebase review and
+  fixed with regression tests (2026-09-19) — see the git history around
+  that date for the full list; several were silent data-loss/corruption
+  risks (e.g. the Windows protected-path guard never actually matching,
+  and a hardcoded sector size silently corrupting Turbo Scan on native
+  4Kn drives).
 
 See the phase checklists further down for what's done vs. not, item by item.
 
@@ -121,19 +128,22 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 
 ## Important defects and technical debt to fix first
 
-### P0: Correct duplicate root insertion
+All four P0 items below are resolved (see Phase 1 checklist further down)
+— kept here for historical context on what the original problems were.
+
+### P0: Correct duplicate root insertion — ✅ done
 
 `_finish_scan()` currently inserts and populates the root node twice. Remove the repeated block. This can create duplicate rows, unnecessary UI work, and confusing state.
 
-### P0: Fix persistent database location
+### P0: Fix persistent database location — ✅ done
 
 `history.py` places `storage_history.db` beside `__file__`. In a PyInstaller one-file build, application resources are extracted to a temporary directory. Store writable user data under `%LOCALAPPDATA%\\NeuralStorageMatrix\\` instead. Add a schema version and migrations.
 
-### P0: Fix `print_growth_report()`
+### P0: Fix `print_growth_report()` — ✅ done
 
 `percent_text` is calculated before `growth_percent` exists and is then reused for every row. Calculate it inside the loop and handle `None` for new folders.
 
-### P0: Stop swallowing icon and runtime errors silently
+### P0: Stop swallowing icon and runtime errors silently — ✅ done
 
 Several broad `except Exception: pass` blocks hide packaging and UI failures. Log diagnostic details to a rotating file in `%LOCALAPPDATA%` while keeping user-facing messages concise.
 
@@ -175,16 +185,24 @@ storage_scanner/
 
 This will make testing and performance work much easier.
 
-### P1: Improve scan correctness
+### P1: Improve scan correctness — ✅ mostly done
 
-Explicitly define handling for:
-
-- Symbolic links, junctions, and mount points.
-- Sparse files and compressed files.
-- Logical size versus allocated size.
-- Hard links, which can otherwise be double-counted.
-- Long paths and inaccessible folders.
-- Files changing or disappearing during a scan.
+- ✅ Symbolic links, junctions, and mount points — recorded as leaves, never traversed.
+- ✅ Sparse files and compressed files — allocated size tracked separately from logical size.
+- ✅ Logical size versus allocated size.
+- ✅ Hard links — deduplicated so a file linked into multiple folders counts once.
+- ✅ Inaccessible folders — flagged (`Node.error`), and as of 2026-09-19 the
+  flag propagates to every ancestor too, so a permission-denied subfolder
+  no longer leaves a parent's total silently understated with no indicator.
+- ⏭️ Long paths (beyond `MAX_PATH`) — not explicitly handled; not yet
+  reported as an issue.
+- ⏭️ Files changing or disappearing mid-scan — a vanishing file is caught
+  (`OSError` → `Node.error`), but there's no detection of a file that's
+  merely *modified* between being enumerated and being acted on later. A
+  narrower version of this — a file changing between being reviewed in a
+  Cleanup/Duplicates list and actually being deleted — was closed on
+  2026-09-19 (`audit.recycle_and_log` now refuses to delete a file whose
+  size no longer matches what was scanned).
 
 ## Market-leading product roadmap
 
@@ -228,6 +246,10 @@ Do not market automatic deletion as intelligence. Build explainable recommendati
 Every recommendation should show **why it was flagged**, estimated recoverable space, risk level, dependencies, and proposed action. Default to review queues, Recycle Bin, quarantine, or archive. Never silently delete user content.
 
 **✅ Done: persist recommendations across restarts.** Cleanup Recommendations now shows full cold-start recall: `storage_scanner/cleanup_cache.py` persists the last *computed* set of Protected/Review/Duplicate recommendations to SQLite (`cleanup_cache.db`, same `%LOCALAPPDATA%` convention as `history.py`/`turbo_cache.py`), keyed by scan path, each save fully replacing the previous one. Opening the app fresh and going straight to Tools ▸ Clean Up ▸ Cleanup Recommendations — with zero scans this session — shows the most recently cached run immediately, labeled with when it was computed and for which path, plus a **Rescan** button to refresh it for real. Deleting or archiving a row updates the persisted cache too, so a stale row for an already-removed file doesn't linger into the next cold start. Simpler than originally scoped here: rather than persisting the full per-file metadata needed to recompute recommendations from scratch, it persists the already-computed recommendation rows themselves — smaller, and a more direct match for "show me what I found last time," with Rescan covering the "get a truly fresh answer" case.
+
+**✅ Done: Orphaned install category (Windows).** A fourth recommendation category flags folders that exactly match an `InstallLocation` this app previously saw registered in the uninstall registry (HKLM native + WOW6432Node, HKCU; `storage_scanner/installed_apps.py`) whose owning app is no longer installed. `history.py`'s `known_install_locations` table keeps the snapshot across runs, since a single registry read can only say what's installed *now*. Exact path match only — no fuzzy/name heuristics — so the first run on a machine only learns (the window says so) and finds nothing until a later run sees an app disappear. Anything nested under an orphan folder is dropped from the list so the same bytes aren't counted twice. Risk is Medium: an uninstalled app's folder can still hold user data.
+
+**✅ Done: Cleanup Cart.** A cross-window queue (`storage_scanner/cart.py`, `ui/cart_window.py`): add items from the main tree, Duplicate Files, or Cleanup Recommendations, review them in one place (toolbar shows count + reclaimable size), and send them to the Recycle Bin in one batch. Items nested under another cart item collapse into it. Each item still goes through `audit.recycle_and_log`, and anything refused (e.g. the file changed size since the scan, via `audit.check_stale`) is listed with its reason. Session-only by design: cleared on every rescan, since cart entries point at nodes in the replaced tree.
 
 ### 4. Make duplicate cleanup genuinely safer
 

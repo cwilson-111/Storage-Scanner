@@ -9,9 +9,13 @@ sys.path.insert(0, str(ROOT))
 from storage_scanner import cleanup_recommendations
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE,
+    CATEGORY_ORPHANED_INSTALL,
     CATEGORY_PROTECTED,
     CATEGORY_REVIEW,
+    Recommendation,
+    _drop_nested_under,
     build_duplicate_recommendations,
+    find_orphaned_install_folders,
     find_protected_and_review_candidates,
     is_protected_path,
     pick_keeper,
@@ -204,3 +208,151 @@ def test_build_duplicate_recommendations_flags_everyone_but_the_keeper():
     assert flagged_names == {"copy1.jpg", "copy2.jpg"}
     assert all(r.category == CATEGORY_DUPLICATE for r in recs)
     assert all(keeper.path in r.reason for r in recs)
+
+
+def _normalized(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
+def test_exact_orphan_match_flags_the_folder_without_recursing_into_children():
+    root = Node("/root", "root", is_dir=True)
+    orphan_folder = _dir(root, "Program Files/SomeApp")
+    orphan_folder.size = 5000
+    leftover = _file(orphan_folder, "leftover.dll", size=1234)
+    orphaned_locations = {_normalized(orphan_folder.path)}
+
+    recs = find_orphaned_install_folders(root, orphaned_locations)
+
+    assert len(recs) == 1
+    assert recs[0].node is orphan_folder
+    assert recs[0].category == CATEGORY_ORPHANED_INSTALL
+    assert recs[0].recoverable_bytes == 5000
+    # The file inside must never be independently flagged -- deleting the
+    # folder already reclaims it; a second row would double-count it.
+    assert not any(r.node is leftover for r in recs)
+
+
+def test_a_substring_match_that_is_not_an_exact_node_path_is_never_flagged():
+    root = Node("/root", "root", is_dir=True)
+    folder = _dir(root, "Program Files/SomeApp")
+    folder.size = 5000
+    # orphaned_locations names a *different*, longer path that happens to
+    # contain this folder's path as a substring -- must not match.
+    orphaned_locations = {_normalized(folder.path + "2")}
+
+    recs = find_orphaned_install_folders(root, orphaned_locations)
+
+    assert recs == []
+
+
+def test_a_sibling_folder_not_in_orphaned_locations_is_left_alone():
+    root = Node("/root", "root", is_dir=True)
+    orphan_folder = _dir(root, "Program Files/SomeApp")
+    orphan_folder.size = 5000
+    sibling = _dir(root, "Program Files/OtherApp")
+    sibling.size = 999
+    orphaned_locations = {_normalized(orphan_folder.path)}
+
+    recs = find_orphaned_install_folders(root, orphaned_locations)
+
+    assert len(recs) == 1
+    assert recs[0].node is orphan_folder
+
+
+def test_a_subfolder_of_an_already_flagged_orphan_is_not_flagged_again():
+    """Edge case: orphaned_locations names both a folder and one of its
+    own subfolders (e.g. a stale/duplicate registry entry) -- once the
+    parent is flagged, walking stops there, so the child is never reached
+    or independently flagged."""
+    root = Node("/root", "root", is_dir=True)
+    parent = _dir(root, "Program Files/SomeApp")
+    parent.size = 5000
+    child = _dir(parent, "SubComponent")
+    child.size = 1000
+    orphaned_locations = {_normalized(parent.path), _normalized(child.path)}
+
+    recs = find_orphaned_install_folders(root, orphaned_locations)
+
+    assert len(recs) == 1
+    assert recs[0].node is parent
+
+
+def test_no_matches_returns_no_recommendations():
+    root = Node("/root", "root", is_dir=True)
+    _dir(root, "Program Files/StillInstalled")
+
+    recs = find_orphaned_install_folders(root, set())
+
+    assert recs == []
+
+
+def test_drop_nested_under_removes_a_recommendation_inside_a_container():
+    root = Node("/root", "root", is_dir=True)
+    container = _dir(root, "Program Files/SomeApp")
+    inside = _file(container, "old_log.txt", size=100)
+    elsewhere = _file(root, "unrelated.bin", size=200)
+
+    review_recs = [
+        Recommendation(
+            node=inside,
+            category=CATEGORY_REVIEW,
+            reason="old",
+            risk="Medium",
+            recoverable_bytes=100,
+            action="Review",
+        ),
+        Recommendation(
+            node=elsewhere,
+            category=CATEGORY_REVIEW,
+            reason="old",
+            risk="Medium",
+            recoverable_bytes=200,
+            action="Review",
+        ),
+    ]
+
+    kept = _drop_nested_under(review_recs, {container.path})
+
+    assert len(kept) == 1
+    assert kept[0].node is elsewhere
+
+
+def test_drop_nested_under_does_not_remove_a_sibling_with_a_shared_prefix():
+    """SomeApp and SomeApp2 share a string prefix but are not nested --
+    a naive (non-path-aware) prefix check would wrongly drop SomeApp2's
+    contents too."""
+    root = Node("/root", "root", is_dir=True)
+    container = _dir(root, "Program Files/SomeApp")
+    sibling_file = _file(_dir(root, "Program Files/SomeApp2"), "notes.txt", size=50)
+
+    review_recs = [
+        Recommendation(
+            node=sibling_file,
+            category=CATEGORY_REVIEW,
+            reason="old",
+            risk="Medium",
+            recoverable_bytes=50,
+            action="Review",
+        ),
+    ]
+
+    kept = _drop_nested_under(review_recs, {container.path})
+
+    assert kept == review_recs
+
+
+def test_drop_nested_under_with_no_containers_is_a_noop():
+    root = Node("/root", "root", is_dir=True)
+    f = _file(root, "a.bin", size=10)
+    recs = [
+        Recommendation(
+            node=f,
+            category=CATEGORY_REVIEW,
+            reason="old",
+            risk="Medium",
+            recoverable_bytes=10,
+            action="Review",
+        ),
+    ]
+
+    assert _drop_nested_under(recs, set()) == recs
