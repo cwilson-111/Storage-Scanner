@@ -109,6 +109,12 @@ class MainWindowMixin:
         )
         self.tools_btn.pack(side=LEFT, padx=6)
 
+        # The Cleanup Cart's own persistent indicator — kept current by
+        # CartMixin._refresh_cart_indicator, called after every
+        # add/remove/clear/execute (see storage_scanner/ui/cart_window.py).
+        self.cart_btn = ttk.Button(bar_frame, text="🛒 Cart", command=self.show_cart)
+        self.cart_btn.pack(side=LEFT)
+
         # Grouped into submenus that follow the order you'd actually use them
         # in — explore what's there, clean some of it up, then check history/
         # trust — rather than one flat, ever-growing list of unrelated tools.
@@ -237,6 +243,7 @@ class MainWindowMixin:
         self.menu.add_command(label=f"Open in {FILE_MANAGER_NAME}", command=self._open_in_explorer)
         self.menu.add_command(label="Copy path", command=self._copy_path)
         self.menu.add_command(label="Set Budget…", command=self._set_budget_for_selected)
+        self.menu.add_command(label="Add to Cart", command=self._add_selected_to_cart)
         self.menu.add_separator()
         self.menu.add_command(label=f"Delete (to {TRASH_NAME})", command=self._delete_selected)
         self.tree.bind("<Button-3>", self._show_menu)
@@ -248,11 +255,44 @@ class MainWindowMixin:
     def _build_statusbar(self):
         status = ttk.Frame(self.root, padding=(8, 2))
         status.pack(side=BOTTOM, fill=X)
+        self._statusbar_frame = status
         self.status_var = StringVar(value="Pick a drive or folder, then click Scan.")
         ttk.Label(status, textvariable=self.status_var, anchor=W).pack(
             side=LEFT, fill=X, expand=True
         )
         self.progress = ttk.Progressbar(status, mode="indeterminate", length=220)
+
+        # Scan details strip: engine, timing and completeness of the last
+        # finished scan. Packed just above the status bar by
+        # _show_scan_details, removed again when the next scan starts.
+        self._scan_details_frame = ttk.Frame(self.root, padding=(8, 2))
+
+    def _show_scan_details(self, report, inaccessible_nodes):
+        frame = self._scan_details_frame
+        for child in frame.winfo_children():
+            child.destroy()
+
+        self._last_inaccessible_paths = inaccessible_nodes
+        fields, complete = turbo_scan.scan_indicators(report, len(inaccessible_nodes))
+        for label, value in fields:
+            ttk.Label(frame, text=f"{label}:", foreground=COLORS["muted"]).pack(side=LEFT)
+            if label == "Result":
+                color = COLORS["good"] if complete else COLORS["warning"]
+            else:
+                color = COLORS["fg"]
+            ttk.Label(frame, text=value, foreground=color).pack(side=LEFT, padx=(4, 0))
+            if label == "Unreadable paths" and inaccessible_nodes:
+                ttk.Button(frame, text="View", command=self._show_inaccessible_paths_window).pack(
+                    side=LEFT, padx=(6, 0)
+                )
+            ttk.Label(frame, text="·", foreground=COLORS["muted"]).pack(side=LEFT, padx=8)
+        # Drop the trailing separator after the last field.
+        frame.winfo_children()[-1].destroy()
+
+        frame.pack(side=BOTTOM, fill=X, after=self._statusbar_frame)
+
+    def _hide_scan_details(self):
+        self._scan_details_frame.pack_forget()
 
     # -- Drive / folder selection ----------------------------------------- #
     @staticmethod
@@ -600,6 +640,9 @@ class MainWindowMixin:
         self._last_live_refresh = 0.0
         self.duplicates = None
         self._duplicates_scan_root = None
+        self.cart.clear()
+        self._refresh_cart_indicator()
+        self._hide_scan_details()
 
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
@@ -649,6 +692,9 @@ class MainWindowMixin:
         self._last_live_refresh = 0.0
         self.duplicates = None
         self._duplicates_scan_root = None
+        self.cart.clear()
+        self._refresh_cart_indicator()
+        self._hide_scan_details()
 
         self.scan_btn.config(state="disabled")
         self.elevate_btn.config(state="disabled")
@@ -741,16 +787,6 @@ class MainWindowMixin:
         self.tools_btn.config(state="normal")
         self.top_count_combo.config(state="readonly")
 
-        engine_prefix = ""
-        if report is not None and report.engine == turbo_scan.ENGINE_TURBO:
-            throughput = (
-                report.file_count / report.elapsed_seconds if report.elapsed_seconds > 0 else 0
-            )
-            engine_prefix = (
-                f"⚡ Turbo Scan (NTFS MFT) · {report.file_count:,} files in "
-                f"{report.elapsed_seconds:.1f}s ({throughput:,.0f} files/sec)  —  "
-            )
-
         if report is not None and report.fallback_reason:
             self._show_turbo_fallback_banner(report.fallback_reason)
         else:
@@ -761,9 +797,10 @@ class MainWindowMixin:
             self._show_inaccessible_paths_banner(inaccessible)
         else:
             self._dismiss_inaccessible_paths_banner()
+        self._show_scan_details(report, inaccessible)
 
         self.status_var.set(
-            f"{engine_prefix}{node.path}  —  {human_size(node.size)} in "
+            f"{node.path}  —  {human_size(node.size)} in "
             f"{node.file_count:,} files | Saving history..."
         )
 
@@ -1234,29 +1271,16 @@ class MainWindowMixin:
             self._forget_subtree(child)
         self.node_by_iid.pop(iid, None)
 
-    def _delete_selected(self):
-        iid = self.tree.focus()
+    def _remove_main_tree_row(self, iid):
+        """Remove a node's row from the main tree after it's been deleted,
+        rolling the removed size/count back out of every ancestor and
+        refreshing whatever changed on screen. Shared by _delete_selected
+        and the Cleanup Cart's batch executor (cart_window.py) for any
+        cart item that still has a live row in this tree.
+        """
         node = self.node_by_iid.get(iid)
         if not node:
             return
-        kind = "folder" if node.is_dir else "file"
-        if not messagebox.askyesno(
-            f"Delete to {TRASH_NAME}",
-            f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
-            f"{human_size(node.size)}" + (f" in {node.file_count:,} files" if node.is_dir else ""),
-            icon="warning",
-        ):
-            return
-
-        if not recycle_and_log(node, source="Main tree"):
-            messagebox.showerror(
-                "Storage Scanner",
-                f"Could not delete:\n{node.path}\n\n"
-                "It may be in use, protected, or require admin rights.",
-            )
-            return
-
-        self._remove_from_duplicate_cache(node)
 
         parent_iid = self.tree.parent(iid)
         parent_node = self.node_by_iid.get(parent_iid)
@@ -1291,6 +1315,31 @@ class MainWindowMixin:
                 f"in {self.root_node.file_count:,} files"
             )
 
+    def _delete_selected(self):
+        iid = self.tree.focus()
+        node = self.node_by_iid.get(iid)
+        if not node:
+            return
+        kind = "folder" if node.is_dir else "file"
+        if not messagebox.askyesno(
+            f"Delete to {TRASH_NAME}",
+            f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
+            f"{human_size(node.size)}" + (f" in {node.file_count:,} files" if node.is_dir else ""),
+            icon="warning",
+        ):
+            return
+
+        if not recycle_and_log(node, source="Main tree"):
+            messagebox.showerror(
+                "Storage Scanner",
+                f"Could not delete:\n{node.path}\n\n"
+                "It may be in use, protected, or require admin rights.",
+            )
+            return
+
+        self._remove_from_duplicate_cache(node)
+        self._remove_main_tree_row(iid)
+
     # -- Context menu actions ---------------------------------------------- #
     def _show_tools_menu(self):
         """Show the Tools dropdown under the Tools button."""
@@ -1310,6 +1359,12 @@ class MainWindowMixin:
 
     def _selected_node(self):
         return self.node_by_iid.get(self.tree.focus())
+
+    def _add_selected_to_cart(self):
+        node = self._selected_node()
+        if node:
+            self.cart.add(node, "Main tree")
+            self._refresh_cart_indicator()
 
     def _reveal(self, path, is_dir):
         try:

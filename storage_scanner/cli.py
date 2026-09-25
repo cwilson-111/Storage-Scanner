@@ -48,6 +48,12 @@ def build_arg_parser():
         help="Also record this scan in scan history, exactly like a scan run "
         "from the app, so growth, forecasts, anomalies and budgets see it",
     )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="With --save-history: show a desktop notification if the folder "
+        "is over its storage budget (scheduled scans pass this)",
+    )
     return parser
 
 
@@ -94,6 +100,18 @@ def run_cli(argv):
                 f"(budget {recorded.budget_breach.threshold_bytes:,})",
                 file=sys.stderr,
             )
+            if args.notify:
+                from storage_scanner.logging_setup import logger
+                from storage_scanner.notify import budget_breach_message, notify
+
+                ok, error = notify(*budget_breach_message(args.path, recorded.budget_breach))
+                if not ok:
+                    # The scan and history save succeeded; a missing
+                    # notification doesn't change the exit code. A
+                    # scheduled run has no console, so the log is where
+                    # this gets seen.
+                    print(f"Could not show the over-budget notification: {error}", file=sys.stderr)
+                    logger.warning("Over-budget notification for %r failed: %s", args.path, error)
 
     if args.format == "none":
         return EXIT_OK

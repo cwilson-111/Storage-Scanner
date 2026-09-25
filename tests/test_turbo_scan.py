@@ -11,7 +11,56 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import turbo_scan, usn_journal
 from storage_scanner.models import Node
-from storage_scanner.turbo_scan import ScanReport, choose_engine, find_subtree_node
+from storage_scanner.turbo_scan import (
+    ScanReport,
+    choose_engine,
+    find_subtree_node,
+    scan_indicators,
+)
+
+# -- scan_indicators: what the scan-details strip shows ---------------------- #
+
+
+def test_indicators_turbo_scan_complete():
+    report = ScanReport(engine=turbo_scan.ENGINE_TURBO, elapsed_seconds=2.0, file_count=10_000)
+    fields, complete = scan_indicators(report, 0)
+    assert complete
+    assert dict(fields) == {
+        "Engine": "Turbo Scan (NTFS MFT)",
+        "Elapsed": "2.0s",
+        "Throughput": "5,000 files/s",
+        "Unreadable paths": "0",
+        "Result": "Complete",
+    }
+
+
+def test_indicators_fallback_is_named_and_unreadable_paths_mark_incomplete():
+    report = ScanReport(
+        engine=turbo_scan.ENGINE_COMPATIBLE,
+        elapsed_seconds=1.0,
+        file_count=50,
+        fallback_reason="elevation was declined",
+    )
+    fields, complete = scan_indicators(report, 3)
+    assert not complete
+    assert dict(fields)["Engine"] == "Compatible (Turbo Scan fell back)"
+    assert dict(fields)["Unreadable paths"] == "3"
+    assert dict(fields)["Result"] == "Incomplete (some paths unreadable)"
+
+
+def test_indicators_zero_elapsed_does_not_divide_by_zero():
+    report = ScanReport(engine=turbo_scan.ENGINE_COMPATIBLE, elapsed_seconds=0.0, file_count=1)
+    fields, _ = scan_indicators(report, 0)
+    assert dict(fields)["Throughput"] == "—"
+
+
+def test_indicators_without_report_from_elevated_helper():
+    fields, complete = scan_indicators(None, 0)
+    assert complete
+    assert dict(fields)["Engine"] == "Compatible (elevated helper)"
+    assert dict(fields)["Elapsed"] == "—"
+    assert dict(fields)["Throughput"] == "—"
+
 
 # -- choose_engine: the full decision matrix -------------------------------- #
 

@@ -61,6 +61,40 @@ class ScanReport:
     fallback_reason: Optional[str] = None
 
 
+def scan_indicators(report, unreadable_count):
+    """What the main window's scan-details strip shows after a scan:
+    ([(label, value), ...], complete).
+
+    `report` is None when the scan ran through the macOS/Linux elevated
+    helper, which hands back only a tree with no timing. A scan counts as
+    complete only when no path was unreadable: a Turbo Scan never returns a
+    partial tree (any failure falls back, see scan_with_best_engine), so
+    unreadable paths are the only way a finished scan can be missing data.
+    """
+    if report is None:
+        engine = "Compatible (elevated helper)"
+        elapsed = throughput = "—"
+    else:
+        engine = "Turbo Scan (NTFS MFT)" if report.engine == ENGINE_TURBO else "Compatible"
+        if report.fallback_reason:
+            engine += " (Turbo Scan fell back)"
+        elapsed = f"{report.elapsed_seconds:.1f}s"
+        throughput = (
+            f"{report.file_count / report.elapsed_seconds:,.0f} files/s"
+            if report.elapsed_seconds > 0
+            else "—"
+        )
+    complete = unreadable_count == 0
+    result = "Complete" if complete else "Incomplete (some paths unreadable)"
+    return [
+        ("Engine", engine),
+        ("Elapsed", elapsed),
+        ("Throughput", throughput),
+        ("Unreadable paths", f"{unreadable_count:,}"),
+        ("Result", result),
+    ], complete
+
+
 def choose_engine(path, turbo_enabled):
     """ "turbo" only on Windows, only when the caller says Turbo Scan is
     enabled, and only on a local fixed NTFS volume -- "compatible"

@@ -132,6 +132,26 @@ def init_history_db():
         )
     """)
 
+    # Orphaned-install detection (storage_scanner.installed_apps /
+    # cleanup_recommendations.find_orphaned_install_folders): a snapshot
+    # of every InstallLocation this app has ever seen registered, and
+    # whether the app that registered it is still installed as of the
+    # most recent snapshot. A single point-in-time registry read can only
+    # ever say what's *currently* installed -- distinguishing "was
+    # installed, now gone" (an orphan) from "never installed here at all"
+    # (not evidence of anything) requires remembering install_location
+    # across sessions, hence a persistent table rather than in-memory
+    # state like the (session-only) Cleanup Cart.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS known_install_locations (
+            install_location TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_installed_at TEXT NOT NULL,
+            currently_installed INTEGER NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -582,6 +602,104 @@ def delete_budget(budget_id):
     cur.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
     conn.commit()
     conn.close()
+
+
+def record_install_locations_snapshot(locations):
+    """Update known_install_locations from a fresh registry read.
+
+    `locations`: [(display_name, install_location), ...] --
+    storage_scanner.installed_apps.get_installed_apps()'s own return
+    shape, already filtered to the candidate roots (Program Files/
+    AppData) by the caller.
+
+    Every install_location is normalized (os.path.normcase +
+    os.path.normpath) before being used as the table's primary key --
+    the same real folder can legitimately be reported with different
+    case or a trailing separator across two different registry reads,
+    and without normalizing, that would look like the old form
+    "disappearing" and a new one "newly appearing" in the same snapshot
+    instead of being recognized as the same, still-installed location.
+
+    Every location present in this snapshot is upserted with
+    currently_installed = 1 (first_seen_at set only on first insert,
+    last_seen_installed_at bumped every time). Every previously-known
+    location NOT present in this snapshot is marked
+    currently_installed = 0 -- this is the moment a formerly-installed
+    app's leftover folder becomes an orphan candidate. A location can
+    only ever be marked 0 if it already existed as a row from an earlier
+    snapshot; nothing inserted by this same call can also be zeroed out
+    by it, since a location is either present (upserted to 1) or absent
+    (only then eligible to be zeroed), never both.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    normalized_locations = [
+        (display_name, os.path.normcase(os.path.normpath(install_location)))
+        for display_name, install_location in locations
+    ]
+    present_locations = [loc for _name, loc in normalized_locations]
+
+    for display_name, install_location in normalized_locations:
+        cur.execute(
+            """
+            INSERT INTO known_install_locations
+                (install_location, display_name, first_seen_at,
+                 last_seen_installed_at, currently_installed)
+            VALUES (?, ?, ?, ?, 1)
+            ON CONFLICT(install_location) DO UPDATE SET
+                display_name = excluded.display_name,
+                last_seen_installed_at = excluded.last_seen_installed_at,
+                currently_installed = 1
+        """,
+            (install_location, display_name, now, now),
+        )
+
+    if present_locations:
+        placeholders = ",".join("?" for _ in present_locations)
+        cur.execute(
+            f"UPDATE known_install_locations SET currently_installed = 0 "
+            f"WHERE install_location NOT IN ({placeholders})",
+            present_locations,
+        )
+    else:
+        cur.execute("UPDATE known_install_locations SET currently_installed = 0")
+
+    conn.commit()
+    conn.close()
+
+
+def get_orphaned_install_locations():
+    """[(install_location, display_name, first_seen_at,
+    last_seen_installed_at), ...] for every location whose owning app is
+    no longer installed as of the most recent snapshot."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT install_location, display_name, first_seen_at, last_seen_installed_at
+        FROM known_install_locations
+        WHERE currently_installed = 0
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_known_install_location_count():
+    """Total rows in known_install_locations, regardless of
+    currently_installed. 0 means record_install_locations_snapshot has
+    never been called before -- orphaned-install detection needs at
+    least a second snapshot to find anything (see that function's own
+    docstring), so this is what the UI checks to show a "still learning"
+    note on a first run rather than silently showing zero results with
+    no explanation."""
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM known_install_locations")
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
 
 
 def get_latest_scan_snapshot(scan_path):

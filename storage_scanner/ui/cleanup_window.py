@@ -10,25 +10,39 @@ import queue
 import threading
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, StringVar, Toplevel, X, messagebox, ttk
 
+from history import (
+    get_known_install_location_count,
+    get_orphaned_install_locations,
+    record_install_locations_snapshot,
+)
 from storage_scanner import cleanup_cache
 from storage_scanner.archive import archive_file, likely_compresses_well
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE,
+    CATEGORY_ORPHANED_INSTALL,
     CATEGORY_PROTECTED,
     CATEGORY_REVIEW,
+    _drop_nested_under,
     build_duplicate_recommendations,
+    find_orphaned_install_folders,
     find_protected_and_review_candidates,
 )
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
-from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
+from storage_scanner.platform_support import (
+    FILE_MANAGER_NAME,
+    IS_WINDOWS,
+    TRASH_NAME,
+    resource_path,
+)
 from storage_scanner.settings import COLORS
 
 _CATEGORY_TAGS = {
     CATEGORY_PROTECTED: "protected",
     CATEGORY_REVIEW: "review",
     CATEGORY_DUPLICATE: "duplicate",
+    CATEGORY_ORPHANED_INSTALL: "orphaned_install",
 }
 
 
@@ -108,6 +122,7 @@ class CleanupMixin:
         tv.tag_configure("protected", foreground=COLORS["muted"])
         tv.tag_configure("review", foreground=COLORS["warning"])
         tv.tag_configure("duplicate", foreground=COLORS["accent"])
+        tv.tag_configure("orphaned_install", foreground=COLORS["error"])
 
         iid_to_rec = {}
 
@@ -141,6 +156,44 @@ class CleanupMixin:
                 f"{suffix}"
             )
 
+        def merge_with_orphans(metadata_recs, other_recs, orphan_recs):
+            """metadata_recs + other_recs, with anything nested under a
+            newly-found orphan folder dropped first so the same bytes
+            never appear as two separate recommendations."""
+            all_recs = metadata_recs + other_recs
+            if orphan_recs:
+                container_paths = {r.node.path for r in orphan_recs}
+                all_recs = _drop_nested_under(all_recs, container_paths)
+                all_recs += orphan_recs
+            all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+            return all_recs
+
+        def compute_orphan_recommendations():
+            """Windows-only: read the uninstall registry, update this
+            app's own persistent snapshot of install locations, and flag
+            any folder matching a location whose owning app is no longer
+            installed. ([], False) on any other platform. The second
+            value is True only on the very first snapshot ever taken for
+            this install of the app (nothing to compare against yet) --
+            see history.py's known_install_locations docstring for why
+            that first-run gap is the accepted tradeoff for staying
+            exact-match-only, never a fuzzy/name-based heuristic.
+            """
+            if not IS_WINDOWS:
+                return [], False
+            from storage_scanner.installed_apps import get_candidate_installed_apps
+
+            is_first_run = get_known_install_location_count() == 0
+            apps = get_candidate_installed_apps()
+            record_install_locations_snapshot(apps)
+            orphaned_locations = {loc for loc, *_rest in get_orphaned_install_locations()}
+            orphan_recs = find_orphaned_install_folders(self.root_node, orphaned_locations)
+            return orphan_recs, is_first_run
+
+        first_run_suffix = (
+            "  (orphaned-install detection is still learning this machine's installed apps)"
+        )
+
         if not live:
             # Cold start: nothing scanned this session -- show whatever
             # was last actually computed for display_scan_path, instantly,
@@ -162,21 +215,32 @@ class CleanupMixin:
             populate(metadata_recs)
             summarize(metadata_recs, suffix="  (scanning for duplicate files…)")
 
-            # Phase 2: Duplicate candidates need content hashing. If "Find
-            # Duplicate Files" has already been run for this exact scan, reuse
-            # that result instead of hashing every file a second time — and so
-            # those results are never lost just because that window got closed.
-            # self.duplicates persists across windows (see app.py/duplicate_
-            # window.py); _duplicates_scan_root guards against reusing a stale
-            # result left over from a since-replaced scan of a different path.
+            # Phase 2: Duplicate candidates need content hashing, and orphaned-
+            # install detection needs a registry read + a SQLite write — both
+            # real I/O, so both run off the main thread in the (common)
+            # non-cached branch below. If "Find Duplicate Files" has already
+            # been run for this exact scan, reuse that result instead of
+            # hashing every file a second time — and so those results are
+            # never lost just because that window got closed. self.duplicates
+            # persists across windows (see app.py/duplicate_window.py);
+            # _duplicates_scan_root guards against reusing a stale result left
+            # over from a since-replaced scan of a different path. Orphan
+            # detection is fast enough (a registry read, not a hash) to run
+            # synchronously even in this "instant" cached branch without
+            # meaningfully changing how it feels to open.
             cached_duplicates = self.duplicates
             cancel_event = threading.Event()
 
             if cached_duplicates is not None and self._duplicates_scan_root is self.root_node:
-                all_recs = metadata_recs + build_duplicate_recommendations(cached_duplicates)
-                all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+                orphan_recs, is_first_run = compute_orphan_recommendations()
+                all_recs = merge_with_orphans(
+                    metadata_recs, build_duplicate_recommendations(cached_duplicates), orphan_recs
+                )
                 populate(all_recs)
-                summarize(all_recs, suffix="  (duplicate results reused from Find Duplicate Files)")
+                suffix = "  (duplicate results reused from Find Duplicate Files)"
+                if is_first_run:
+                    suffix += first_run_suffix
+                summarize(all_recs, suffix=suffix)
                 cleanup_cache.save_recommendations(display_scan_path, all_recs)
                 win.protocol("WM_DELETE_WINDOW", win.destroy)
             else:
@@ -185,7 +249,8 @@ class CleanupMixin:
                 def worker():
                     try:
                         groups = self._find_duplicate_files(cancel_event=cancel_event)
-                        result_q.put(("done", groups))
+                        orphan_recs, is_first_run = compute_orphan_recommendations()
+                        result_q.put(("done", (groups, orphan_recs, is_first_run)))
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Duplicate scan for cleanup recommendations failed")
                         result_q.put(("error", str(exc)))
@@ -200,12 +265,14 @@ class CleanupMixin:
                         win.after(150, poll)
                         return
                     if kind == "done":
-                        self.duplicates = payload
+                        groups, orphan_recs, is_first_run = payload
+                        self.duplicates = groups
                         self._duplicates_scan_root = self.root_node
-                        all_recs = metadata_recs + build_duplicate_recommendations(payload)
-                        all_recs.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+                        all_recs = merge_with_orphans(
+                            metadata_recs, build_duplicate_recommendations(groups), orphan_recs
+                        )
                         populate(all_recs)
-                        summarize(all_recs)
+                        summarize(all_recs, suffix=first_run_suffix if is_first_run else "")
                         cleanup_cache.save_recommendations(display_scan_path, all_recs)
                     else:
                         summarize(metadata_recs, suffix=f"  (duplicate scan failed: {payload})")
@@ -358,6 +425,26 @@ class CleanupMixin:
                     parent=win,
                 )
 
+        def add_selected_to_cart():
+            selected = list(tv.selection())
+            # Same exclusion as delete: Protected rows are never a valid
+            # target here, cart included.
+            targets = [
+                iid_to_rec[iid]
+                for iid in selected
+                if iid in iid_to_rec and iid_to_rec[iid].category != CATEGORY_PROTECTED
+            ]
+            if not targets:
+                messagebox.showinfo(
+                    "Cleanup Recommendations",
+                    "Select at least one non-protected recommendation first.",
+                    parent=win,
+                )
+                return
+            for rec in targets:
+                self.cart.add(rec.node, "Cleanup Recommendations")
+            self._refresh_cart_indicator()
+
         ttk.Label(
             button_bar,
             text="Protected items can never be deleted from this window.",
@@ -373,5 +460,10 @@ class CleanupMixin:
         ttk.Button(button_bar, text="Archive Selected", command=archive_selected).pack(
             side=RIGHT, padx=(0, 6)
         )
+        ttk.Button(
+            button_bar,
+            text="Add Selected to Cart",
+            command=add_selected_to_cart,
+        ).pack(side=RIGHT, padx=(0, 6))
 
         tv.bind("<Double-1>", lambda _e: reveal_selected())

@@ -175,16 +175,22 @@ packages were bundled.
 - **Storage Budgets** — right-click any folder to set a size threshold, and
   get a dismissible alert when it's exceeded — checked right after you scan
   it, and again at launch using the last saved scan, so you can see a
-  breach before you've rescanned anything. No background service: alerts
-  only fire when you scan or open the app, never continuously.
+  breach before you've rescanned anything. A scheduled scan of a budgeted
+  folder that finds it over budget also shows a desktop notification (see
+  Scheduled scans). No background service: alerts only fire when a scan
+  runs or you open the app, never continuously. Budgets alert; they don't
+  stop files from being written.
 
 ### Automation
 - **CLI mode** — `Storage-Scanner.py --cli <path> [--format json|csv|none]
-  [--output FILE] [--save-history]` runs a headless scan and prints
-  structured output with proper exit codes, for scripts, cron, or Task
-  Scheduler. `--save-history` records the scan in scan history exactly like
-  a scan run from the app, so Growth History, forecasts, anomaly detection
-  and budgets all include it.
+  [--output FILE] [--save-history] [--notify]` runs a headless scan and
+  prints structured output with proper exit codes, for scripts, cron, or
+  Task Scheduler. `--save-history` records the scan in scan history exactly
+  like a scan run from the app, so Growth History, forecasts, anomaly
+  detection and budgets all include it. `--notify` (with `--save-history`)
+  shows a desktop notification if the folder is over its budget; if it
+  can't (e.g. Windows notifications are turned off), it says why on stderr
+  and in the app log, and the exit code is unchanged.
 - **Scheduled scans** — Tools ▸ History & Trust ▸ Schedule Scans… scans a
   folder daily or weekly and saves each run to scan history, so growth
   tracking keeps working without you remembering to rescan. On Windows it
@@ -192,7 +198,16 @@ packages were bundled.
   needed; a missed run happens as soon as the PC is back on). On macOS and
   Linux it gives you the line to add with `crontab -e`. Scheduled scans run
   without admin rights, so folders only an administrator can read are
-  skipped, and the app doesn't need to be open.
+  skipped, and the app doesn't need to be open. If a scanned folder is over
+  its budget, you get a desktop notification: a Windows toast (shown as
+  coming from "Windows PowerShell", which delivers it), a macOS
+  notification, or `notify-send` on Linux (which usually needs extra setup
+  under cron). Schedules created before this existed need to be saved again
+  to get notifications. On Windows the same window lists every scheduled
+  scan with its last run, result and next run, and flags any that need
+  attention (saved before notifications, the app moved since, or disabled
+  in Task Scheduler). Select one to load it into the form, then save it
+  again or remove it.
 - **Export Results** — Tools ▸ Export Results… saves the current scan as
   CSV (one row per file and folder, for Excel) or JSON (the nested folder
   tree), the same formats the CLI writes.

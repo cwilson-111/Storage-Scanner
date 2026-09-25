@@ -20,8 +20,14 @@ from storage_scanner.file_ops import recycle
 from storage_scanner.logging_setup import logger
 
 
-def _stale_file_check(node):
+def check_stale(node):
     """None if `node` is safe to delete, or a message explaining why not.
+
+    Public (not just recycle_and_log's own internal guard) so a caller
+    that needs to explain *why* a delete was refused -- e.g. the Cleanup
+    Cart's batch executor, which surfaces a per-item reason rather than a
+    generic failure -- can check this ahead of time without duplicating
+    the logic.
 
     A Node is built at scan time and can sit reviewed-but-undeleted in a
     UI list for as long as the user takes to look it over; recycle() then
@@ -70,9 +76,9 @@ def recycle_and_log(node, source, action="recycle", extra_error_context=None):
 
     Refuses to delete (success=False, nothing sent to the Recycle Bin/
     Trash) if the file at `node.path` has changed since it was scanned —
-    see _stale_file_check.
+    see check_stale.
     """
-    stale_message = _stale_file_check(node)
+    stale_message = check_stale(node)
     if stale_message is not None:
         success = False
         error_message = stale_message

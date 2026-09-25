@@ -22,6 +22,17 @@ A "safe candidate: superseded installer" category from the product roadmap
 is deliberately not implemented: reliably detecting that a newer version of
 some installer is already installed isn't possible from file metadata
 alone, and a wrong "safe" label is actively harmful, not just unhelpful.
+
+A fourth category, Orphaned install (find_orphaned_install_folders), is
+*not* the same false-positive trap as the rejected "superseded installer"
+idea above, despite the surface similarity ("this app-related thing looks
+unnecessary"): it matches a literal InstallLocation string this app itself
+previously observed registered to a real installed app (via
+storage_scanner.installed_apps + history.record_install_locations_snapshot),
+never something inferred from file naming or metadata heuristics. The
+tradeoff for that reliability is temporal, not heuristic: it can only ever
+flag a location the app has watched disappear from the registry across two
+or more of its own snapshots, so it finds nothing on the very first run.
 """
 
 import os
@@ -39,10 +50,11 @@ Recommendation = namedtuple(
 )
 
 # Categories, in the order they should be reviewed: protected first (so it's
-# clear what's off-limits), then the two candidate types.
+# clear what's off-limits), then the candidate types.
 CATEGORY_PROTECTED = "Protected"
 CATEGORY_REVIEW = "Review candidate"
 CATEGORY_DUPLICATE = "Duplicate candidate"
+CATEGORY_ORPHANED_INSTALL = "Orphaned install"
 
 
 def is_protected_path(path):
@@ -176,6 +188,89 @@ def keeper_reason(keeper, nodes):
     if any(n.mtime > keeper.mtime for n in others):
         return "Oldest modified date among identical copies — likely the original."
     return "Tiebreak (shortest path) among otherwise-identical copies."
+
+
+def find_orphaned_install_folders(root_node, orphaned_locations):
+    """Flag directories that exactly match a location this app has
+    previously seen registered as some app's InstallLocation, where that
+    app is no longer installed (per history.get_orphaned_install_locations
+    -- `orphaned_locations` here is that same result, reduced to just the
+    already-normalized install_location strings).
+
+    Unlike find_protected_and_review_candidates, this walk cares about
+    *directories*, not files -- an orphaned install is a whole folder, not
+    an individual file inside it. On a match, the folder itself is
+    flagged and its children are never independently walked or flagged a
+    second time -- deleting the folder already reclaims everything inside
+    it, so a second row for e.g. one of its .dll files would double-count
+    the same bytes and give the user two separate "delete this" actions
+    for what's really one decision.
+
+    Risk is deliberately "Medium," not a "safe/verified" label: the
+    matched InstallLocation is solid *registry* evidence the owning app
+    is gone, but says nothing about whether the folder still holds real
+    user data (save files, exported settings) worth keeping regardless.
+    """
+    recommendations = []
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
+        if not node.is_dir:
+            continue
+
+        normalized = os.path.normcase(os.path.normpath(node.path))
+        if normalized in orphaned_locations:
+            recommendations.append(
+                Recommendation(
+                    node=node,
+                    category=CATEGORY_ORPHANED_INSTALL,
+                    reason=(
+                        "Matches a location this app was previously seen "
+                        "installed to, but that app is no longer installed."
+                    ),
+                    risk=(
+                        "Medium — folder may still contain user data even though "
+                        "the app is uninstalled"
+                    ),
+                    recoverable_bytes=node.size,
+                    action="Review, then delete if no longer needed",
+                )
+            )
+            continue  # don't also flag anything nested inside it
+
+        stack.extend(node.children)
+
+    recommendations.sort(key=lambda r: r.recoverable_bytes, reverse=True)
+    return recommendations
+
+
+def _drop_nested_under(recommendations, container_paths):
+    """Strip any recommendation whose node.path falls under one of
+    `container_paths` (directory paths -- raw or already-normalized,
+    normalized here either way -- each treated as a path *prefix*, not a
+    substring: "C:\\Foo" excludes "C:\\Foo\\bar.txt" but not an unrelated
+    "C:\\Foo2\\bar.txt").
+
+    Used to keep an orphaned-install folder's own recommendation as the
+    single actionable row for that space, once one is found -- without
+    this, a large old file inside that same folder could *also* show up
+    as its own separate Review candidate, double-counting the same bytes
+    in the "potentially recoverable" total and giving the user two
+    different rows for what's really one decision.
+    """
+    if not container_paths:
+        return recommendations
+    prefixes = []
+    for path in container_paths:
+        normalized = os.path.normcase(os.path.normpath(path))
+        prefixes.append(normalized if normalized.endswith(os.sep) else normalized + os.sep)
+    kept = []
+    for rec in recommendations:
+        normalized = os.path.normcase(os.path.normpath(rec.node.path))
+        if any(normalized.startswith(prefix) for prefix in prefixes):
+            continue
+        kept.append(rec)
+    return kept
 
 
 def build_duplicate_recommendations(duplicate_groups):
