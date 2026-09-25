@@ -31,10 +31,9 @@ import os
 import sys
 import threading
 
-from storage_scanner.mft_scan import build_tree, finalize_subtree, reroot_if_reparse_point
 from storage_scanner.mft_volume import open_record_source
 from storage_scanner.serialization import node_to_dict
-from storage_scanner.turbo_scan import find_subtree_node, get_records_using_cache
+from storage_scanner.turbo_read import scan_subtree_using_cache
 
 EXIT_OK = 0
 EXIT_SCAN_ERROR = 1
@@ -42,7 +41,7 @@ EXIT_SCAN_ERROR = 1
 
 class _ProgressFileWriter:
     """Duck-types just enough of queue.Queue's `.put()` interface for
-    get_records_using_cache()/_full_scan_and_cache() to use unmodified --
+    turbo_read.scan_subtree_using_cache() to use unmodified --
     they already call `progress_q.put(("progress", count))` periodically
     during a cold full scan, previously discarded outright by passing
     `progress_q=None`. Every write replaces the file's entire contents
@@ -116,27 +115,15 @@ def run_mft_scan(argv):
         progress_q = _ProgressFileWriter(args.progress_file) if args.progress_file else None
         record_source = open_record_source(args.drive)
         try:
-            records, mft_read = get_records_using_cache(
+            subtree_node, mft_read = scan_subtree_using_cache(
                 record_source,
                 args.drive,
+                args.subtree,
                 progress_q=progress_q,
                 cancel_event=cancel_event,
             )
         finally:
             record_source.close()
-
-        root_node, _orphan_count, frn_by_node_id = build_tree(records, root_path=args.drive)
-        if root_node is None:
-            raise RuntimeError(
-                f"Turbo Scan could not locate a root directory record on {args.drive!r}"
-            )
-        subtree_node = find_subtree_node(root_node, args.subtree)
-        # A requested folder that's itself a reparse point must still be
-        # followed -- see mft_scan.reroot_if_reparse_point's docstring.
-        subtree_node = reroot_if_reparse_point(subtree_node, args.subtree, records, frn_by_node_id)
-        # Hard-link dedup is deliberately scoped to just this subtree, not
-        # the whole volume -- see mft_scan.finalize_subtree's docstring.
-        finalize_subtree(subtree_node, frn_by_node_id)
 
         with open(args.output, "w", encoding="utf-8") as f:
             # The GUI launching this helper is always the same build, so the

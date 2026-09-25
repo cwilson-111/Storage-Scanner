@@ -283,6 +283,16 @@ def get_latest_scan_id(scan_path):
     return row[0] if row else None
 
 
+def get_most_recent_scan_path():
+    """The scan_path of the newest saved scan of anything, or None if
+    nothing has been scanned yet -- where Growth History opens when there's
+    no scan this session to go by."""
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute("SELECT scan_path FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
 def list_scans_for_path(scan_path, limit=200):
     """All saved scans of `scan_path`, most recent first.
 

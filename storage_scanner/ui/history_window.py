@@ -16,12 +16,17 @@ from tkinter import (
     Toplevel,
     W,
     X,
+    messagebox,
     ttk,
 )
 
 from history import (
     get_folder_growth,
     get_growth_summary,
+    get_latest_scan_id,
+    get_latest_scan_snapshot,
+    get_most_recent_scan_path,
+    get_previous_scan_id,
     get_scan_history,
     get_scan_ids_by_created_at,
     list_scans_for_path,
@@ -31,7 +36,7 @@ from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
-from storage_scanner.scan_history import collect_folder_sizes, record_scan
+from storage_scanner.scan_history import collect_folder_sizes, normalize_scan_path, record_scan
 from storage_scanner.settings import COLORS, FONT_BOLD
 
 
@@ -286,27 +291,60 @@ class HistoryMixin:
         return f"{os.path.basename(folder_path)} — {human_size(growth_bytes)} ({percent_text})"
 
     # -- Show Growth Function ---------------------------------------------- #
+    def _history_path_without_scan(self):
+        """With nothing scanned this session: the path in the path box if
+        it has saved scans, else the most recently scanned path, else None."""
+        typed = self.path_var.get().strip().strip('"')
+        if typed:
+            candidate = normalize_scan_path(typed)
+            if get_latest_scan_id(candidate) is not None:
+                return candidate
+        return get_most_recent_scan_path()
+
     def show_growth_history(self, compare_a_id=None, compare_b_id=None):
         """Show the Growth History window, comparing two arbitrary snapshots.
 
         Defaults to the most recent scan vs. the one before it (the normal
         post-scan case); the picker at the top of the window lets the user
         instead pick any two saved snapshots of this path and re-render.
-        """
-        if not self.root_node:
-            return
 
-        scan_path = os.path.normcase(os.path.normpath(self.root_node.path))
+        Works without a scan this session too: history lives in the
+        database, including scans from earlier runs and earlier versions
+        of the app, so it opens on the latest two saved snapshots.
+        """
+        if self.root_node is not None:
+            display_path = self.root_node.path
+            scan_path = normalize_scan_path(display_path)
+            size_text = f"Current size: {human_size(self.root_node.size)}"
+            default_newer, default_older = self.last_scan_id, self.last_previous_scan_id
+            default_rows = getattr(self, "last_growth_rows", [])
+        else:
+            scan_path = self._history_path_without_scan()
+            if scan_path is None:
+                messagebox.showinfo(
+                    "Growth History",
+                    "No scan history yet. Scan a folder to start tracking how it grows.",
+                )
+                return
+            display_path = scan_path  # stored normalized; no scan to take spelling from
+            last_scanned_at, last_size, _files, _folders = get_latest_scan_snapshot(scan_path)
+            size_text = f"Size at last scan ({last_scanned_at}): {human_size(last_size)}"
+            default_newer = get_latest_scan_id(scan_path)
+            default_older = get_previous_scan_id(scan_path, default_newer)
+            default_rows = (
+                get_folder_growth(default_newer, default_older, limit=50) if default_older else []
+            )
+
         scan_choices = list_scans_for_path(scan_path)  # [(id, created_at, size, files), ...]
 
-        newer_id = compare_a_id if compare_a_id is not None else self.last_scan_id
-        older_id = compare_b_id if compare_b_id is not None else self.last_previous_scan_id
+        newer_id = compare_a_id if compare_a_id is not None else default_newer
+        older_id = compare_b_id if compare_b_id is not None else default_older
 
         if compare_a_id is not None or compare_b_id is not None:
             summary = get_growth_summary(newer_id, older_id)
             rows = get_folder_growth(newer_id, older_id, limit=50) if older_id else []
         else:
-            rows = getattr(self, "last_growth_rows", [])
+            rows = default_rows
             summary = get_growth_summary(newer_id, older_id)
 
         existing = getattr(self, "_growth_win", None)
@@ -324,7 +362,7 @@ class HistoryMixin:
         except Exception:
             logger.debug("Growth History window iconbitmap failed", exc_info=True)
 
-        drive_capacity = self._get_drive_capacity_bytes(self.root_node.path)
+        drive_capacity = self._get_drive_capacity_bytes(display_path)
         full_history = get_scan_history(scan_path, limit=200)
         forecast = forecast_days_until_full(full_history, drive_capacity)
         forecast_text = self._format_forecast(forecast)
@@ -332,11 +370,7 @@ class HistoryMixin:
         ttk.Label(
             win,
             padding=(10, 8),
-            text=(
-                f"Growth history for {self.root_node.path}  —  "
-                f"Current size: {human_size(self.root_node.size)}  |  "
-                f"{forecast_text}"
-            ),
+            text=f"Growth history for {display_path}  —  {size_text}  |  {forecast_text}",
         ).pack(side=TOP, fill=X)
 
         self._build_snapshot_picker(win, scan_path, scan_choices, newer_id, older_id)

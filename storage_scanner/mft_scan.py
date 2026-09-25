@@ -10,7 +10,7 @@ its `names` list) is attached under its own parent directory, each carrying
 its own full, undeduped size -- build_tree() deliberately does NOT decide
 which occurrence is "primary" here. That decision is deferred to
 finalize_subtree(), applied only to whatever subtree the caller actually
-asked for (see storage_scanner.turbo_scan.find_subtree_node), because
+asked for (see storage_scanner.turbo_read.find_subtree_node), because
 deciding it globally across the whole volume can zero out a file's size
 within the very folder being looked at just because its OTHER hard-linked
 occurrence (e.g. Windows system files also linked into C:\\Windows\\WinSxS)
@@ -70,6 +70,15 @@ def _make_node(record, name, is_root=False):
     node.alloc_size = record.alloc_size
     node.hardlink_dup = False
     node.file_count = 0 if is_dir else 1
+    return node
+
+
+def file_node(record, name, path):
+    """The Node for a single-file scan target: exactly the leaf build_tree()
+    attaches for `record` under its parent (a link to a file stays a link --
+    reroot_if_reparse_point only ever follows directories)."""
+    node = _make_node(record, name)
+    node.path = path
     return node
 
 

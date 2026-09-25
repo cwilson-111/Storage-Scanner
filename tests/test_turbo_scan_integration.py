@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import drive_info, mft_volume, turbo_cache, turbo_scan, usn_journal
 from storage_scanner.mft_parser import _pack_frn
+from storage_scanner.turbo_read import MftRead
 
 _RECORD_SIZE = 1024
 _SECTOR_SIZE = 512
@@ -388,7 +389,7 @@ class _FakeCreateFileW:
 class _FakeKernel32:
     """Also fakes a minimal, working USN Change Journal (FSCTL_QUERY_USN_
     JOURNAL/FSCTL_CREATE_USN_JOURNAL/FSCTL_READ_USN_JOURNAL) alongside the
-    NTFS volume-data FSCTL turbo_scan.get_records_using_cache's caching
+    NTFS volume-data FSCTL turbo_read.scan_subtree_using_cache's caching
     path now also exercises on every real scan -- a first attempt at this
     fake only ever handled one FSCTL code regardless of what was actually
     requested, which would have silently fed USN journal calls garbage
@@ -657,7 +658,7 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
         turbo_enabled=True,
     )
     assert first_report.engine == turbo_scan.ENGINE_TURBO
-    assert first_report.mft_read == turbo_scan.MftRead(
+    assert first_report.mft_read == MftRead(
         incremental=False, full_read_reason="first scan of this drive"
     )
     reads_for_full_scan = kernel32.read_file_calls
@@ -672,7 +673,7 @@ def test_second_scan_of_an_unchanged_volume_uses_incremental_refresh(monkeypatch
     )
 
     assert second_report.engine == turbo_scan.ENGINE_TURBO
-    assert second_report.mft_read == turbo_scan.MftRead(incremental=True)
+    assert second_report.mft_read == MftRead(incremental=True)
     assert second_node.file_count == first_node.file_count == 2
     assert second_node.size == first_node.size == 3 + 5
     assert {c.name for c in second_node.children} == {"hello.txt", "Sub"}
@@ -736,7 +737,31 @@ def test_second_scan_picks_up_a_new_file_via_the_journal_without_a_full_reread(
     )
 
     assert second_report.engine == turbo_scan.ENGINE_TURBO
-    assert second_report.mft_read == turbo_scan.MftRead(incremental=True)
+    assert second_report.mft_read == MftRead(incremental=True)
     assert {c.name for c in second_node.children} == {"hello.txt", "Sub", "new.txt"}
     assert second_node.file_count == 3  # hello.txt + Sub/inside.txt + new.txt
     assert second_node.size == 3 + 5 + 3  # "hi!" + "xyz12" + "NEW"
+
+
+def test_rescanning_one_folder_loads_it_from_the_cache_matching_a_full_read(monkeypatch, tmp_path):
+    _init_cache_db(tmp_path, monkeypatch)
+    kernel32 = _FakeKernel32(_build_fake_volume())
+    monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
+    monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
+
+    def scan(path):
+        return turbo_scan.scan_with_best_engine(
+            path, queue.Queue(), threading.Event(), turbo_enabled=True
+        )
+
+    full_node, full_report = scan("C:\\Sub")  # first scan: nothing cached yet
+    cached_node, cached_report = scan("C:\\sub")  # folder typed in a different case
+
+    assert full_report.mft_read.incremental is False
+    assert cached_report.mft_read == MftRead(incremental=True)
+    assert (cached_node.path, cached_node.name) == ("C:\\Sub", "Sub")  # disk spelling
+    for node in (full_node, cached_node):
+        assert {c.name for c in node.children} == {"inside.txt"}
+        assert (node.size, node.file_count) == (5, 1)

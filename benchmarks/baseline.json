@@ -1,0 +1,10 @@
+{
+  "files": 20000,
+  "python": "3.13",
+  "metrics": {
+    "tree_bytes_per_file": 394.0,
+    "history_bytes_per_scan": 40960,
+    "turbo_cache_bytes_per_record": 128.1,
+    "turbo_small_subtree_records_loaded": 51
+  }
+}

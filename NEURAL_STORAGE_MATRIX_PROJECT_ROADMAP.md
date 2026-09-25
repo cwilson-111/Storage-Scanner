@@ -232,9 +232,8 @@ an **MFT read** field after a Turbo Scan: "Incremental (USN journal)" when
 the cache was refreshed from the journal, or "Full (…)" with why, such as
 first scan of this drive, USN journal wrapped since last scan, USN journal
 was recreated, cache was corrupt, or cache unavailable. That makes a slow
-repeat scan explainable at a glance, which the small-subtree incremental
-performance follow-up below needs. `get_records_using_cache` returns
-`(records, MftRead)`, `ScanReport.mft_read` carries it, and the elevated
+repeat scan explainable at a glance. `turbo_read.scan_subtree_using_cache`
+returns `(node, MftRead)`, `ScanReport.mft_read` carries it, and the elevated
 helper's `--output` JSON is now `{"node": …, "mft_read": …}`, so it crosses
 the process boundary too. The helper is always the same build as the GUI
 that launches it, so there's no older format to support. The reasons are
@@ -250,9 +249,9 @@ hardware showing the field, which needs admin rights and a UAC prompt.
 
 Off by default behind a "Turbo Scan (Experimental)" toggle (Tools ▸
 Settings) pending more real-world mileage before it's recommended broadly —
-see the "Status update" section above for what's been validated so far and
-what's still open (a small-subtree incremental-scan performance follow-up;
-not a correctness issue).
+see the "Status update" section above for what's been validated so far. The
+small-folder rescan performance follow-up that used to be open here is done;
+see "Scale benchmarks and folder rescans from the cache" at the end.
 
 ### 2. Build a synchronized treemap and sunburst explorer
 
@@ -444,8 +443,9 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
   deliberately set below that at 45% and should be raised to just under
   whatever the first green Windows CI run reports.
 
-Still not done from this item: generated test trees for cross-version
-correctness/performance benchmarking.
+Generated test trees for cross-version benchmarking are done too (2026-09-24):
+`benchmarks/scale.py`, gated in CI. See "Scale benchmarks and folder rescans
+from the cache" at the end.
 
 **Packaging smoke tests are done (2026-09-23).** `smoke_test_build.py` launches
 the real frozen binary in headless `--cli --save-history` mode against a small
@@ -676,3 +676,118 @@ filled the form. **Not verified:** a screenshot of the window, since a
 full-screen app was in the foreground during the test run, and the list
 against a task actually registered by this app, since that still needs the
 deliberate manual `schtasks` test noted above.
+
+## Saved data usable at launch, without a rescan — ✅ done (2026-09-24)
+
+Reported: after installing a new version, nothing history-related worked
+until a fresh scan, even though every version shares the same
+`%LOCALAPPDATA%` databases. The data was always there. The UI just wouldn't
+reach it:
+
+- **The whole Tools button started disabled** and was only enabled when a
+  scan finished. So Growth History, Audit Log, Storage Budgets, Schedule
+  Scans and the cold-start Cleanup Recommendations were unreachable at
+  launch. It also stayed disabled after a failed or cancelled scan. Now
+  Tools is enabled from launch and after every scan outcome. Only the items
+  that genuinely need this session's tree (Explore ▸ all four, Find
+  Duplicate Files, Export Results…) are greyed out until a scan exists.
+- **Growth History returned silently without a scan** (`if not
+  self.root_node: return`) and used only this session's scan ids. Now it
+  opens on the latest two saved snapshots of the path in the path box, or
+  the most recently scanned path if that one has no history. Its header
+  shows the size at the last scan and when that scan was taken. With no
+  history at all it says so instead of doing nothing.
+
+Verified: tests for the path choice (typed path with history wins, typed
+differently from how it was stored; otherwise the newest scan of anything;
+none before any scan). The real app, hidden, was run against a copy of a
+real 23-scan history database. At launch Tools was enabled and exactly the
+six scan-only items were greyed out. Growth History opened on `C:\` with its
+forecast and growth tables, fell back correctly for a path with no history,
+and explained an empty database. A cancelled scan re-enabled Tools.
+
+## Scale benchmarks and folder rescans from the cache — ✅ done (2026-09-24)
+
+First step of the "scale to large drives and long histories" plan: measure,
+then fix the biggest cost the measurements show.
+
+**`benchmarks/scale.py`** builds one synthetic volume (a breadth-first tree
+of folders holding 50 files each, sizes spread over 0–5 MB) and runs each
+scenario in its own subprocess, so each reports its own peak memory:
+
+- **tree_memory:** the scanned `Node` tree in memory.
+- **history:** scan history after 30 repeat scans of one folder.
+- **turbo_rescan:** Turbo Scan cache size per record, and what rescanning
+  the whole volume vs. one 50-file folder has to load and build.
+- **compatible_scan:** a real directory tree on disk (`--disk-files N`;
+  creating the files is slow, so it's opt-in and cached in `%TEMP%`).
+
+Sizes and counts are reproducible, so CI's `test` job gates them
+(`python benchmarks/scale.py --check`, 20k files, 15% tolerance) against
+`benchmarks/baseline.json`. Timings and peak memory are reported only;
+shared runners are too noisy to fail a build on. After an intended change,
+run `--write-baseline`.
+
+**What it found at 20k files (before this change):**
+
+| | Value |
+|---|---|
+| Tree memory | 394 bytes per file (every file `Node` also carries its own empty `children` list, 56 bytes) |
+| History | 40,960 bytes per scan for 401 folder rows (~100 bytes per row) |
+| Turbo cache | 402.8 bytes per record (one pickled `ParsedRecord` each) |
+| Rescanning one 50-file folder | loaded all 20,401 records, about as slow as rescanning the whole volume |
+
+**The fix: folder rescans cost the folder, not the drive.**
+
+- `turbo_cache` stores records as plain columns (`cached_records`) plus one
+  row per hard-link name keyed by parent (`cached_names`). There's no
+  pickle, so nothing is deserialized and the cache no longer loads code
+  from a user-writable file.
+- After the USN refresh, `find_record_by_path` resolves the requested
+  folder component by component (case-insensitive, as `find_subtree_node`
+  does; blocked by files and by reparse points, which a scan never enters).
+  `load_subtree_records` then collects just that subtree with one recursive
+  query. Only the requested folder is followed if it's a reparse point, and
+  hard-link names outside the subtree are dropped so they aren't counted as
+  orphans.
+- The recursive query pins its join order with `CROSS JOIN`. Left to
+  itself, SQLite scanned every name on the volume once per folder, which
+  made whole-volume rescans 15× slower (caught by the benchmark before it
+  shipped).
+- A damaged cache database raises `TurboCacheCorruptError`, which
+  invalidates the cache and falls back to a full read, as a stale journal
+  does. A locked database is not treated as corruption.
+- New module `storage_scanner/turbo_read.py` holds the volume-reading path
+  (`scan_subtree_using_cache`), now shared by the in-process scan and the
+  elevated helper, which each used to have their own copy of build → find →
+  reroot → finalize. `turbo_scan.py` keeps engine choice and fallback.
+- The old pickle/JSON cache is dropped on first start, so the first Turbo
+  Scan after upgrading reads the whole MFT once.
+
+**After, same 20k-file volume:**
+
+| | Before | After |
+|---|---|---|
+| Turbo cache bytes per record | 402.8 | **128.1** (3.1× smaller) |
+| Records loaded to rescan one small folder | 20,401 | **51** |
+| Small-folder rescan time | 0.26–0.41 s | **0.004 s** |
+| Whole-volume rescan time | 0.28–0.70 s | **0.15 s** |
+
+"Before" timings are the range over every run of the old load-everything
+rescan: in this checkout before the change, and against a checkout of the
+previous commit. Timings are local and indicative only; the sizes and
+record counts are exact.
+
+Verified: `test_turbo_cache.py` covers the round trip of every field,
+subtree-only loading, reparse-point expansion, case-insensitive path lookup
+that stops at files and links, rename and delete, old-cache migration and
+damaged-database detection. `test_turbo_read.py` covers every path choice
+and failure reason. A new integration test on the faked NTFS volume scans
+the drive, then rescans one folder typed in a different case: it comes back
+incremental, with the on-disk spelling and the same contents as a full read.
+**Not verified:** a Turbo Scan on real hardware with the new cache (needs
+admin rights and a UAC prompt).
+
+Next in the plan: history retention and a compact schema, then a compact
+in-memory tree (the benchmark's `tree_bytes_per_file` is the number to
+move).

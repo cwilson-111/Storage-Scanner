@@ -321,8 +321,8 @@ def test_read_journal_changes_raises_on_journal_id_mismatch(monkeypatch):
 
 
 def test_read_journal_changes_raises_when_start_usn_is_below_lowest_valid(monkeypatch):
-    """Defense in depth: even though the sole caller (turbo_scan.
-    _try_incremental_refresh) already checks this itself before calling
+    """Defense in depth: even though the sole caller (turbo_read.
+    _try_incremental_scan) already checks this itself before calling
     in, read_journal_changes must refuse a start_usn the journal has
     wrapped past on its own, rather than silently reading only the
     surviving post-gap records and missing everything purged in between.

@@ -217,7 +217,7 @@ def read_journal_changes(handle, journal_id, start_usn, lowest_valid_usn=None):
     `start_usn`, silently reading from here on would only see records
     that survived the purge, missing every change in the gap, with
     nothing to signal that a full rescan is actually needed instead. The
-    caller (turbo_scan._try_incremental_refresh) already checks this
+    caller (turbo_read._try_incremental_scan) already checks this
     itself from its own freshly-queried JournalState before calling here
     -- this is a second, self-contained check so the function can't
     silently misbehave for some future caller that forgets to.

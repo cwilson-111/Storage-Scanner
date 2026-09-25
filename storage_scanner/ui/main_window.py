@@ -104,12 +104,14 @@ class MainWindowMixin:
             )
             self.elevate_btn.pack(side=LEFT, padx=(6, 0))
 
-        # Adding a tools menu dropdown
+        # Enabled from launch: History & Trust, Cleanup Recommendations and
+        # Settings read the databases earlier runs (and earlier versions)
+        # left behind. Only the items in _scan_only_tools need this
+        # session's tree; _refresh_tools_state greys those out until then.
         self.tools_btn = ttk.Button(
             bar_frame,
             text="Tools ▼",
             command=self._show_tools_menu,
-            state="disabled",
         )
         self.tools_btn.pack(side=LEFT, padx=6)
 
@@ -124,15 +126,23 @@ class MainWindowMixin:
         # trust — rather than one flat, ever-growing list of unrelated tools.
         self.tools_menu = Menu(self.root, tearoff=0)
 
+        # (menu, entry index) for every Tools item that works on the tree
+        # from a scan in this session, rather than on saved data.
+        self._scan_only_tools = []
+
+        def add_scan_only(menu, label, command):
+            menu.add_command(label=label, command=command)
+            self._scan_only_tools.append((menu, menu.index("end")))
+
         explore_menu = Menu(self.tools_menu, tearoff=0)
-        explore_menu.add_command(label="Treemap", command=self.show_treemap)
-        explore_menu.add_command(label="Search & Filter", command=self.show_search_window)
-        explore_menu.add_command(label="Largest Files", command=self.show_top_files)
-        explore_menu.add_command(label="File Types Breakdown", command=self.show_file_types)
+        add_scan_only(explore_menu, "Treemap", self.show_treemap)
+        add_scan_only(explore_menu, "Search & Filter", self.show_search_window)
+        add_scan_only(explore_menu, "Largest Files", self.show_top_files)
+        add_scan_only(explore_menu, "File Types Breakdown", self.show_file_types)
         self.tools_menu.add_cascade(label="Explore", menu=explore_menu)
 
         cleanup_menu = Menu(self.tools_menu, tearoff=0)
-        cleanup_menu.add_command(label="Find Duplicate Files", command=self.show_duplicates)
+        add_scan_only(cleanup_menu, "Find Duplicate Files", self.show_duplicates)
         cleanup_menu.add_command(
             label="Cleanup Recommendations", command=self.show_cleanup_recommendations
         )
@@ -145,6 +155,7 @@ class MainWindowMixin:
         history_menu.add_command(label="Schedule Scans…", command=self.show_schedule_scans)
         self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
 
+        # Data Tools works on any CSV on disk, so it's usable without a scan.
         data_menu = Menu(self.tools_menu, tearoff=0)
         data_menu.add_command(
             label="Compress CSV to Parquet…", command=self.compress_csv_to_parquet
@@ -154,7 +165,8 @@ class MainWindowMixin:
         )
         self.tools_menu.add_cascade(label="Data Tools", menu=data_menu)
 
-        self.tools_menu.add_command(label="Export Results…", command=self.export_results)
+        add_scan_only(self.tools_menu, "Export Results…", self.export_results)
+        self._refresh_tools_state()  # no tree yet: scan-only items start greyed out
 
         # Turbo Scan (NTFS MFT fast path) is Windows-only and off by
         # default — persisted the same way as the schema_version key, via
@@ -767,6 +779,7 @@ class MainWindowMixin:
 
         if self.cancel_event.is_set():
             self.status_var.set("Scan cancelled.")
+            self._refresh_tools_state()
             return
 
         # Whatever the live-scan preview inserted (see _start_live_tree) is
@@ -795,7 +808,7 @@ class MainWindowMixin:
             len(self.tree.get_children("")),
             len(self.tree.get_children(root_iid)),
         )
-        self.tools_btn.config(state="normal")
+        self._refresh_tools_state()
         self.top_count_combo.config(state="readonly")
 
         if report is not None and report.fallback_reason:
@@ -827,8 +840,17 @@ class MainWindowMixin:
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
             self.elevate_btn.config(state="normal")
+        self._refresh_tools_state()
         self.status_var.set("Scan failed.")
         messagebox.showerror("Storage Scanner", f"Scan failed:\n{msg}")
+
+    def _refresh_tools_state(self):
+        """Tools is usable whenever no scan is running; the items that need
+        this session's tree are enabled only once there is one."""
+        self.tools_btn.config(state="normal")
+        state = "normal" if self.root_node is not None else "disabled"
+        for menu, index in self._scan_only_tools:
+            menu.entryconfigure(index, state=state)
 
     # -- Live scan preview (Compatible engine only) ------------------------- #
     #
