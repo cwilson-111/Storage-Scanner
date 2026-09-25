@@ -138,9 +138,14 @@ packages were bundled.
 - **Largest Files** and **File Types Breakdown** views.
 
 ### Cleaning up safely
-- **Duplicate file finder** — a staged pipeline (group by size → partial
-  hash → full hash) finds exact-content duplicates with zero false
-  positives. Each group gets an automatic **keeper recommendation** (prefers
+- **Duplicate file finder** — a staged pipeline (group by size → hash the
+  first and last 1 MB → hash the middle 1 MB) that never reads a whole large
+  file. Files up to 3 MB are fully covered by those windows, so matches are
+  byte-exact. Above 3 MB a match is *sampled*: two files with the same size
+  and identical first, middle and last 1 MB are grouped even if they differ
+  somewhere in between — the window and Cleanup Recommendations label those
+  groups as sampled (medium risk) instead of exact, so review before
+  deleting. Each group gets an automatic **keeper recommendation** (prefers
   a copy outside Downloads/Desktop/Temp, then the oldest) with the reasoning
   shown — and the keeper is genuinely protected: it can never be deleted
   from that window, even via select-all, though you can manually override
@@ -276,6 +281,26 @@ four commands as the `test` job every release build depends on, plus
 `python benchmarks/scale.py --check`, which fails the build if memory per
 file, history size per scan, Turbo cache size per record, or the records a
 folder rescan loads get more than 15% worse than `benchmarks/baseline.json`.
+
+### Benchmarking the scanner
+
+`benchmarks/scale.py` (above) gates how memory and database sizes grow on
+synthetic volumes; `benchmark_scan.py` is the on-disk counterpart, checking
+scan correctness on edge cases and timing real scans across versions:
+
+```bash
+python benchmark_scan.py --profile medium --output bench-before.json
+# ...change the scanner...
+python benchmark_scan.py --profile medium --baseline bench-before.json
+```
+
+Generates a folder tree from a fixed seed (`small` ≈ 2k files, `medium` ≈
+20k, `large` ≈ 100k and about 1 GB), scans it, checks the result against
+what was generated (totals, per-folder rollups, hard links counted once,
+symlinks/junctions not followed), then times several scans and measures
+peak memory. It exits 2 if the scan doesn't match the tree, and 3 if the
+median is more than `--max-slowdown` (default 25%) slower than the baseline.
+Compare only runs from the same machine; `--dir` picks the drive to test.
 
 ## Privacy & trust
 

@@ -4,7 +4,7 @@ from datetime import datetime
 try:
     import matplotlib.pyplot as plt
 except ImportError:  # pragma: no cover - optional runtime dependency
-    plt = None
+    plt = None  # type: ignore[assignment]
 
 import logging
 import os

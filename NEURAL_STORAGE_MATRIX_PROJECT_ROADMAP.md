@@ -94,12 +94,13 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 - File-type aggregation by extension with total size, percentage, and file count.
 - Duplicate detection using a staged pipeline:
   1. Group candidates by exact file size.
-  2. Hash the first and last portions with BLAKE2b.
-  3. Fully hash only candidates that survive the first two filters.
-  4. Group confirmed matches and rank groups by potential recoverable space.
-- Parallel partial and full hashing.
+  2. Hash the first and last 1 MB with BLAKE2b.
+  3. For survivors larger than 2 MB, hash the middle 1 MB (centered on the file's midpoint). A file over 3 MB is never read in full.
+  4. Group matches on (size, first+last digest, middle digest) and rank groups by potential recoverable space.
+- Tradeoff: files up to 3 MB are fully covered by the three windows, so those matches are byte-exact. Above 3 MB a match is sampled: files identical in size and in those three windows are grouped even if they differ elsewhere. The Duplicate Files window and Cleanup Recommendations label such groups as sampled, with medium rather than low risk.
+- Parallel head/tail and middle hashing.
 - Default exclusions for sensitive or low-value Windows/system paths.
-- Duplicate-scan statistics for checked, skipped, partially hashed, and fully hashed files.
+- Duplicate-scan statistics for checked, skipped, head/tail-hashed, and middle-hashed files.
 - Multi-selection deletion from duplicate results.
 
 ### Historical intelligence
@@ -265,7 +266,7 @@ Do not market automatic deletion as intelligence. Build explainable recommendati
 
 - Safe candidate: old installer already represented by a newer version.
 - Review candidate: large, old media file with no recent access.
-- Duplicate candidate: exact content match with a clearly identified keeper.
+- Duplicate candidate: content match (byte-exact up to 3 MB, sampled above) with a clearly identified keeper.
 - Protected: operating-system, application, cloud-placeholder, or policy-sensitive content.
 
 Every recommendation should show **why it was flagged**, estimated recoverable space, risk level, dependencies, and proposed action. Default to review queues, Recycle Bin, quarantine, or archive. Never silently delete user content.
@@ -395,8 +396,8 @@ To actually fix it:
   `build.yml` on purpose: a CodeQL queue backlog must never hold up
   shipping a binary. Verified locally: `pip-audit --strict -r
   requirements-dev.txt` → "No known vulnerabilities found"; `gitleaks git`
-  → "34 commits scanned … no leaks found". CodeQL itself only runs on
-  GitHub, so it is unverified until the next push.
+  → "34 commits scanned … no leaks found". CodeQL ran green on GitHub on
+  the next push (`80220b7`), along with the rest of the security workflow.
 - ✅ Add reproducible build notes — `BUILD_PROVENANCE.md`, including an
   explicit "this is *not* a reproducible build" section.
 - ✅ Publish a privacy statement stating that scanning is local unless the user opts into remote features.
@@ -441,14 +442,54 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
   typed `Optional[str]` instead of `str = None`, and loose `tuple`
   annotations for the per-platform font specs and duplicate-exclude lists,
   whose branches have different shapes.
-- **Coverage** is enforced by `--cov-fail-under` in `pyproject.toml`. A full
-  macOS run measures 49% *with* those 36 Windows tests failing; the floor is
-  deliberately set below that at 45% and should be raised to just under
-  whatever the first green Windows CI run reports.
+- **Coverage** is enforced by `--cov-fail-under` in `pyproject.toml`. The
+  floor started at 45% (a macOS run measured 49% with the 36 Windows-only
+  tests failing), then went up to 49% (2026-09-24) after a full Windows run
+  — 430 passed, 2 platform skips — measured 49.7%. The UI modules
+  (`ui/main_window.py`, `ui/history_window.py` and the other Tk windows) are
+  most of the uncovered code.
+- **mypy with matplotlib installed.** `history.py`'s optional-import
+  fallback (`plt = None`) failed mypy whenever matplotlib was actually
+  installed; CI only passed because its runner doesn't install it. Fixed
+  with a scoped `type: ignore[assignment]`.
 
-Generated test trees for cross-version benchmarking are done too (2026-09-24):
-`benchmarks/scale.py`, gated in CI. See "Scale benchmarks and folder rescans
-from the cache" at the end.
+Generated test trees for cross-version benchmarking are done (2026-09-24),
+as two complementary tools:
+
+- `benchmarks/scale.py`, gated in CI, builds synthetic volumes to measure
+  how memory, the history database, the Turbo cache and folder rescans grow
+  with file count. See "Scale benchmarks and folder rescans from the cache"
+  at the end.
+- `benchmark_scan.py` checks on-disk correctness on edge cases and times
+  real scans, as described below.
+
+**`benchmark_scan.py`: on-disk edge-case correctness and timing.**
+`benchmark_scan.py` builds a folder tree from a seed (`small`/`medium`/`large`
+profiles, about 2k/20k/100k files), so the same seed always produces the same
+files, names and sizes. The tree includes a random nested tree, empty folders, a
+deep chain, hard links, a symlink and a junction pointing at a folder with files
+in it, and Unicode, space, leading-dot and 100-character names. The script
+scans the tree with the Compatible engine and checks the scan against what it
+generated: totals, folder count, hard-link duplicates, per-top-level-folder
+rollups, and that each link stayed a leaf. It then times several warm-cache
+scans and measures peak memory in a separate tracemalloc run. `--output`
+writes a JSON result stamped with the app version and git revision.
+`--baseline` compares against an earlier result: it refuses one from a
+different profile/seed/tree, warns when the machine or Python differs, and
+exits 3 when the median is more than `--max-slowdown` (default 25%) slower.
+
+- `tests/test_benchmark_scan.py` runs the real scanner against a small
+  generated tree on every CI run, so the same checks gate releases.
+  Recreating the old Windows hard-link dedup bug (fixed in `0b955bc`) in a
+  throwaway run was caught: `hardlinks/ size: scanned 199922, expected
+  99961`.
+- First measurements on this dev machine (Windows, Python 3.13, not
+  elevated, so the symlinks were skipped and only the junction was created):
+  `medium`, 20,213 files and 2,069 folders, median 0.82 s (about 24.5k
+  files/s), 12.3 MiB peak traced memory. `small`, 0.08 s and 1.2 MiB.
+- Turbo Scan isn't covered: it reads the whole volume rather than the
+  generated folder and needs elevation. `compare_scan_engines.py` remains
+  its correctness check.
 
 **Packaging smoke tests are done (2026-09-23).** `smoke_test_build.py` launches
 the real frozen binary in headless `--cli --save-history` mode against a small
@@ -462,7 +503,7 @@ the binary from the CI shell because PowerShell doesn't wait for a windowed
 `.exe`, so a direct call would always pass. Verified locally against a real
 PyInstaller build of the `.exe` (passes in about 15 s), and against a
 non-app binary and a missing one (both fail, exit 1). The macOS and Linux
-steps haven't run yet; they run on the next push to `main`.
+steps have since run green too (`build-macos`/`build-linux` on `80220b7`).
 
 ## Recommended delivery sequence
 
@@ -472,7 +513,7 @@ steps haven't run yet; they run on the next push to `main`.
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (432 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release.
+5. ✅ Add unit tests (443 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release, and `benchmark_scan.py` checks the scanner against generated trees across versions.
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
 ### Phase 2: Competitive core — ✅ done
@@ -496,7 +537,7 @@ steps haven't run yet; they run on the next push to `main`.
 1. ❌ Sign the executable and installer — needs a purchased code-signing certificate; not something that can be built without one.
 2. 🚧 Produce an installer plus portable ZIP — portable ZIP done; no MSI/installer built.
 3. ✅ Publish SHA-256 checksums and an SBOM.
-4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
+4. 🚧 Create polished onboarding, documentation, screenshots, and benchmark results — benchmark tooling done (`benchmark_scan.py`, see item 10); no published benchmark results, onboarding, or screenshots yet.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
 6. ✅ Ship packaged macOS (`.dmg`) and Linux builds — see item 9a above; v1.5.0 ships all three platforms.
 

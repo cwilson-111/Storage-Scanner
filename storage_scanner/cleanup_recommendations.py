@@ -16,7 +16,9 @@ Duplicate-candidate recommendations are built separately, from whatever the
 existing duplicate-hashing pipeline (DuplicatesMixin) already found — see
 build_duplicate_recommendations() — since that's real content-hash evidence,
 not a metadata heuristic, and re-deriving it here would mean hashing files
-twice.
+twice. That evidence is byte-for-byte for files up to three hash windows in
+size, but only a sample (first, middle and last window) above that — see
+is_sampled_duplicate() — and the recommendation text says which.
 
 A "safe candidate: superseded installer" category from the product roadmap
 is deliberately not implemented: reliably detecting that a newer version of
@@ -39,7 +41,8 @@ import os
 import time
 from collections import namedtuple
 
-from storage_scanner.settings import DEFAULT_DUPLICATE_EXCLUDES
+from storage_scanner.formatting import human_size
+from storage_scanner.settings import DEFAULT_DUPLICATE_EXCLUDES, DUPLICATE_HASH_CHUNK_BYTES
 
 DEFAULT_OLD_DAYS = 180
 DEFAULT_LARGE_BYTES = 100 * 1024 * 1024  # 100 MB
@@ -186,7 +189,7 @@ def keeper_reason(keeper, nodes):
             "other copy in this group."
         )
     if any(n.mtime > keeper.mtime for n in others):
-        return "Oldest modified date among identical copies — likely the original."
+        return "Oldest modified date among the copies in this group — likely the original."
     return "Tiebreak (shortest path) among otherwise-identical copies."
 
 
@@ -273,13 +276,35 @@ def _drop_nested_under(recommendations, container_paths):
     return kept
 
 
+def is_sampled_duplicate(size):
+    """True when a duplicate match of files this size was only sampled.
+
+    DuplicatesMixin hashes the first, middle and last
+    DUPLICATE_HASH_CHUNK_BYTES of each candidate. Up to three windows'
+    worth of bytes those windows cover the whole file, so a match is
+    byte-exact; beyond that, the bytes between the windows were never
+    compared.
+    """
+    return size > 3 * DUPLICATE_HASH_CHUNK_BYTES
+
+
 def build_duplicate_recommendations(duplicate_groups):
     """Turn `_find_duplicate_files()`'s output — [(size, digest, nodes), ...]
     — into Recommendations: keep one file per group, flag the rest.
     """
+    window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
     recommendations = []
     for size, _digest, nodes in duplicate_groups:
         keeper = pick_keeper(nodes)
+        if is_sampled_duplicate(size):
+            reason = (
+                f"Same size and same first, middle and last {window} as {keeper.path} "
+                "— recommended keeper."
+            )
+            risk = "Medium — sampled match; bytes between the compared windows weren't checked"
+        else:
+            reason = f"Identical content to {keeper.path} — recommended keeper."
+            risk = "Low — every byte compared by hash"
         for node in nodes:
             if node is keeper:
                 continue
@@ -287,8 +312,8 @@ def build_duplicate_recommendations(duplicate_groups):
                 Recommendation(
                     node=node,
                     category=CATEGORY_DUPLICATE,
-                    reason=f"Identical content to {keeper.path} — recommended keeper.",
-                    risk="Low — exact content match, confirmed by full hash",
+                    reason=reason,
+                    risk=risk,
                     recoverable_bytes=size,
                     action="Delete this copy (to Recycle Bin/Trash)",
                 )

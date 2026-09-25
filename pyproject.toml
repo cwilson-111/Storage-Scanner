@@ -39,12 +39,11 @@ exclude = ["build/", "dist/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Coverage floor, deliberately conservative: a full local run on macOS — where
-# the Windows-only NTFS/Turbo Scan, schedule and drive-letter suites cannot
-# execute — measures 49%. A Windows CI run exercises those modules too and so
-# lands higher; raise this to just under whatever the first green CI run
-# reports rather than guessing upward now.
-addopts = "--cov=storage_scanner --cov-report=term-missing --cov-fail-under=45"
+# Coverage floor, set just under the measured Windows total: a full local run
+# on Windows (the same OS as the CI `test` job, where every Windows-only
+# NTFS/Turbo Scan, schedule and drive-letter suite executes) measures 49.7%.
+# Raise it as coverage grows; never lower it to get a build through.
+addopts = "--cov=storage_scanner --cov-report=term-missing --cov-fail-under=49"
 
 [tool.coverage.run]
 branch = true
