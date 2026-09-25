@@ -11,6 +11,8 @@ import os
 import sys
 from pathlib import Path
 
+from storage_scanner import history_retention, history_schema
+
 APP_NAME = "NeuralStorageMatrix"
 
 if sys.platform == "darwin":
@@ -43,117 +45,41 @@ logging.getLogger("storage_scanner").debug("Using database: %s", DB_NAME)
 
 
 def init_history_db():
+    """Create the history tables, or migrate an older layout to the current
+    one (storage_scanner.history_schema), in a single transaction. Cheap
+    and safe to call on every startup and before every CLI save: once the
+    schema is current it changes nothing."""
+    conn = sqlite3.connect(DB_NAME, isolation_level=None)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA temp_store = MEMORY")
 
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA temp_store = MEMORY")
+        # IMMEDIATE takes the write lock before the version is read, so a
+        # second process starting at the same moment waits, then finds the
+        # schema already current instead of migrating it again.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            migrated = history_schema.ensure_schema(conn)
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
 
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS app_metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    )
-    """)
-
-    cur.execute("""
-            INSERT OR IGNORE INTO app_metadata
-            (key, value)
-            VALUES ('schema_version', '1')
-            """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS scans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_path TEXT NOT NULL,
-            total_size INTEGER NOT NULL,
-            drive_capacity INTEGER NOT NULL,
-            file_count INTEGER NOT NULL,
-            folder_count INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS folder_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id INTEGER NOT NULL,
-            folder_path TEXT NOT NULL,
-            size_bytes INTEGER NOT NULL,
-            file_count INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(scan_id) REFERENCES scans(id)
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            source TEXT NOT NULL,
-            action TEXT NOT NULL,
-            path TEXT NOT NULL,
-            is_dir INTEGER NOT NULL,
-            size_bytes INTEGER NOT NULL,
-            success INTEGER NOT NULL,
-            error_message TEXT
-        )
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_scans_path
-        ON scans(scan_path)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_folder_scan
-        ON folder_snapshots(scan_id)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_folder_path
-        ON folder_snapshots(folder_path)
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_audit_created_at
-        ON audit_log(created_at)
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS budgets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            path TEXT NOT NULL UNIQUE,
-            threshold_bytes INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    # Orphaned-install detection (storage_scanner.installed_apps /
-    # cleanup_recommendations.find_orphaned_install_folders): a snapshot
-    # of every InstallLocation this app has ever seen registered, and
-    # whether the app that registered it is still installed as of the
-    # most recent snapshot. A single point-in-time registry read can only
-    # ever say what's *currently* installed -- distinguishing "was
-    # installed, now gone" (an orphan) from "never installed here at all"
-    # (not evidence of anything) requires remembering install_location
-    # across sessions, hence a persistent table rather than in-memory
-    # state like the (session-only) Cleanup Cart.
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS known_install_locations (
-            install_location TEXT PRIMARY KEY,
-            display_name TEXT NOT NULL,
-            first_seen_at TEXT NOT NULL,
-            last_seen_installed_at TEXT NOT NULL,
-            currently_installed INTEGER NOT NULL
-        )
-    """)
-
-    conn.commit()
-    conn.close()
+        if migrated:
+            # The old layout's pages are all free now and the new one needs
+            # a fraction of them, so shrink the file once. Nothing else ever
+            # vacuums: in steady state each save's pruning frees about what
+            # the next save needs, and SQLite reuses free pages.
+            try:
+                conn.execute("VACUUM")
+            except sqlite3.Error:
+                logging.getLogger("storage_scanner").warning(
+                    "Could not compact %s after migrating it", DB_NAME, exc_info=True
+                )
+    finally:
+        conn.close()
 
 
 def get_app_metadata(key, default=None):
@@ -186,7 +112,9 @@ def save_scan_snapshot(
     scan_path, total_size, drive_capacity, file_count, folder_count, folder_sizes
 ):
     """
-    Saves one scan result into SQLite.
+    Saves one scan result into SQLite, then applies history retention
+    (storage_scanner.history_retention) to that scan path's older scans,
+    all in one transaction.
 
     folder_sizes example:
     {
@@ -197,47 +125,103 @@ def save_scan_snapshot(
     }
     """
 
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-
     created_at = datetime.now().isoformat(timespec="seconds")
 
-    cur.execute(
-        """
-    INSERT INTO scans
-    (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-""",
-        (scan_path, total_size, drive_capacity, file_count, folder_count, created_at),
-    )
-
-    scan_id = cur.lastrowid
-
-    rows = []
-    for folder_path, data in folder_sizes.items():
-        rows.append(
-            (
-                scan_id,
-                folder_path,
-                int(data.get("size", 0)),
-                int(data.get("file_count", 0)),
-                created_at,
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("PRAGMA temp_store = MEMORY")
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO scans
+                (scan_path, total_size, drive_capacity, file_count, folder_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (scan_path, total_size, drive_capacity, file_count, folder_count, created_at),
             )
-        )
-
-    cur.executemany(
-        """
-        INSERT INTO folder_snapshots
-        (scan_id, folder_path, size_bytes, file_count, created_at)
-        VALUES (?, ?, ?, ?, ?)
-    """,
-        rows,
-    )
-
-    conn.commit()
-    conn.close()
+            scan_id = cur.lastrowid
+            _insert_folder_rows(cur, scan_id, folder_sizes)
+            _prune_scans(cur, scan_path, scan_id, created_at)
+    finally:
+        conn.close()
 
     return scan_id
+
+
+def _insert_folder_rows(cur, scan_id, folder_sizes):
+    """One folder_snapshots row per folder, keyed by its path's id in
+    folder_paths (added there first if it's new). Staged through a temp
+    table so matching every path to its id is one join, not a query per
+    folder."""
+    cur.execute("""
+        CREATE TEMP TABLE scan_folders (
+            path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            file_count INTEGER NOT NULL
+        )
+    """)
+    cur.executemany(
+        "INSERT INTO temp.scan_folders VALUES (?, ?, ?)",
+        (
+            (folder_path, int(data.get("size", 0)), int(data.get("file_count", 0)))
+            for folder_path, data in folder_sizes.items()
+        ),
+    )
+    cur.execute("INSERT OR IGNORE INTO folder_paths (path) SELECT path FROM temp.scan_folders")
+    # In path_id order: appends to the end of this scan's primary-key range.
+    cur.execute(
+        """
+        INSERT INTO folder_snapshots (scan_id, path_id, size_bytes, file_count)
+        SELECT ?, p.id, t.size_bytes, t.file_count
+        FROM temp.scan_folders t
+        JOIN folder_paths p ON p.path = t.path
+        ORDER BY p.id
+        """,
+        (scan_id,),
+    )
+    cur.execute("DROP TABLE temp.scan_folders")
+
+
+def _prune_scans(cur, scan_path, newest_scan_id, now_iso):
+    """Delete the scans of `scan_path` history retention no longer keeps,
+    their folder rows, and every folder path no remaining scan refers to."""
+    cur.execute(
+        "SELECT value FROM app_metadata WHERE key = ?", (history_retention.KEEP_ALL_DAYS_KEY,)
+    )
+    row = cur.fetchone()
+    keep_all_days = history_retention.keep_all_days_from_setting(row[0] if row else None)
+    cur.execute("SELECT id, created_at FROM scans WHERE scan_path = ?", (scan_path,))
+    pruned = history_retention.scans_to_prune(
+        cur.fetchall(), datetime.fromisoformat(now_iso), keep_all_days
+    )
+    if not pruned:
+        return
+
+    maybe_unused = set()
+    for scan_id in pruned:
+        cur.execute("SELECT path_id FROM folder_snapshots WHERE scan_id = ?", (scan_id,))
+        maybe_unused.update(path_id for (path_id,) in cur.fetchall())
+        cur.execute("DELETE FROM folder_snapshots WHERE scan_id = ?", (scan_id,))
+        cur.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
+
+    # The newest scan's folders are in use by definition. Any other
+    # candidate is checked against every kept scan (of any path) with one
+    # primary-key probe each -- CROSS JOIN pins that loop order, instead of
+    # scanning every folder row for the path_id.
+    cur.execute("SELECT path_id FROM folder_snapshots WHERE scan_id = ?", (newest_scan_id,))
+    maybe_unused.difference_update(path_id for (path_id,) in cur.fetchall())
+    cur.executemany(
+        """
+        DELETE FROM folder_paths
+        WHERE id = ?1
+          AND NOT EXISTS (
+              SELECT 1 FROM scans s CROSS JOIN folder_snapshots f
+              WHERE f.scan_id = s.id AND f.path_id = ?1
+          )
+        """,
+        ((path_id,) for path_id in maybe_unused),
+    )
 
 
 def get_previous_scan_id(scan_path, current_scan_id):
@@ -321,23 +305,28 @@ def list_scans_for_path(scan_path, limit=200):
 
 
 def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
+    """The `limit` folders of the current scan that grew the most (shrinking
+    ones last), each against the same folder in the previous scan -- or
+    against 0 if the previous scan didn't have it. Folders only the
+    previous scan had aren't listed. Equal growth is ordered by path."""
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
     cur.execute(
         """
         SELECT
-            curr.folder_path,
+            p.path,
             COALESCE(prev.size_bytes, 0) AS previous_size,
             curr.size_bytes AS current_size,
             curr.size_bytes - COALESCE(prev.size_bytes, 0) AS growth_bytes,
             curr.file_count
         FROM folder_snapshots curr
+        JOIN folder_paths p ON p.id = curr.path_id
         LEFT JOIN folder_snapshots prev
-            ON curr.folder_path = prev.folder_path
-           AND prev.scan_id = ?
+            ON prev.scan_id = ?
+           AND prev.path_id = curr.path_id
         WHERE curr.scan_id = ?
-        ORDER BY growth_bytes DESC
+        ORDER BY growth_bytes DESC, p.path
         LIMIT ?
     """,
         (previous_scan_id, current_scan_id, limit),

@@ -3,22 +3,30 @@
 grow with the number of files, so a change that makes any of them worse
 at scale is caught before release.
 
-Every scenario builds the same synthetic volume layout (a breadth-first
-tree of folders holding FILES_PER_DIR files each) and runs in its own
-subprocess, so each reports its own peak memory.
+Every scenario builds the same synthetic volume layout (scale_volume.py: a
+breadth-first tree of folders holding FILES_PER_DIR files each) and runs in
+its own subprocess, so each reports its own peak memory. The scan-history
+scenarios are in scale_history.py.
 
 Scenarios:
-  tree_memory     the scanned tree held in memory (storage_scanner.models.Node)
-  history         scan history after SCHEDULED_SCANS repeat scans of one folder
-  turbo_rescan    the Turbo Scan cache: bytes per record, and what a rescan of
-                  the whole volume vs. one small folder has to load and build
-  compatible_scan a real directory tree on disk scanned by the Compatible
-                  engine (only with --disk-files; creating files is slow)
+  tree_memory       the scanned tree held in memory (storage_scanner.models.Node)
+  history           scan history after SCHEDULED_SCANS repeat scans of one folder
+  history_retention scan history after DAILY_SCANS daily scheduled scans (over
+                    two years, simulated clock): what retention keeps
+  history_20k       saving a 20,001-folder scan to history twice and comparing
+                    the two, whatever --files is (the 1M-file volume's folders)
+  turbo_rescan      the Turbo Scan cache: bytes per record, and what a rescan of
+                    the whole volume vs. one small folder has to load and build
+  compatible_scan   a real directory tree on disk scanned by the Compatible
+                    engine (only with --disk-files; creating files is slow)
 
-Size metrics (bytes per file/record/scan, records loaded) are reproducible
-across runs and machines, so `--check` gates them against baseline.json.
-Timings and peak memory are reported but never gated: they're too noisy
-on shared CI runners to fail a build on.
+Size and count metrics (bytes per file/record/scan, records loaded, scans
+kept, SQLite VM steps per folder row) are reproducible across runs and
+machines, so `--check` gates them against baseline.json. Timings and peak
+memory are reported but never gated: they're too noisy on shared CI runners
+to fail a build on. VM steps stand in for time where a slow query is the
+regression to catch: comparing two history scans by folder path text took
+over a minute at 20k folders, and its step count showed it just as well.
 
 Usage:
   python benchmarks/scale.py                        # all scenarios, 100k files
@@ -42,190 +50,40 @@ import threading
 import time
 import tracemalloc
 
+from scale_history import (
+    scenario_history,
+    scenario_history_20k,
+    scenario_history_retention,
+)
+from scale_volume import (
+    VOLUME_ROOT,
+    build_node_tree,
+    database_bytes,
+    layout,
+    peak_rss_bytes,
+    small_subtree_parts,
+    synthetic_records,
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 BASELINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline.json")
-FILES_PER_DIR = 50
-DIRS_PER_DIR = 8
-SCHEDULED_SCANS = 30
 # Gated metrics are all "lower is better". The tolerance absorbs small
 # differences between interpreter versions (CI runs 3.12).
 TOLERANCE = 0.15
 GATED = (
     "tree_bytes_per_file",
     "history_bytes_per_scan",
+    "history_daily_scans_kept",
+    "history_daily_scans_db_bytes",
+    "history_20k_save_steps_per_row",
+    "history_20k_growth_steps_per_row",
     "turbo_cache_bytes_per_record",
     "turbo_small_subtree_records_loaded",
 )
-IN_MEMORY_SCENARIOS = ("tree_memory", "history", "turbo_rescan")
-
-VOLUME_ROOT = "C:\\" if os.name == "nt" else "/"
-_MTIME = 1_750_000_000.0
-
-
-# -- The synthetic volume ----------------------------------------------------- #
-
-
-def layout(n_files):
-    """[(folder path parts, files in it)], breadth-first, parents before
-    children. Folder parts are relative to the volume root; () is the root,
-    which holds no files."""
-    n_dirs = max(1, -(-n_files // FILES_PER_DIR))
-    folders = []
-    frontier = [()]
-    while len(folders) < n_dirs:
-        next_frontier = []
-        for parent in frontier:
-            for i in range(DIRS_PER_DIR):
-                if len(folders) == n_dirs:
-                    break
-                child = (*parent, f"dir_{i}")
-                folders.append(child)
-                next_frontier.append(child)
-        frontier = next_frontier
-
-    remaining = n_files
-    result = [((), 0)]
-    for parts in folders:
-        count = min(FILES_PER_DIR, remaining)
-        remaining -= count
-        result.append((parts, count))
-    return result
-
-
-def _file_size(depth, index):
-    # Deterministic, spread evenly over 0-5 MB (Knuth's multiplicative hash),
-    # averaging ~2.5 MB so every folder crosses scan history's 50 MB
-    # recording threshold, like the big folders people chart.
-    return ((index + 1) * 2654435761 + depth * 40503) % 5_000_000
-
-
-def small_subtree_parts(n_files):
-    """A leaf folder: the "rescan one small folder" case."""
-    return layout(n_files)[-1][0]
-
-
-def build_node_tree(n_files):
-    """The Node tree a Compatible scan of the synthetic volume would produce,
-    with the same fields scanner.scan() sets, rolled up."""
-    from storage_scanner.models import Node
-    from storage_scanner.scanner import _rollup
-
-    root = Node(VOLUME_ROOT, VOLUME_ROOT, True)
-    nodes = {(): root}
-    for parts, count in layout(n_files):
-        if parts:
-            parent = nodes[parts[:-1]]
-            folder = Node(os.path.join(parent.path, parts[-1]), parts[-1], True)
-            folder.mtime = folder.atime = _MTIME
-            parent.children.append(folder)
-            nodes[parts] = folder
-        folder = nodes[parts]
-        for index in range(count):
-            name = f"file_{index:04d}.dat"
-            child = Node(os.path.join(folder.path, name), name, False)
-            child.size = child.alloc_size = _file_size(len(parts), index)
-            child.mtime = child.atime = _MTIME + index
-            child.file_count = 1
-            folder.children.append(child)
-    _rollup(root)
-    return root
-
-
-def synthetic_records(n_files):
-    """The ParsedRecords a full Turbo Scan of the synthetic volume would
-    produce: record 5 is the root, as on every NTFS volume."""
-    from storage_scanner.mft_parser import FileNameAttr, ParsedRecord
-
-    def frn(record_number):
-        return (1 << 48) | record_number
-
-    def record(record_number, is_dir, parent_frn, name, size):
-        return ParsedRecord(
-            frn=frn(record_number),
-            is_directory=is_dir,
-            file_attributes=0x10 if is_dir else 0x20,
-            is_reparse_point=False,
-            is_cloud_placeholder=False,
-            mtime=_MTIME,
-            atime=_MTIME,
-            logical_size=size,
-            alloc_size=size,
-            names=[FileNameAttr(parent_frn=parent_frn, name=name, namespace=1)],
-        )
-
-    records = [record(5, True, frn(5), ".", 0)]
-    folder_frns = {(): frn(5)}
-    next_record = 64  # past NTFS's reserved system records
-    for parts, count in layout(n_files):
-        if parts:
-            records.append(record(next_record, True, folder_frns[parts[:-1]], parts[-1], 0))
-            folder_frns[parts] = frn(next_record)
-            next_record += 1
-        for index in range(count):
-            size = _file_size(len(parts), index)
-            records.append(
-                record(next_record, False, folder_frns[parts], f"file_{index:04d}.dat", size)
-            )
-            next_record += 1
-    return records
-
-
-# -- Measurement helpers ------------------------------------------------------ #
-
-
-def peak_rss_bytes():
-    """This process's peak resident memory so far."""
-    if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
-
-        class _Counters(ctypes.Structure):
-            _fields_ = [
-                ("cb", wintypes.DWORD),
-                ("PageFaultCount", wintypes.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t),
-                ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t),
-                ("PeakPagefileUsage", ctypes.c_size_t),
-            ]
-
-        counters = _Counters()
-        counters.cb = ctypes.sizeof(_Counters)
-        kernel32 = ctypes.WinDLL("kernel32")
-        psapi = ctypes.WinDLL("psapi")
-        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-        psapi.GetProcessMemoryInfo.argtypes = [
-            wintypes.HANDLE,
-            ctypes.POINTER(_Counters),
-            wintypes.DWORD,
-        ]
-        psapi.GetProcessMemoryInfo(
-            kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
-        )
-        return counters.PeakWorkingSetSize
-
-    import resource
-
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return peak if sys.platform == "darwin" else peak * 1024  # Linux reports KiB
-
-
-def _database_bytes(path):
-    """A SQLite file's size with its WAL folded in, as it would sit on disk
-    after the app's next checkpoint."""
-    import sqlite3
-
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    conn.close()
-    return os.path.getsize(path)
+IN_MEMORY_SCENARIOS = ("tree_memory", "history", "history_retention", "history_20k", "turbo_rescan")
 
 
 # -- Scenarios (each runs in its own subprocess) ------------------------------ #
@@ -250,29 +108,6 @@ def scenario_tree_memory(n_files, _workdir):
     }
 
 
-def scenario_history(n_files, workdir):
-    import history
-    from storage_scanner import scan_history
-
-    history.DB_NAME = os.path.join(workdir, "storage_history.db")
-    history.init_history_db()
-    root = build_node_tree(n_files)
-    folder_rows = len(scan_history.collect_folder_sizes(root)[0])
-
-    timings = []
-    for _ in range(SCHEDULED_SCANS):
-        start = time.perf_counter()
-        scan_history.record_scan(root)
-        timings.append(time.perf_counter() - start)
-
-    db_bytes = _database_bytes(history.DB_NAME)
-    return {
-        "history_bytes_per_scan": round(db_bytes / SCHEDULED_SCANS),
-        "history_rows_per_scan": folder_rows,
-        "history_last_record_seconds": round(timings[-1], 3),
-    }
-
-
 def scenario_turbo_rescan(n_files, workdir):
     from storage_scanner import mft_scan, turbo_cache
 
@@ -285,7 +120,7 @@ def scenario_turbo_rescan(n_files, workdir):
     start = time.perf_counter()
     turbo_cache.save_full_scan(serial, VOLUME_ROOT, root_frn, 1024, records)
     save_seconds = time.perf_counter() - start
-    cache_bytes = _database_bytes(str(turbo_cache.DB_NAME))
+    cache_bytes = database_bytes(str(turbo_cache.DB_NAME))
     record_count = len(records)
     del records
 
@@ -352,6 +187,8 @@ def scenario_compatible_scan(n_files, _workdir):
 SCENARIOS = {
     "tree_memory": scenario_tree_memory,
     "history": scenario_history,
+    "history_retention": scenario_history_retention,
+    "history_20k": scenario_history_20k,
     "turbo_rescan": scenario_turbo_rescan,
     "compatible_scan": scenario_compatible_scan,
 }
