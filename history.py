@@ -48,12 +48,13 @@ logging.getLogger("storage_scanner").debug("Using database: %s", DB_NAME)
 # failing with "database is locked" (Python's default is 5 s). Saves and
 # settings hold that lock for well under a second. The one long holder is
 # the one-time migration in init_history_db (history_schema, plus its
-# VACUUM): 4.9 s for 1.2 million version 1 folder rows and 9.6 s for 1.8
-# million, about 5 us a row. 60 s covers ~11 million rows -- a year and a
-# half of daily 20,000-folder scans with nothing ever pruned, far beyond
-# any real version 1 history -- so a scheduled scan that starts while the
-# app is migrating waits for it instead of losing its save. It only ever
-# delays anything while another process really is holding the lock.
+# VACUUM): 4.9 s for 1.2 million version 1 folder rows, and 9.6-20.9 s for
+# 1.8 million (the slow run shared the machine with the test suite) --
+# 5-12 us a row. 60 s is three times the worst of those and covers 5-11
+# million rows, far beyond any real version 1 history (this machine's has
+# 25,846) -- so a scheduled scan that starts while the app is migrating
+# waits for it instead of losing its save. It only ever delays anything
+# while another process really is holding the lock.
 BUSY_TIMEOUT_SECONDS = 60
 
 
