@@ -131,12 +131,12 @@ def scenario_turbo_rescan(n_files, workdir):
         start = time.perf_counter()
         target, actual = turbo_cache.find_record_by_path(serial, root_frn, list(parts))
         loaded = turbo_cache.load_subtree_records(serial, target)
-        tree, _orphans, frn_by_node_id = mft_scan.build_tree(
+        tree, _orphans, row_frns = mft_scan.build_tree(
             loaded,
             root_path=os.path.join(VOLUME_ROOT, *actual),
             root_record_number=target.frn & 0x0000FFFFFFFFFFFF,
         )
-        mft_scan.finalize_subtree(tree, frn_by_node_id)
+        mft_scan.finalize_subtree(tree, row_frns)
         return time.perf_counter() - start, len(loaded), tree
 
     whole_seconds, _whole_loaded, whole = rescan(())

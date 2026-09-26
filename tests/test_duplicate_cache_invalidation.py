@@ -11,14 +11,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.models import Node
+from storage_scanner.models import FileNode, Node, detached_file
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
 
 def _node(path, size=100):
-    n = Node(path, path.rsplit("/", 1)[-1], is_dir=False)
-    n.size = size
-    return n
+    return detached_file(path, size=size)
 
 
 def _app_with_duplicates(duplicates):
@@ -60,11 +58,10 @@ def test_deleting_an_unrelated_node_leaves_other_groups_untouched():
 
 
 def test_deleting_a_folder_removes_every_duplicate_file_nested_inside_it():
-    inside_a = _node("/root/sub/a")
+    folder = Node("/root/sub", "sub")
+    inside_a = FileNode(folder, folder.add_file("a", 100))
     inside_b = _node("/root/sub/b")
     outside_c = _node("/root/other/c")
-    folder = Node("/root/sub", "sub", is_dir=True)
-    folder.children = [inside_a]
 
     app = _app_with_duplicates(
         [

@@ -119,12 +119,12 @@ def test_only_the_targets_direct_children_keep_their_last_file_count():
 def test_load_estimate_reads_the_last_saved_scan_and_its_folders(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
     root_path = str(tmp_path / "scanned")
-    root = Node(root_path, "scanned", True)
-    big = Node(os.path.join(root_path, "Big"), "Big", True)
+    root = Node(root_path, "scanned")
+    big = Node(os.path.join(root_path, "Big"), "Big")
     big.size, big.file_count = 80 * MB, 30
-    small = Node(os.path.join(root_path, "small"), "small", True)
+    small = Node(os.path.join(root_path, "small"), "small")
     small.size, small.file_count = 1 * MB, 3
-    root.children = [big, small]
+    root.dirs.extend([big, small])
     root.size, root.file_count = big.size + small.size, 33
     record_scan(root)
 

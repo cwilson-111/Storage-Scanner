@@ -326,13 +326,12 @@ def _subtree_from_cache(cached, volume_root, target_path):
     path = os.path.join(volume_root, *actual_parts)
 
     if not target_record.is_directory:
-        node = mft_scan.file_node(target_record, actual_parts[-1], path)
-        return mft_scan.finalize_subtree(node, {id(node): target_record.frn})
+        return mft_scan.file_node(target_record, path)
 
     records = turbo_cache.load_subtree_records(cached["volume_serial"], target_record)
     # The requested folder is the root here, so a reparse point is followed
-    # (mft_scan._make_node's root rule) without reroot_if_reparse_point.
-    root_node, orphan_count, frn_by_node_id = mft_scan.build_tree(
+    # (build_tree's root rule) without reroot_if_reparse_point.
+    root_node, orphan_count, row_frns = mft_scan.build_tree(
         records,
         root_path=path,
         root_record_number=target_record.frn & _FRN_RECORD_NUMBER_MASK,
@@ -340,13 +339,13 @@ def _subtree_from_cache(cached, volume_root, target_path):
     if orphan_count:
         logger.warning("Turbo Scan of %r had %d unreachable record(s)", path, orphan_count)
     logger.debug("Turbo Scan of %r: %d cached records loaded", path, len(records))
-    return mft_scan.finalize_subtree(root_node, frn_by_node_id)
+    return mft_scan.finalize_subtree(root_node, row_frns)
 
 
 def _subtree_from_records(records, volume_root, target_path):
     """The finalized Node for `target_path`, sliced out of a whole-volume
     tree built from a full read's `records`."""
-    root_node, orphan_count, frn_by_node_id = mft_scan.build_tree(records, root_path=volume_root)
+    root_node, orphan_count, row_frns = mft_scan.build_tree(records, root_path=volume_root)
     if root_node is None:
         raise RuntimeError("Turbo Scan could not locate a root directory record")
     if orphan_count:
@@ -356,9 +355,7 @@ def _subtree_from_records(records, volume_root, target_path):
     # must still be followed, matching scanner.scan()'s own root handling
     # -- see mft_scan.reroot_if_reparse_point's docstring for why this
     # can't just be decided up front, during build_tree().
-    subtree_node = mft_scan.reroot_if_reparse_point(
-        subtree_node, target_path, records, frn_by_node_id
-    )
+    subtree_node = mft_scan.reroot_if_reparse_point(subtree_node, target_path, records, row_frns)
     # Hard-link dedup is deliberately scoped to just this subtree, not the
     # whole volume -- see mft_scan.finalize_subtree's docstring for why.
-    return mft_scan.finalize_subtree(subtree_node, frn_by_node_id)
+    return mft_scan.finalize_subtree(subtree_node, row_frns)

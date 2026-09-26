@@ -5,9 +5,9 @@ storage_scanner.mft_parser.ParsedRecord objects -- no filesystem or ctypes
 access, so (like mft_parser.py) this is fully unit-testable with plain,
 hand-built fake records; see tests/test_mft_scan.py.
 
-Every hard-link occurrence of a record (one Node per (parent, name) pair in
-its `names` list) is attached under its own parent directory, each carrying
-its own full, undeduped size -- build_tree() deliberately does NOT decide
+Every hard-link occurrence of a record (one file row per (parent, name)
+pair in its `names` list) is attached under its own parent directory, each
+carrying its own full, undeduped size -- build_tree() deliberately does NOT decide
 which occurrence is "primary" here. That decision is deferred to
 finalize_subtree(), applied only to whatever subtree the caller actually
 asked for (see storage_scanner.turbo_read.find_subtree_node), because
@@ -32,7 +32,14 @@ finalize_subtree().
 
 import os
 
-from storage_scanner.models import Node
+from storage_scanner.models import (
+    FLAG_CLOUD_PLACEHOLDER,
+    FLAG_HARDLINK_DUP,
+    FLAG_LINK,
+    Node,
+    detached_file,
+    iter_folders,
+)
 from storage_scanner.scanner import _rollup
 
 # Every NTFS volume's root directory is always MFT record #5 -- a
@@ -43,49 +50,60 @@ _ROOT_RECORD_NUMBER = 5
 _FRN_RECORD_NUMBER_MASK = 0x0000FFFFFFFFFFFF
 
 
-def _make_node(record, name, is_root=False):
-    # A reparse point (junction, symlink, OneDrive cloud-placeholder-style
-    # tag) is never traversed regardless of the record's own directory
-    # flag -- treated as a leaf, exactly like scanner.py's
-    # `is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse`.
-    # BUT only when it's encountered as a *child* during traversal: when
-    # it's the requested scan root itself (is_root=True), scanner.py's own
-    # root handling (`os.path.isdir(path)`) follows a reparse point
-    # transparently, with no such exclusion -- see reroot_if_reparse_point
-    # for where this asymmetry actually gets exercised.
-    is_dir = record.is_directory and (is_root or not record.is_reparse_point)
-    node = Node(path="", name=name, is_dir=is_dir)
+def _folder(record, path, name):
+    """The Node for a directory record. A reparse point (junction,
+    symlink) is never one of these below the scan root -- see _is_folder."""
+    node = Node(path, name)
     node.mtime = record.mtime
     node.atime = record.atime
     node.is_cloud_placeholder = record.is_cloud_placeholder
-    # A cloud placeholder that also carries the reparse bit still renders
-    # as a normal file, not a link -- matches scanner.py's
-    # `is_link = is_reparse and not is_placeholder`. A followed root is
-    # never flagged as a link either, matching scanner.py's root Node
-    # (which never sets is_link at all).
-    node.is_link = record.is_reparse_point and not record.is_cloud_placeholder and not is_root
-    # Full, undeduped size -- see module docstring for why hard-link
-    # dedup is deferred to finalize_subtree() rather than decided here.
+    # A directory's own record size, which roll-up then adds to.
     node.size = record.logical_size
     node.alloc_size = record.alloc_size
-    node.hardlink_dup = False
-    node.file_count = 0 if is_dir else 1
     return node
 
 
-def file_node(record, name, path):
-    """The Node for a single-file scan target: exactly the leaf build_tree()
-    attaches for `record` under its parent (a link to a file stays a link --
-    reroot_if_reparse_point only ever follows directories)."""
-    node = _make_node(record, name)
-    node.path = path
-    return node
+def _is_folder(record):
+    # A reparse point (junction, symlink, OneDrive cloud-placeholder-style
+    # tag) is never traversed regardless of the record's own directory
+    # flag -- recorded as a file row, exactly like scanner.py's
+    # `is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse`.
+    # BUT only when it's encountered as a *child* during traversal: the
+    # requested scan root itself is followed, like scanner.py's root
+    # handling (`os.path.isdir(path)`) -- see reroot_if_reparse_point for
+    # where this asymmetry actually gets exercised.
+    return record.is_directory and not record.is_reparse_point
+
+
+def _row_flags(record):
+    # A cloud placeholder that also carries the reparse bit still renders
+    # as a normal file, not a link -- matches scanner.py.
+    if record.is_cloud_placeholder:
+        return FLAG_CLOUD_PLACEHOLDER
+    return FLAG_LINK if record.is_reparse_point else 0
+
+
+def _add_row(folder, record, name):
+    # Full, undeduped size -- see module docstring for why hard-link dedup
+    # is deferred to finalize_subtree() rather than decided here.
+    return folder.add_file(
+        name, record.logical_size, record.alloc_size, record.mtime, record.atime, _row_flags(record)
+    )
+
+
+def file_node(record, path):
+    """The FileNode for a single-file scan target: exactly the row
+    build_tree() attaches for `record` under its parent (a link to a file
+    stays a link -- reroot_if_reparse_point only ever follows directories)."""
+    return detached_file(
+        path, record.logical_size, record.alloc_size, record.mtime, record.atime, _row_flags(record)
+    )
 
 
 def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     """Build a Node tree from `records`, rooted at whichever record's FRN
-    has record number `root_record_number`. Every node's size/alloc_size
-    is real and undeduped, and nothing is rolled up yet -- call
+    has record number `root_record_number`. Every file row's size/alloc
+    size is real and undeduped, and nothing is rolled up yet -- call
     finalize_subtree() on whatever part of this tree the caller actually
     wants (see find_subtree_node) before trusting its aggregated numbers.
 
@@ -96,7 +114,7 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     path ending in a separator (a drive root) uses the full path as its
     name, otherwise the last path component is used.
 
-    Returns (root_node, orphan_count, frn_by_node_id). `orphan_count`
+    Returns (root_node, orphan_count, row_frns). `orphan_count`
     counts hard-link occurrences whose parent was never reached while
     walking down from the root -- its parent record is missing entirely,
     its parent chain loops back on itself without ever reaching the root,
@@ -106,10 +124,12 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     nonzero orphan_count can decide for itself whether that's tolerable or
     a reason to fall back to the Compatible engine.
 
-    `frn_by_node_id` maps `id(node)` to the FRN of the record it came from,
-    for every node in the tree (root included) -- the side channel
-    finalize_subtree() needs to regroup hard-link occurrences, since
-    Node's own slots deliberately never carry an FRN.
+    `row_frns` maps a folder Node to [(row index, FRN), ...] for each of
+    its file rows whose record has more than one name (a hard link, which
+    finalize_subtree() regroups) or is a reparse point (which
+    reroot_if_reparse_point() may follow) -- the side channel those need,
+    since a row deliberately carries no FRN. Every other row's record has
+    exactly one occurrence, so there's nothing to regroup.
 
     Returns (None, 0, {}) if no record matches `root_record_number` or it
     isn't a real directory -- both mean there's nothing trustworthy to
@@ -139,9 +159,10 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     root_name = (
         root_path if root_path.endswith(os.sep) else (os.path.basename(root_path) or root_path)
     )
-    root_node = _make_node(root_record, root_name, is_root=True)
-    root_node.path = root_path
-    frn_by_node_id = {id(root_node): root_record.frn}
+    # The requested root is followed even if it's a reparse point, and is
+    # never flagged as a link -- matching scanner.py's root Node.
+    root_node = _folder(root_record, root_path, root_name)
+    row_frns = {}
 
     attached_occurrences = 0
     # Directories are expanded at most once each, however many times a
@@ -153,30 +174,40 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     while stack:
         node, frn = stack.pop()
         for child_record, name_attr in children_by_parent.get(frn, []):
-            child_node = _make_node(child_record, name_attr.name)
-            child_node.path = os.path.join(node.path, name_attr.name)
-            node.children.append(child_node)
-            frn_by_node_id[id(child_node)] = child_record.frn
             attached_occurrences += 1
+            name = name_attr.name
+            if not _is_folder(child_record):
+                index = _add_row(node, child_record, name)
+                if child_record.is_reparse_point or len(child_record.names) > 1:
+                    row_frns.setdefault(node, []).append((index, child_record.frn))
+                continue
 
-            if child_node.is_dir:
-                child_frn = child_record.frn
-                if child_frn in visited_dir_frns:
-                    # A cycle, or a directory improbably claiming more than
-                    # one hard link (invalid on real NTFS) -- either way,
-                    # never expand the same directory's contents twice.
-                    child_node.error = True
-                    continue
-                visited_dir_frns.add(child_frn)
-                stack.append((child_node, child_frn))
+            child_node = _folder(child_record, os.path.join(node.path, name), name)
+            node.dirs.append(child_node)
+            child_frn = child_record.frn
+            if child_frn in visited_dir_frns:
+                # A cycle, or a directory improbably claiming more than
+                # one hard link (invalid on real NTFS) -- either way,
+                # never expand the same directory's contents twice.
+                child_node.error = True
+                continue
+            visited_dir_frns.add(child_frn)
+            stack.append((child_node, child_frn))
 
     orphan_count = total_occurrences - attached_occurrences
-    return root_node, orphan_count, frn_by_node_id
+    return root_node, orphan_count, row_frns
 
 
-def reroot_if_reparse_point(node, target_path, records, frn_by_node_id):
+def _row_frn(row_frns, file_node):
+    for index, frn in row_frns.get(file_node.parent, ()):
+        if index == file_node.index:
+            return frn
+    return None
+
+
+def reroot_if_reparse_point(node, target_path, records, row_frns):
     """If `node` (whatever find_subtree_node() located) is a reparse point
-    that build_tree() left as an unexpanded leaf, rebuild it as a fresh
+    that build_tree() left as an unexpanded file row, rebuild it as a fresh
     root and return that instead -- matching scanner.scan()'s own root-vs-
     child asymmetry: a reparse point is only ever an unfollowable leaf
     when encountered as a *child* during traversal, never when it's the
@@ -193,13 +224,13 @@ def reroot_if_reparse_point(node, target_path, records, frn_by_node_id):
     symlink to a *file*, which scanner.py's root handling wouldn't follow
     as a directory either -- `os.path.isdir()` would be False for it).
 
-    Mutates `frn_by_node_id` in place to fold in the rebuilt subtree's
-    nodes, so a later finalize_subtree() call on the returned node still
-    resolves hard-link scoping correctly.
+    Mutates `row_frns` in place to fold in the rebuilt subtree's rows, so
+    a later finalize_subtree() call on the returned node still resolves
+    hard-link scoping correctly.
     """
     if not node.is_link:
         return node
-    frn = frn_by_node_id.get(id(node))
+    frn = _row_frn(row_frns, node)
     if frn is None:
         return node
     original_record = next((r for r in records if r.frn == frn), None)
@@ -207,7 +238,7 @@ def reroot_if_reparse_point(node, target_path, records, frn_by_node_id):
         return node
 
     record_number = frn & _FRN_RECORD_NUMBER_MASK
-    new_root, _orphan_count, new_frn_by_node_id = build_tree(
+    new_root, _orphan_count, new_row_frns = build_tree(
         records,
         root_path=target_path,
         root_record_number=record_number,
@@ -215,16 +246,17 @@ def reroot_if_reparse_point(node, target_path, records, frn_by_node_id):
     if new_root is None:
         return node
 
-    frn_by_node_id.update(new_frn_by_node_id)
+    row_frns.update(new_row_frns)
     return new_root
 
 
-def finalize_subtree(subtree_root, frn_by_node_id):
+def finalize_subtree(subtree_root, row_frns):
     """Redo hard-link dedup scoped to just `subtree_root`'s own tree, then
     roll up size/alloc_size/file_count. Call this on whatever subtree
     build_tree()'s caller actually cares about (see find_subtree_node) --
     never on the whole volume, and never trust a subtree's aggregated
-    numbers before calling this on it.
+    numbers before calling this on it. A single file (a FileNode) has
+    nothing to dedup or roll up and comes back as it is.
 
     A record whose FRN appears more than once within `subtree_root` (e.g.
     two hard-linked names both inside the requested folder) still gets
@@ -237,22 +269,21 @@ def finalize_subtree(subtree_root, frn_by_node_id):
     occurrences elsewhere in the volume outside this subtree entirely --
     see module docstring for why.
     """
-    nodes_by_frn = {}
-    stack = [subtree_root]
-    while stack:
-        node = stack.pop()
-        frn = frn_by_node_id.get(id(node))
-        if frn is not None:
-            nodes_by_frn.setdefault(frn, []).append(node)
-        stack.extend(node.children)
+    if not subtree_root.is_dir:
+        return subtree_root
 
-    for nodes in nodes_by_frn.values():
-        primary, *duplicates = nodes
-        primary.hardlink_dup = False
-        for duplicate in duplicates:
-            duplicate.hardlink_dup = True
-            duplicate.size = 0
-            duplicate.alloc_size = 0
+    rows_by_frn = {}
+    for folder in iter_folders(subtree_root):
+        for index, frn in row_frns.get(folder, ()):
+            rows_by_frn.setdefault(frn, []).append((folder, index))
+
+    for rows in rows_by_frn.values():
+        (folder, index), *duplicates = rows
+        folder.file_flags[index] &= ~FLAG_HARDLINK_DUP
+        for folder, index in duplicates:
+            folder.file_flags[index] |= FLAG_HARDLINK_DUP
+            folder.file_sizes[index] = 0
+            folder.file_allocs[index] = 0
 
     _rollup(subtree_root)
     return subtree_root

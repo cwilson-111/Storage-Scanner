@@ -245,10 +245,10 @@ def test_the_keep_all_setting_decides_how_long_every_scan_is_kept(db, setting, a
 
 
 def _tree(root_path, big_size):
-    root = Node(root_path, "root", True)
-    big = Node(os.path.join(root_path, "big"), "big", True)
+    root = Node(root_path, "root")
+    big = Node(os.path.join(root_path, "big"), "big")
     big.size, big.file_count = big_size, 3
-    root.children = [big]
+    root.dirs.append(big)
     root.size, root.file_count = big_size, 3
     return root
 

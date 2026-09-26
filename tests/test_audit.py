@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -5,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import storage_scanner.audit as audit
-from storage_scanner.models import Node
+from storage_scanner.models import Node, detached_file
 
 
 def test_recycle_and_log_records_success(monkeypatch):
@@ -17,12 +18,12 @@ def test_recycle_and_log_records_success(monkeypatch):
         lambda **kwargs: recorded.update(kwargs),
     )
 
-    node = Node("/Users/me/file.bin", "file.bin", is_dir=False)
-    node.size = 4096
+    path = os.path.join(os.sep, "Users", "me", "file.bin")
+    node = detached_file(path, size=4096)
 
     assert audit.recycle_and_log(node, source="Duplicate Files") is True
     assert recorded["source"] == "Duplicate Files"
-    assert recorded["path"] == "/Users/me/file.bin"
+    assert recorded["path"] == path
     assert recorded["is_dir"] is False
     assert recorded["size_bytes"] == 4096
     assert recorded["success"] is True
@@ -38,7 +39,7 @@ def test_recycle_and_log_records_failure(monkeypatch):
         lambda **kwargs: recorded.update(kwargs),
     )
 
-    node = Node("/Users/me/locked", "locked", is_dir=True)
+    node = Node("/Users/me/locked", "locked")
     node.size = 999
 
     assert audit.recycle_and_log(node, source="Main tree") is False
@@ -55,8 +56,7 @@ def test_recycle_and_log_refuses_a_file_whose_size_changed_since_review(tmp_path
     target = tmp_path / "reviewed.bin"
     target.write_bytes(b"x" * 100)  # scanned at 100 bytes...
 
-    node = Node(str(target), "reviewed.bin", is_dir=False)
-    node.size = 100
+    node = detached_file(str(target), size=100)
 
     target.write_bytes(b"y" * 250)  # ...but changed before the delete click
 
@@ -77,8 +77,7 @@ def test_recycle_and_log_proceeds_when_file_is_unchanged(tmp_path, monkeypatch):
     target = tmp_path / "reviewed.bin"
     target.write_bytes(b"x" * 100)
 
-    node = Node(str(target), "reviewed.bin", is_dir=False)
-    node.size = 100
+    node = detached_file(str(target), size=100)
 
     monkeypatch.setattr(audit, "recycle", lambda path: True)
     recorded = {}
@@ -96,7 +95,7 @@ def test_recycle_and_log_does_not_check_staleness_for_directories(tmp_path, monk
     target = tmp_path / "a_folder"
     target.mkdir()
 
-    node = Node(str(target), "a_folder", is_dir=True)
+    node = Node(str(target), "a_folder")
     node.size = 999_999  # deliberately not the real (irrelevant) dir-entry size
 
     monkeypatch.setattr(audit, "recycle", lambda path: True)
@@ -117,8 +116,7 @@ def test_recycle_and_log_never_raises_if_logging_itself_fails(monkeypatch):
     sqlite_error = RuntimeError("disk full")
     monkeypatch.setattr(audit, "record_audit_entry", boom)
 
-    node = Node("/Users/me/file.bin", "file.bin", is_dir=False)
-    node.size = 10
+    node = detached_file("/Users/me/file.bin", size=10)
 
     # Must still report the real recycle() outcome, not raise.
     assert audit.recycle_and_log(node, source="Cleanup Recommendations") is True

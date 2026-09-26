@@ -135,7 +135,7 @@ def main(drive):
     finally:
         source.close()
 
-    root_node, orphan_count = mft_scan.build_tree(records, root_path=volume_root)
+    root_node, orphan_count, _row_frns = mft_scan.build_tree(records, root_path=volume_root)
     if root_node is None:
         print("build_tree returned None -- no record 5 (root) found or it's not a directory!")
         return 1

@@ -9,7 +9,15 @@ import threading
 from typing import Optional
 
 from storage_scanner.logging_setup import logger
-from storage_scanner.models import Node
+from storage_scanner.models import (
+    FLAG_CLOUD_PLACEHOLDER,
+    FLAG_ERROR,
+    FLAG_HARDLINK_DUP,
+    FLAG_LINK,
+    FileNode,
+    Node,
+    detached_file,
+)
 from storage_scanner.scan_progress import (
     FLUSH_EVERY_ENTRIES,
     REPORT_INTERVAL_SECONDS,
@@ -177,8 +185,26 @@ def _worker_count():
     return min(8, max(4, cpu))
 
 
+def _scan_file(path):
+    """The FileNode for a scan target that is itself a file."""
+    try:
+        st_info = os.stat(path)
+    except OSError:
+        return detached_file(path, flags=FLAG_ERROR)
+    attrs = getattr(st_info, "st_file_attributes", 0)
+    return detached_file(
+        path,
+        st_info.st_size,
+        _measure_alloc_size(path, st_info),
+        st_info.st_mtime,
+        st_info.st_atime,
+        FLAG_CLOUD_PLACEHOLDER if is_cloud_placeholder_attrs(attrs) else 0,
+    )
+
+
 def scan(path, progress_q, cancel_event, workers=None):
-    """Scan `path` concurrently, returning the root Node.
+    """Scan `path` concurrently, returning the root Node (a FileNode when
+    `path` is a file).
 
     A pool of worker threads pulls directories off a shared queue and lists
     them in parallel; each discovered sub-directory is pushed back onto the
@@ -200,30 +226,19 @@ def scan(path, progress_q, cancel_event, workers=None):
     function's worker threads go on to mutate in place as they walk. A
     caller (see storage_scanner.ui.main_window's live-tree preview) may
     read from it concurrently while the scan is still running: appending
-    to node.children is safe to read mid-mutation under the GIL, and
-    every *directory* Node's size/alloc_size/file_count stays at its
+    to node.dirs and node's file rows is safe to read mid-mutation under
+    the GIL (see models.Node.add_file for the row order that makes it so),
+    and every *directory* Node's size/alloc_size/file_count stays at its
     zeroed default until _rollup() below runs once, at the very end -- a
     reader must never trust those fields as meaningful before "done" is
     posted. The walk snapshots' byte total is post-hard-link-dedup, so it
     tracks towards the same number `_rollup()` will produce.
     """
     path = os.path.abspath(path)
+    if not os.path.isdir(path):
+        return _scan_file(path)
     name = path if path.endswith(os.sep) else os.path.basename(path) or path
-    root = Node(path, name, is_dir=os.path.isdir(path))
-
-    if not root.is_dir:
-        try:
-            st_info = os.stat(path)
-            root.size = st_info.st_size
-            root.alloc_size = _measure_alloc_size(path, st_info)
-            root.mtime = st_info.st_mtime
-            root.atime = st_info.st_atime
-            attrs = getattr(st_info, "st_file_attributes", 0)
-            root.is_cloud_placeholder = is_cloud_placeholder_attrs(attrs)
-            root.file_count = 1
-        except OSError:
-            root.error = True
-        return root
+    root = Node(path, name)
 
     progress_q.put(("root", root))
 
@@ -247,7 +262,8 @@ def scan(path, progress_q, cancel_event, workers=None):
             work.put((child, child_slot))
 
     def _scan_one(worker, node, slot):
-        """List a single directory, attach children, queue sub-dirs.
+        """List a single directory, attach its subfolders and file rows,
+        queue sub-dirs.
 
         Iterates the listing as it arrives rather than list()-ing it first:
         enumerating C:\\Windows\\WinSxS\\Manifests alone takes ~8 s, and
@@ -298,24 +314,26 @@ def scan(path, progress_q, cancel_event, workers=None):
                     except OSError:
                         is_dir = False
 
-                    child = Node(entry.path, entry.name, is_dir)
-                    # A cloud placeholder file can also carry the
-                    # reparse-point bit (OneDrive Files On-Demand uses
-                    # IO_REPARSE_TAG_CLOUD) — treat it as a placeholder, not
-                    # a symlink/junction, so it renders and sorts like the
-                    # real file it represents rather than a link.
-                    child.is_link = is_reparse and not is_placeholder
-                    child.is_cloud_placeholder = is_placeholder
-                    if st_info is not None:
-                        child.mtime = st_info.st_mtime
-                        child.atime = st_info.st_atime
-                    node.children.append(child)  # only this worker touches node.children
-
                     if is_dir:
+                        child = Node(entry.path, entry.name)
+                        child.is_cloud_placeholder = is_placeholder
+                        if st_info is not None:
+                            child.mtime = st_info.st_mtime
+                            child.atime = st_info.st_atime
+                        node.dirs.append(child)  # only this worker touches node's children
                         subdirs.append(child)  # queued by _publish, sized in rollup
                     else:
+                        # A cloud placeholder file can also carry the
+                        # reparse-point bit (OneDrive Files On-Demand uses
+                        # IO_REPARSE_TAG_CLOUD) — treat it as a placeholder,
+                        # not a symlink/junction, so it renders and sorts
+                        # like the real file it represents rather than a link.
+                        if is_placeholder:
+                            flags = FLAG_CLOUD_PLACEHOLDER
+                        else:
+                            flags = FLAG_LINK if is_reparse else 0
                         if st_info is None:
-                            child.error = True
+                            node.add_file(entry.name, flags=flags | FLAG_ERROR)
                         else:
                             size = st_info.st_size
                             alloc_size = _measure_alloc_size(entry.path, st_info)
@@ -325,16 +343,21 @@ def scan(path, progress_q, cancel_event, workers=None):
                                 key = (getattr(st_info, "st_dev", 0), ino)
                                 with inode_lock:
                                     if key in seen_inodes:
-                                        child.hardlink_dup = True
+                                        flags |= FLAG_HARDLINK_DUP
                                         size = 0
                                         alloc_size = 0
                                     else:
                                         seen_inodes.add(key)
-                            child.size = size
-                            child.alloc_size = alloc_size
-                        child.file_count = 1
+                            node.add_file(
+                                entry.name,
+                                size,
+                                alloc_size,
+                                st_info.st_mtime,
+                                st_info.st_atime,
+                                flags,
+                            )
+                            local_bytes += size
                         local_files += 1
-                        local_bytes += child.size
 
                     entries_read += 1
                     if entries_read >= flush_every:
@@ -402,19 +425,23 @@ def find_inaccessible_paths(root):
     estimate how large an unreadable directory actually is without being
     able to read it.
     """
+    if not root.is_dir:
+        return [root] if root.error else []
     errors = []
     stack = [root]
     while stack:
         node = stack.pop()
         if node.error:
             errors.append(node)
-        if node.is_dir:
-            stack.extend(node.children)
+        flags = node.file_flags
+        errors.extend(FileNode(node, i) for i in node.file_rows() if flags[i] & FLAG_ERROR)
+        stack.extend(node.dirs)
     return errors
 
 
 def _rollup(root):
-    """Sum child sizes/file counts into each directory, bottom-up.
+    """Sum file rows and subfolder totals into each directory, bottom-up,
+    on a freshly built tree (no removed rows yet).
 
     A directory also inherits `error=True` from any child that couldn't be
     fully read (an unreadable subdirectory, or a file whose stat() failed)
@@ -427,20 +454,27 @@ def _rollup(root):
     children are summed into the grandparent, so this propagates all the
     way to the root in one pass.
     """
+    if not root.is_dir:
+        return
     stack = [(root, False)]
     while stack:
         node, processed = stack.pop()
-        if not node.is_dir:
-            continue
         if processed:
-            for child in node.children:
-                node.size += child.size
-                node.alloc_size += child.alloc_size
-                node.file_count += child.file_count
-                if child.error:
-                    node.error = True
+            size = sum(node.file_sizes)
+            alloc_size = sum(node.file_allocs)
+            file_count = len(node.file_names)
+            error = any(flags & FLAG_ERROR for flags in node.file_flags)
+            for child in node.dirs:
+                size += child.size
+                alloc_size += child.alloc_size
+                file_count += child.file_count
+                error = error or child.error
+            node.size += size
+            node.alloc_size += alloc_size
+            node.file_count += file_count
+            if error:
+                node.error = True
         else:
             stack.append((node, True))
-            for child in node.children:
-                if child.is_dir:
-                    stack.append((child, False))
+            for child in node.dirs:
+                stack.append((child, False))

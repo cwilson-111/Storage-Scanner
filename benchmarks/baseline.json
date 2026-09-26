@@ -2,7 +2,7 @@
   "files": 20000,
   "python": "3.13",
   "metrics": {
-    "tree_bytes_per_file": 393.9,
+    "tree_bytes_per_file": 117.0,
     "history_bytes_per_scan": 10103,
     "history_daily_scans_kept": 145,
     "history_daily_scans_db_bytes": 1335296,

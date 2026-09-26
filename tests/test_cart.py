@@ -5,24 +5,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.cart import CartManager
-from storage_scanner.models import Node
+from storage_scanner.models import FileNode, Node
 
 
 def _root():
-    return Node("C:/root", "root", is_dir=True)
+    return Node("C:/root", "root")
 
 
 def _file(parent, name, size=0):
-    node = Node(f"{parent.path}/{name}", name, is_dir=False)
-    node.size = size
-    parent.children.append(node)
-    return node
+    return FileNode(parent, parent.add_file(name, size))
 
 
 def _dir(parent, name, size=0):
-    node = Node(f"{parent.path}/{name}", name, is_dir=True)
+    node = Node(f"{parent.path}/{name}", name)
     node.size = size
-    parent.children.append(node)
+    parent.dirs.append(node)
     return node
 
 

@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner import archive
-from storage_scanner.models import Node
+from storage_scanner.models import Node, detached_file
 
 
 def test_likely_compresses_well_true_for_text():
@@ -38,8 +38,7 @@ def test_archive_file_compresses_and_removes_original(tmp_path, monkeypatch):
     target = tmp_path / "notes.txt"
     target.write_text("hello world" * 1000)
 
-    node = Node(str(target), "notes.txt", is_dir=False)
-    node.size = target.stat().st_size
+    node = detached_file(str(target), size=target.stat().st_size)
 
     monkeypatch.setattr(
         archive,
@@ -61,7 +60,7 @@ def test_archive_file_compresses_and_removes_original(tmp_path, monkeypatch):
 
 
 def test_archive_file_rejects_directories():
-    node = Node("/some/dir", "dir", is_dir=True)
+    node = Node("/some/dir", "dir")
     result = archive.archive_file(node, source="Cleanup Recommendations")
     assert result.success is False
     assert "files" in result.error.lower()
@@ -70,8 +69,7 @@ def test_archive_file_rejects_directories():
 def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path, monkeypatch):
     target = tmp_path / "notes.txt"
     target.write_text("hello")
-    node = Node(str(target), "notes.txt", is_dir=False)
-    node.size = target.stat().st_size
+    node = detached_file(str(target), size=target.stat().st_size)
 
     monkeypatch.setattr(
         archive,
@@ -92,8 +90,7 @@ def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path, 
 def test_archive_file_cleans_up_partial_archive_on_write_failure(tmp_path, monkeypatch):
     target = tmp_path / "notes.txt"
     target.write_text("hello")
-    node = Node(str(target), "notes.txt", is_dir=False)
-    node.size = target.stat().st_size
+    node = detached_file(str(target), size=target.stat().st_size)
 
     def boom(*args, **kwargs):
         raise OSError("disk full")

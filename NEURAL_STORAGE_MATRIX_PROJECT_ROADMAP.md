@@ -738,16 +738,17 @@ only**, never table data.
   ingest under 1 s.
 - **Queries:** dashboard p95 under 2 s over a year of downsampled data for
   10,000 machines.
-- **Before the first pilot, the in-memory tree must get smaller** (394
-  bytes per file today, measured). That's the compact-tree step of the
-  scale plan, so a 10M-file server volume fits in an agent's memory
-  budget.
+- **Before the first pilot, the in-memory tree had to get smaller** (394
+  bytes per file, measured). ✅ Done: 117 bytes per file after the
+  compact-tree step of the scale plan (see "Compact in-memory tree"
+  below). At the benchmark's rate a 10M-file server volume's tree is
+  ~1.2 GB instead of ~3.9 GB (projected, not measured at 10M).
 
 #### Suggested order and exit criteria
 
 | Step | Delivers | Done when |
 |---|---|---|
-| E0 | Local history retention and compact schema (✅ 2026-09-25); compact in-memory tree; code signing | Benchmarks show bounded history growth (✅ 145 scans kept of 800 daily) and < 150 bytes per file; signed builds ship |
+| E0 | Local history retention and compact schema (✅ 2026-09-25); compact in-memory tree (✅ 2026-09-25); code signing | Benchmarks show bounded history growth (✅ 145 scans kept of 800 daily) and < 150 bytes per file (✅ 117); signed builds ship |
 | E1 | Agent service, policy file, delta payloads, offline queue, MSI/pkg | 100-machine internal pilot runs 30 days with no data loss |
 | E2 | Ingest API, Timescale store, retention and downsampling | Load test passes at 10k synthetic machines |
 | E3 | SQL Server + PostgreSQL connectors first, then MySQL, Oracle, Mongo | Log-growth and bloat alerts fire correctly against test instances |
@@ -1187,7 +1188,8 @@ wrote and restored the setting from its menu. **Not verified:** macOS or
 Linux (CI tests Windows only).
 
 Next in the plan: a compact in-memory tree (the benchmark's
-`tree_bytes_per_file` is the number to move).
+`tree_bytes_per_file` is the number to move) — ✅ done, see "Compact
+in-memory tree" below.
 
 ## Live scan progress — ✅ done (2026-09-25)
 
@@ -1258,3 +1260,118 @@ bars, cancelled/failed/finished states), plus the Turbo step tests in
 `test_turbo_read.py` and the helper relay tests. **Not verified:** a real
 Turbo Scan (needs admin rights and a UAC prompt); its panel was exercised
 in the real window against a simulated 400,000-record MFT.
+
+## Compact in-memory tree — ✅ done (2026-09-25)
+
+Third step of the scale plan, and E0's "< 150 bytes per file".
+
+**What was costly.** Every file was a full `Node` object. Measured with
+`sys.getsizeof` on the benchmark's own tree (a file like
+`C:\dir_7\dir_7\file_0000.dat`): the object with its 13 slots, 136 bytes;
+its own empty `children` list, 56; its path string, 69; its name string,
+54; a boxed size, 28, and a boxed modified time, 24 (the benchmark shares
+one int and one float per file; a real scan's `alloc_size` and `atime` are
+separate objects too); plus its slot in the parent's `children` list.
+That's 394 bytes per file on the benchmark and more on a real disk, where
+every file also repeated its folder's whole path.
+
+**What changed** (`storage_scanner/models.py`):
+
+- A folder is still a `Node`, with `dirs` for its subfolders, but the
+  files directly inside it are rows of six parallel columns on that
+  folder: `file_names` (a list) and packed `array`s for size, allocated
+  size, modified and accessed time, plus a `bytearray` of flag bits
+  (error, link, hard-link duplicate, cloud placeholder, removed). A row
+  costs its name string plus 33 bytes. A file's path isn't stored at all:
+  it's its folder's path joined with its name.
+- A folder with no files shares empty sentinel columns until its first
+  `add_file()`; six empty containers of its own would cost 432 bytes.
+- `FileNode` is a two-slot view (folder, row index) made only when
+  something asks for one: `node.children`, a search result, a duplicate
+  group, the main tree's rows. It reads through the same attributes a
+  `Node` has, so code that only reads a node's fields (export, the cart,
+  audit, archive, the cleanup window) didn't change. Two views of the same
+  row are equal and hash alike, so the same file added to the cart from
+  Search and from the main tree is still one entry.
+- Code that walks every file reads the columns directly (`iter_file_rows`)
+  and makes a `FileNode` only for a row it keeps: roll-up, search, top
+  files, file types, duplicate collection, cleanup recommendations,
+  inaccessible paths. Scan history walks folders only (`iter_folders`).
+- Deleting a file flags its row removed instead of shifting the columns, so
+  every `FileNode` held anywhere keeps meaning the same file.
+  `remove_from_tree` takes a deleted file or folder's size and count out of
+  every folder above it; Search, Cleanup and Duplicates now share it (the
+  duplicate window's own recursive copy is gone), and it leaves the tree
+  alone for a cached Cleanup row from an earlier session.
+- Both engines build rows directly: `scanner.scan` appends a row per file
+  (names last, so the live preview never sees a half-written row), and
+  `mft_scan.build_tree` does the same, returning `row_frns` (folder → the
+  rows whose record is a hard link or reparse point) in place of an FRN
+  per node; that's all hard-link dedup and following a reparse-point root
+  need. A scan of a single file returns a `FileNode` on a holder folder.
+- The elevated helper's JSON keeps its shape (one dict per file), and so
+  do the JSON and CSV exports, except that a folder's subfolders now come
+  before its files instead of in directory-listing order.
+
+**At 20,000 files** (the CI gate, `benchmarks/baseline.json` rewritten):
+
+| | Before | After |
+|---|---|---|
+| Tree bytes per file | 393.9 | **117.0** (3.4× smaller) |
+
+**At 1,000,000 files / 20,000 folders** (`--files 1000000`):
+
+| | Before | After |
+|---|---|---|
+| Tree bytes per file | 404.0 | **115.5** (3.5× smaller) |
+| Peak memory, building the tree | 1.11 GB | **0.30 GB** |
+| Building the tree (under `tracemalloc`) | 54.0 s | **19.2 s** |
+| Peak memory, history scenarios (they build the tree too) | 480–485 MB | **162–166 MB** |
+| Peak memory, Turbo rescan (cache + tree) | 1.19 GB | **0.83 GB** |
+| Whole-volume Turbo rescan | 25.5–27.0 s | **16.4–21.7 s** |
+
+The rescan times are three runs each: the full benchmark plus two
+isolated, interleaved reruns of that scenario. The full "after" run also
+logged 28.6 s, but it shared the machine with a 24 s real-folder scan, so
+it's left out of the range. Every other gated metric is unchanged.
+
+**On real folders** (a Compatible scan of the folder, everything
+`tracemalloc` still holds afterwards, folders included, per file):
+
+| | Before | After |
+|---|---|---|
+| `C:\Python314` (5,444 files) | 504.8 | **190.9** |
+| `C:\Program Files` (49,342 files) | 535.8 | **194.6** |
+
+"Before" is the previous commit (4f5b8c0) on the same machine and Python
+(3.13); byte counts are exact, timings local and indicative.
+
+Verified: `tests/test_models.py` covers a held `FileNode` still reading the
+right file after an earlier file in its folder is deleted, deleting twice,
+deleting a folder, two views being one dict key, per-folder columns, a
+detached file's path and a cached Cleanup row being ignored;
+`test_mft_scan.py` covers what `row_frns` tracks; the serialization round
+trip covers a nested folder and a single-file scan. Every other suite that
+built trees by hand now builds them the new way (611 passed, 2 skipped;
+ruff, black and mypy clean). The `--cli` JSON of `C:\Python314`,
+`C:\ProgramData` (543 unreadable entries, 5 links), `C:\Windows\Fonts` and a
+OneDrive folder is field-for-field identical to the previous commit's,
+except folders' access times (each scan's own listing updates them); a
+single-file scan's JSON and CSV are identical. `smoke_test_build.py`
+passes against the source with `--save-history` into a temporary app-data
+folder. The real main window, driven by a script on a temporary folder
+with duplicates and a hard link, next to the previous commit: the same
+totals and duplicate groups, and the same rows except which of the two
+hard-linked names is billed (whichever scan thread stats it first, before
+and after); deleting a file from the main tree and a file and a folder
+from Search took the same sizes out of every ancestor; the same file added
+from Search and the main tree was one cart entry; top files, file types,
+treemap, search, cart and cleanup windows and the live preview of a
+growing folder opened without errors. **Not verified:** a Turbo Scan on
+real hardware (needs admin rights and a UAC prompt; the faked-volume
+integration tests pass), the macOS elevated helper, symlinks in the
+Compatible scan tests (this account can't create them, so that test
+skips), and Python 3.12 (CI's version; everything here ran on 3.13).
+
+Next in the plan: E0's last item, code signing, is still blocked on a
+certificate, so E1 (the agent service) is next.

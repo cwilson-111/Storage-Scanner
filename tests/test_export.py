@@ -14,29 +14,28 @@ from storage_scanner.models import Node
 
 
 def _tree():
-    root = Node("/data", "data", True)
-    sub = Node("/data/sub", "sub", True)
-    a = Node("/data/a.txt", "a.txt", False)
-    b = Node("/data/sub/b.txt", "b.txt", False)
-    a.size, b.size = 5, 7
-    sub.children = [b]
+    root = Node("/data", "data")
+    sub = Node("/data/sub", "sub")
+    root.add_file("a.txt", 5)
+    sub.add_file("b.txt", 7)
     sub.size, sub.file_count = 7, 1
-    root.children = [a, sub]
+    root.dirs.append(sub)
     root.size, root.file_count = 12, 2
     return root
 
 
 def test_iter_nodes_visits_parents_before_children_in_child_order():
-    assert [n.name for n in iter_nodes(_tree())] == ["data", "a.txt", "sub", "b.txt"]
+    # A folder's children are its subfolders, then its files.
+    assert [n.name for n in iter_nodes(_tree())] == ["data", "sub", "b.txt", "a.txt"]
 
 
 def test_iter_nodes_handles_a_tree_deeper_than_the_recursion_limit():
-    root = node = Node("/0", "0", True)
+    root = node = Node("/0", "0")
     depth = sys.getrecursionlimit() + 100
 
     for i in range(1, depth):
-        child = Node(f"/{i}", str(i), True)
-        node.children = [child]
+        child = Node(f"/{i}", str(i))
+        node.dirs.append(child)
         node = child
 
     assert sum(1 for _ in iter_nodes(root)) == depth
@@ -51,9 +50,9 @@ def test_csv_has_the_header_then_one_row_per_node():
     assert tuple(rows[0].keys()) == CSV_FIELDS
     assert [(r["name"], r["size"]) for r in rows] == [
         ("data", "12"),
-        ("a.txt", "5"),
         ("sub", "7"),
         ("b.txt", "7"),
+        ("a.txt", "5"),
     ]
 
 

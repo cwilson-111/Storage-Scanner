@@ -24,6 +24,7 @@ from tkinter import (
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
+from storage_scanner.models import remove_from_tree
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
 from storage_scanner.search import filter_nodes, parse_size
 from storage_scanner.settings import COLORS
@@ -258,25 +259,7 @@ class SearchMixin:
         tv.bind("<Double-1>", lambda _e: reveal_selected())
 
     def _remove_search_result_from_tree(self, target_node):
-        """Remove a deleted file or folder from the in-memory scan tree.
-
-        Unlike the duplicates window's version, this handles directory
-        targets too, since search results can include folders.
-        """
-        if not self.root_node:
-            return
-
-        stack = [(self.root_node, None)]
-        while stack:
-            node, parent = stack.pop()
-            if node is target_node:
-                # Subtract size and count from ancestors before unlinking —
-                # the search finds target_node by identity, walking from
-                # parent.children, so it must still be attached.
-                self._subtract_from_ancestors(self.root_node, target_node)
-                if parent and target_node in parent.children:
-                    parent.children.remove(target_node)
-                return
-            if node.is_dir:
-                for child in node.children:
-                    stack.append((child, node))
+        """Remove a deleted file or folder from the in-memory scan tree,
+        taking its size and file count out of every folder above it."""
+        if self.root_node:
+            remove_from_tree(self.root_node, target_node)
