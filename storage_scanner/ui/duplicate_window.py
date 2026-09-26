@@ -28,6 +28,7 @@ from tkinter import (
 
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.cleanup_recommendations import (
+    get_sampled_duplicates_from_groups,
     is_protected_path,
     is_sampled_duplicate,
     keeper_reason,
@@ -758,15 +759,25 @@ class DuplicatesMixin:
                 if skipped_keepers
                 else ""
             )
+
+            # Check if any target nodes are from sampled groups
+            sampled_count, _ = get_sampled_duplicates_from_groups(
+                [iid_to_node.get(iid) for iid in targets],
+                duplicates
+            )
+            sampled_warning = (
+                f"\n\n⚠ {sampled_count} file(s) are from sampled matches "
+                "(only first, middle, and last 1 MB compared — bytes between "
+                "the compared windows weren't checked)."
+            ) if sampled_count else ""
+
             if not messagebox.askyesno(
                 "Delete selected duplicates",
-                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}",
+                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}{sampled_warning}",
                 icon="warning",
                 parent=win,
             ):
                 return
-
-            deleted_count = 0
             failed = []
 
             for iid in targets:
@@ -806,12 +817,31 @@ class DuplicatesMixin:
                     parent=win,
                 )
                 return
+
+            # Check if any target nodes are from sampled groups
+            sampled_count, _ = get_sampled_duplicates_from_groups(
+                [iid_to_node.get(iid) for iid in targets],
+                duplicates
+            )
+            if sampled_count:
+                if not messagebox.askyesno(
+                    "Add sampled duplicates to cart",
+                    f"Add {len(targets)} file(s) to the Cleanup Cart?\n\n"
+                    f"⚠ {sampled_count} file(s) are from sampled matches "
+                    "(only first, middle, and last 1 MB compared — bytes between "
+                    "the compared windows weren't checked).",
+                    icon="warning",
+                    parent=win,
+                ):
+                    return
+
             for iid in targets:
                 node = iid_to_node.get(iid)
                 if node:
-                    self.cart.add(node, "Duplicate Files")
+                    # Track whether this node is from a sampled group
+                    is_sampled = node in sampled_nodes if sampled_count else False
+                    self.cart.add(node, "Duplicate Files", is_sampled=is_sampled)
             self._refresh_cart_indicator()
-
         ttk.Button(
             button_bar,
             text=f"Reveal in {FILE_MANAGER_NAME}",
