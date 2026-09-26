@@ -202,13 +202,30 @@ def _run_one(name, n_files):
     print(json.dumps(metrics))
 
 
+# Global state set by main() before any subprocess.run calls
+_BENCH_APP_DATA_DIR = None
+_BENCH_LOG_DIR = None
+
 def run_scenario(name, n_files):
     """Run one scenario in a fresh interpreter; returns its metrics."""
+    # Build the environment with redirected app data and log dirs
+    env = os.environ.copy()
+    if _BENCH_APP_DATA_DIR:
+        env["LOCALAPPDATA"] = _BENCH_APP_DATA_DIR
+        env["APPDATA"] = _BENCH_APP_DATA_DIR
+        env["XDG_DATA_HOME"] = _BENCH_APP_DATA_DIR
+        env["XDG_STATE_HOME"] = _BENCH_APP_DATA_DIR
+        env["HOME"] = _BENCH_APP_DATA_DIR
+        env["USERPROFILE"] = _BENCH_APP_DATA_DIR
+    if _BENCH_LOG_DIR:
+        env["STORAGE_SCANNER_LOG_DIR"] = _BENCH_LOG_DIR
+
     result = subprocess.run(
         [sys.executable, os.path.abspath(__file__), "--one", name, "--files", str(n_files)],
         capture_output=True,
         text=True,
         cwd=ROOT,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"{name} failed:\n{result.stderr.strip()}")
@@ -262,6 +279,11 @@ def main(argv=None):
     if args.one:
         _run_one(args.one, args.files)
         return 0
+
+    # Set up isolated directories for benchmarks before running scenarios
+    global _BENCH_APP_DATA_DIR, _BENCH_LOG_DIR
+    _BENCH_APP_DATA_DIR = tempfile.mkdtemp(prefix="storage-scanner-bench-appdata-")
+    _BENCH_LOG_DIR = tempfile.mkdtemp(prefix="storage-scanner-bench-logs-")
 
     baseline_doc = None
     if os.path.exists(BASELINE_PATH):
