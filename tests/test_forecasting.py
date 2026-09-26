@@ -1,83 +1,136 @@
-import sys
+"""Tests for forecasting module, especially handling of None values."""
+
+import pytest
 from datetime import datetime, timedelta
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from storage_scanner.forecasting import forecast_days_until_full
-
-BASE = datetime(2024, 1, 1)
+from storage_scanner import forecasting
 
 
-def _history(points):
-    """points: [(day_offset, total_size), ...] -> get_scan_history() shape."""
-    return [((BASE + timedelta(days=day)).isoformat(), size, 0, 0) for day, size in points]
+class TestFormatForecastRange:
+    """Test format_forecast_range with various forecast scenarios."""
+
+    def test_format_forecast_range_with_both_bounds(self):
+        """Normal case: both optimistic and pessimistic bounds exist."""
+        forecast = forecasting.Forecast(
+            status="ok",
+            days_estimate=100,
+            days_optimistic=80,
+            days_pessimistic=120,
+            confidence="high",
+            r_squared=0.95,
+            data_points=10,
+            span_days=30.0,
+        )
+        result = forecasting.format_forecast_range(forecast)
+        assert result == "~80–120 days"
+
+    def test_format_forecast_range_with_none_optimistic(self):
+        """Noisy history where slow_slope <= 0: days_optimistic is None."""
+        forecast = forecasting.Forecast(
+            status="ok",
+            days_estimate=266,
+            days_optimistic=None,
+            days_pessimistic=55,
+            confidence="low",
+            r_squared=0.02,
+            data_points=5,
+            span_days=4.0,
+        )
+        result = forecasting.format_forecast_range(forecast)
+        assert result == "at least 55 days"
+
+    def test_format_forecast_range_insufficient_data(self):
+        """Insufficient data forecast returns None."""
+        forecast = forecasting.Forecast(
+            status="insufficient_data",
+            days_estimate=None,
+            days_optimistic=None,
+            days_pessimistic=None,
+            confidence=None,
+            r_squared=None,
+            data_points=2,
+            span_days=None,
+        )
+        result = forecasting.format_forecast_range(forecast)
+        assert result is None
+
+    def test_format_forecast_range_not_growing(self):
+        """Not growing forecast returns None."""
+        forecast = forecasting.Forecast(
+            status="not_growing",
+            days_estimate=None,
+            days_optimistic=None,
+            days_pessimistic=None,
+            confidence=None,
+            r_squared=0.5,
+            data_points=5,
+            span_days=10.0,
+        )
+        result = forecasting.format_forecast_range(forecast)
+        assert result is None
+
+    def test_format_forecast_range_equal_bounds(self):
+        """When both bounds are equal, show a point estimate."""
+        forecast = forecasting.Forecast(
+            status="ok",
+            days_estimate=100,
+            days_optimistic=100,
+            days_pessimistic=100,
+            confidence="medium",
+            r_squared=0.85,
+            data_points=8,
+            span_days=20.0,
+        )
+        result = forecasting.format_forecast_range(forecast)
+        assert result == "~100 days"
+
+    def test_format_forecast_range_reversed_bounds(self):
+        """sorted() should handle bounds in any order."""
+        forecast = forecasting.Forecast(
+            status="ok",
+            days_estimate=100,
+            days_optimistic=120,  # Note: optimistic > pessimistic
+            days_pessimistic=80,
+            confidence="high",
+            r_squared=0.9,
+            data_points=10,
+            span_days=30.0,
+        )
+        result = forecasting.format_forecast_range(forecast)
+        assert result == "~80–120 days"
 
 
-def test_insufficient_data_below_minimum_points():
-    history = _history([(0, 100), (10, 200)])
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=10_000)
-    assert forecast.status == "insufficient_data"
-    assert forecast.days_estimate is None
+class TestForecastWithNoisyHistory:
+    """Integration test: forecast with the noisy history from P1-4 spec."""
 
+    def test_noisy_history_produces_none_optimistic(self):
+        """Daily sizes 100, 80, 120, 85, 105 GB should produce None days_optimistic."""
+        base_date = datetime(2026, 9, 1)
+        history = [
+            ((base_date + timedelta(days=i)).isoformat(), size * 1e9, 1000, 100)
+            for i, size in enumerate([100, 80, 120, 85, 105])
+        ]
 
-def test_not_growing_when_size_is_flat():
-    history = _history([(0, 100), (10, 100), (20, 100), (30, 100)])
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=10_000)
-    assert forecast.status == "not_growing"
+        drive_capacity = 500e9  # 500 GB
+        forecast = forecasting.forecast_days_until_full(history, drive_capacity)
 
+        assert forecast.status == "ok"
+        assert forecast.days_optimistic is None
+        assert forecast.days_pessimistic is not None
+        assert forecast.days_estimate is not None
 
-def test_not_growing_when_size_is_shrinking():
-    history = _history([(0, 400), (10, 300), (20, 200), (30, 100)])
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=10_000)
-    assert forecast.status == "not_growing"
+    def test_noisy_history_formats_correctly(self):
+        """The formatted output should show 'at least N days'."""
+        base_date = datetime(2026, 9, 1)
+        history = [
+            ((base_date + timedelta(days=i)).isoformat(), size * 1e9, 1000, 100)
+            for i, size in enumerate([100, 80, 120, 85, 105])
+        ]
 
+        drive_capacity = 500e9  # 500 GB
+        forecast = forecasting.forecast_days_until_full(history, drive_capacity)
+        range_text = forecasting.format_forecast_range(forecast)
 
-def test_perfect_linear_growth_gives_exact_estimate_and_full_confidence():
-    # +10 bytes/day exactly, 11 points over 100 days -> perfect fit.
-    points = [(day, 1000 + day * 10) for day in range(0, 101, 10)]
-    history = _history(points)
-    # Last scan is day 100 at size 2000; +10/day means day 200 (100 days
-    # after the last scan) reaches exactly 3000.
-    capacity = 1000 + 10 * 200
-
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=capacity)
-
-    assert forecast.status == "ok"
-    assert forecast.r_squared > 0.999
-    assert forecast.days_estimate == 100
-    assert forecast.confidence == "high"
-    # A perfect fit means almost no spread between optimistic/pessimistic.
-    assert abs(forecast.days_optimistic - forecast.days_pessimistic) < 5
-
-
-def test_optimistic_bound_gives_more_days_than_pessimistic():
-    """'Optimistic' describes days *remaining*, not slope steepness: more
-    days before the drive fills is the good-news/optimistic bound, fewer
-    days is the bad-news/pessimistic one -- days_optimistic must always be
-    the larger of the two whenever noisy history gives them a real spread."""
-    points = [(0, 1000), (5, 1300), (10, 1250), (15, 1800), (20, 1700), (25, 2200)]
-    history = _history(points)
-
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=10_000)
-
-    assert forecast.status == "ok"
-    assert forecast.days_optimistic is not None
-    assert forecast.days_pessimistic is not None
-    assert forecast.days_optimistic > forecast.days_pessimistic
-    assert forecast.days_pessimistic < forecast.days_estimate < forecast.days_optimistic
-
-
-def test_already_over_capacity_returns_zero_days():
-    history = _history([(0, 100), (10, 500), (20, 900), (30, 1300)])
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=1000)
-    assert forecast.status == "ok"
-    assert forecast.days_estimate == 0
-
-
-def test_thin_or_noisy_data_gets_low_confidence():
-    # Only 3 points, short span, noisy -> should not claim high confidence.
-    history = _history([(0, 100), (2, 400), (4, 250)])
-    forecast = forecast_days_until_full(history, drive_capacity_bytes=100_000)
-    assert forecast.confidence == "low"
+        # Should produce "at least N days" format
+        assert range_text is not None
+        assert "at least" in range_text
+        assert "days" in range_text

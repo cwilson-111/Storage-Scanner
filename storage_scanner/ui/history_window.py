@@ -116,6 +116,8 @@ class HistoryMixin:
         """Render a Forecast namedtuple as one line — a range and an
         explicit confidence level, never a single number presented as
         certain (per the roadmap's own caution about forecasting)."""
+        from storage_scanner.forecasting import format_forecast_range
+
         if forecast.status == "insufficient_data":
             return f"Forecast: not enough history yet " f"({forecast.data_points}/3 scans needed)"
         if forecast.status == "not_growing":
@@ -123,12 +125,9 @@ class HistoryMixin:
         if forecast.days_estimate == 0:
             return "Forecast: drive is already full or over capacity"
 
-        spread = forecast.days_pessimistic
-        if spread is None or forecast.days_optimistic == spread:
-            range_text = f"~{forecast.days_estimate:,} days"
-        else:
-            lo, hi = sorted([forecast.days_optimistic, spread])
-            range_text = f"~{lo:,}–{hi:,} days"
+        range_text = format_forecast_range(forecast)
+        if not range_text:
+            return "Forecast: unable to estimate"
 
         return (
             f"Forecast: full in {range_text} "
