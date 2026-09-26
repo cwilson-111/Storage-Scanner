@@ -6,8 +6,8 @@ Phases 1-3 below are complete, including NTFS MFT fast scan (Turbo Scan),
 except a handful of items explicitly scoped out along the way —
 ransomware-style extension tracking, duplicate-count history, an in-app
 auto-undo. Phase 4 is partially done: everything buildable without a
-purchased certificate is in place; actual code-signing is still blocked on
-you obtaining one.
+code-signing certificate is in place; signing itself is still open, but no
+longer needs a purchased certificate (see backlog P1-9 below).
 
 Turbo Scan (item 1 below) went from "not started" to fully built, unit- and
 integration-tested, and validated across several real-hardware sessions —
@@ -49,6 +49,700 @@ Gaps flagged in earlier passes here are now closed:
 
 See the phase checklists further down for what's done vs. not, item by item.
 
+## Improvement backlog (review 2026-09-26)
+
+A full review of main at 538db69 (v1.11.0): code read module by module,
+suspected bugs reproduced with throwaway scripts on temp folders (real user
+data only ever read from copies or opened read-only), and measurements on
+this machine. Every item says what it rests on; anything not reproduced or
+measured is marked [inference]. Ranked by impact × likelihood ÷ effort.
+Sizes: S about a day or less, M a few days, L a week or more.
+
+**Direction.** The plan says E1 (the agent service) is next. The evidence
+says the desktop app should come first. The GitHub API on 2026-09-26 shows
+38 releases, 86 downloads in total (45 of them `StorageScanner.exe`), 0
+downloads of v1.9.0, v1.10.0 or v1.11.0 (all three published that day),
+1 star, and no issue ever filed by anyone else (all 10 PRs are Dependabot's
+or the owner's). On this machine's own history database the Audit Log and
+Budgets tables are empty, so delete and budgets, the features E4 and E6
+build on, have never been used for real. E1 can't ship anyway: its own
+Deployment bullet says it's blocked on code signing, and its exit
+criterion is a 100-machine pilot that doesn't exist. Meanwhile the P0 items
+below show the delete path can lose data. The recommended order is
+"Desktop 2.0": (1) P0 delete safety; (2) trust — signing, which a
+$9.99/month service now makes possible without buying a certificate, plus
+release notes; (3) make Turbo Scan correct and verified on real hardware,
+then on by default (WizTree-class speed is the headline feature); (4) make
+"what changed since the last scan" visible in the main tree and treemap,
+the one thing TreeSize Free and WizTree don't do. Phase 5 stays planned but
+gated on a demand signal (outside issues, downloads, or a named pilot); if
+it starts, begin with the existing CLI plus scheduled task writing JSON to
+a folder, not a Windows service.
+
+### P0 — data safety, do now
+
+**P0-1. Recycle can delete permanently and still report success
+(Windows).**
+- Why: `file_ops.py:84-86` calls `SHFileOperationW` with
+  `FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI` and
+  without `FOF_WANTNUKEWARNING`, so when the Recycle Bin can't take an item
+  the shell deletes it permanently without asking and returns success
+  (Microsoft's SHFILEOPSTRUCTW docs). Reproduced 2026-09-26 with the real
+  `audit.recycle_and_log` on temp files. A short path on C: (the control)
+  landed in the Recycle Bin; each of these returned True, was gone, and
+  was *not* in the Recycle Bin: a file on a `subst` drive, a file with a
+  331-character path, and a folder with a short path that held one
+  descendant over 260 characters. The same folder without the deep child
+  went to the bin. [inference] The same applies to items bigger than the
+  bin's maximum size and to network shares. README says "Nothing in this
+  app permanently deletes a file."
+- Do: pre-flight every target, and refuse (or ask with explicit "delete
+  permanently" wording) when the volume has no Recycle Bin (`subst`,
+  remote, `SHQueryRecycleBinW` fails on the root), when the path or any
+  descendant is at or over MAX_PATH, or when the size exceeds the bin's
+  capacity. Add `FOF_WANTNUKEWARNING` as a backstop and check
+  `fAnyOperationsAborted`. Longer term, use `IFileOperation`, which handles
+  long paths.
+- Size: M. Verify: a Windows-only test that recycles a file on a temp
+  `subst` drive and a 300-character path and expects a refusal; manually,
+  delete a folder containing a deep `node_modules` and find it in the bin.
+
+**P0-2. The Audit Log records those permanent deletes as successful
+recycles.**
+- Why: `audit.py:87-88` logs success whenever `recycle()` returns True. The
+  P0-1 repro wrote `('recycle', 'Q:\tsreview-p0-subst.txt', success 1)`,
+  and for the `subst` root `('recycle', 'Q:\', success 1)`, although
+  neither is in the Recycle Bin. The Audit window and the Getting Started
+  guide send the user to the Recycle Bin to get things back.
+- Do: record the real outcome (recycled, deleted permanently, or refused)
+  from P0-1's checks, and show it in the Audit window.
+- Size: S once P0-1 exists. Verify: the P0-1 repros produce "refused" or
+  "deleted permanently" rows.
+
+**P0-3. Names ending in a dot or space make the app hash and delete the
+wrong file.**
+- Why: Win32 path normalization strips trailing dots and spaces, so `open`,
+  `getsize` and `os.path.abspath` (`file_ops.py:82`) on `t.bin.` all act on
+  the sibling `t.bin`. Reproduced with the real scanner, duplicate finder
+  and `recycle_and_log`: `t.bin` (1,000 × `P`) and `t.bin.` (1,000 × `Q`,
+  different content) were grouped as duplicates, `t.bin` was picked as the
+  keeper, and deleting the non-keeper `t.bin.` sent the *keeper* `t.bin` to
+  the Recycle Bin. `t.bin.` stayed on disk, and the Audit Log names
+  `t.bin.`. Such names come from WSL, macOS/Linux tools, Samba shares and
+  extracted archives.
+- Do: stat, hash and delete scanned entries through `\\?\`-prefixed paths
+  (which means `IFileOperation`, since `SHFileOperation` won't take them),
+  or refuse such names with a clear message and leave them out of duplicate
+  matching.
+- Size: M. Verify: the repro as a Windows-only test.
+
+**P0-4. Nothing stops deleting the scanned root, a drive root, or an OS or
+profile folder.**
+- Why: `_delete_selected` (`ui/main_window.py:1167-1190`) recycles whatever
+  row has focus after a generic yes/no, including the root row, and
+  neither `recycle_and_log` (`audit.py:64-116`) nor `recycle`
+  (`file_ops.py:184-193`) checks the path. `is_protected_path` is only used
+  to filter cleanup recommendations and duplicate scans. Reproduced:
+  `recycle_and_log` on a scanned `subst` root `Q:\` returned True and
+  permanently removed the mapped folder. [inference] Whether the shell would
+  refuse a physical `C:\` wasn't tested.
+- Do: one guard inside `recycle_and_log` that refuses volume roots, the
+  current scan root, `%WINDIR%`, Program Files, the profile root and the
+  known folders themselves (Desktop, Documents, Downloads…), and asks the
+  user to type the folder's name before deleting a folder above a size or
+  file-count threshold.
+- Size: S. Verify: unit tests for each refused path; Delete on the root row
+  shows the refusal.
+
+**P0-5. The Cleanup Cart and Duplicates window can delete every copy of a
+duplicate group.**
+- Why: a delete from one window doesn't update the Cart or the other open
+  windows. Reproduced by driving the real Duplicates window and Cart
+  executor on temp files (recycle stubbed to a fake bin):
+  - a copy deleted in Duplicates stays in the Cart; Execute then reports
+    "Could not delete — it may be in use, protected, or require admin
+    rights" and audits a failure (this is the known follow-up, confirmed);
+  - a copy queued in the Cart plus the keeper deleted from Search leaves
+    **0 copies** after Execute;
+  - a Duplicates window left open after the keeper is deleted elsewhere
+    still shows it as "Keeper" and deletes the last copy;
+  - a folder and a file inside it both queued: the toolbar total counts 40
+    bytes for a 30-byte folder, and the file stays in the Cart after
+    Execute, then fails on the next run.
+- Do: one delete service that every window calls. It removes the node from
+  the Cart, the duplicate cache and open windows, and before deleting a
+  duplicate re-checks on disk that another copy of the group still exists.
+  Count nested Cart items once.
+- Size: M. Verify: the four scenarios as tests.
+
+### P1 — next release
+
+**P1-1. Turbo Scan's elevated helper fails at random and falls back
+silently.**
+- Why: the helper replaces its progress file with `os.replace`
+  (`mft_scan_cli.py:60-67`) while the GUI has it open for reading
+  (`file_ops.py:375`). Windows then raises PermissionError, nothing catches
+  it, and the helper exits 1 (`mft_scan_cli.py:130-132`). One writer/reader
+  pair at the real cadence for 60 s: 26 of 556 writes failed (4.7%). The
+  real log shows both helper runs on 2026-09-25 (`C:\Battlestate Games` at
+  20:34:49, `C:\` at 21:43:48) ending "Turbo Scan helper exited with code 1"
+  and falling back to Compatible. The helper's own error text is lost
+  because nothing captures its stderr under ShellExecuteEx.
+- Do: retry the replace and never let progress reporting fail a scan; have
+  the helper write its error into the output file so the GUI can log it.
+- Size: S. Verify: the stress script shows 0 failures; one real helper scan
+  (P1-3).
+
+**P1-2. Turbo Scan shows wrong numbers without saying so.** Reproduced at
+the logic level (synthetic MFT records built with the attributes measured
+on this machine):
+- On Disk for NTFS-compressed and sparse files comes from `allocated_size`
+  (`mft_parser.py:505-507`), not the compressed size. A 4,000,000-byte
+  compressed file reads 4,063,232 bytes against the 253,952 Compatible
+  measures (16×). The 512 GiB sparse `userdata.img` reads 512 GiB instead of
+  about 3.1 GiB.
+- OneDrive folders carry the reparse bit in NTFS's own attributes (0x431
+  with placeholders exposed; Compatible sees 0x31 because the cloud filter
+  hides it), and `mft_scan.py:75` treats reparse directories as leaves.
+  [inference: no real elevated scan above OneDrive was run] A Turbo scan of
+  `C:\` or `C:\Users` shows OneDrive as a 0-byte link and still says
+  Complete.
+- A junction picked as the scan root gives an empty tree (Compatible:
+  300,000 bytes in 3 files; Turbo: 0 and 0), because a junction's own
+  directory index is always empty (setting a reparse point on a non-empty
+  folder fails with error 145). [inference] A volume mount point behaves the
+  same way.
+- The journal cursor is taken *after* the full read and cache write
+  (`turbo_read.py:237-242`), so a change made during the full read to a
+  record already read never gets applied. Repro: full scan and the next
+  incremental scan both report 1,000 bytes; the truth is 2,147,483,648.
+- Do: use the compressed size when the attribute is compressed or sparse;
+  traverse cloud-tagged reparse folders; follow a junction or mount-point
+  root to its target or fall back to Compatible; take the cursor before
+  reading the MFT. Add each case as a regression test.
+- Size: M. Verify: `compare_scan_engines.py` on `C:\Users` (with OneDrive),
+  a compressed folder and a junction; an incremental scan after a change
+  made mid-scan.
+
+**P1-3. Verify Turbo Scan and its cache on real hardware, with a written
+checklist.**
+- Why: every Turbo-related section since the columnar cache (v1.8.0) lists
+  a real Turbo Scan under "Not verified". The log does show one in-process
+  elevated full scan on 2026-09-25 23:42 (1,478,444 records cached), but
+  nothing was compared, and both helper runs that day failed (P1-1).
+- Do: a script-driven checklist for the elevated GUI and the helper path.
+  First full scan, then an incremental scan after known changes (create,
+  grow, rename, delete, and a change during the scan), then
+  `compare_scan_engines.py` against Compatible on `C:\Windows`, `C:\Users`,
+  a compressed folder and a junction root. Record the results here.
+- Size: M. Verify: the results section exists and matches.
+
+**P1-4. Growth History opens as an empty window for noisy histories.**
+- Why: `forecasting.py:158` returns `days_optimistic=None` when the slow
+  slope isn't positive, while `days_pessimistic` is set. Then
+  `ui/history_window.py:130` sorts `[None, int]` and raises TypeError after
+  the window has been created, and Tk callback errors are only logged
+  (`app.py:131-132`). 304 of 1,792 random noisy but growing histories (17%)
+  hit it. Driving the real window left "Storage Growth History" open with
+  no widgets.
+- Do: show an open-ended range ("at least N days"), build the window after
+  computing, and see P2-6.
+- Size: S. Verify: a test with daily sizes of 100, 80, 120, 85 and 105 GB.
+
+**P1-5. The forecast says the drive is already full when it isn't.**
+- Why: `forecasting.py:131` compares the scanned path's logical total (the
+  sum of file sizes) with drive capacity. This machine's last `C:\` scan
+  totals 2,254,686,413,442 bytes against a 2,047,346,946,048-byte drive
+  (sparse files), so the forecast returns 0 days, "drive is already full or
+  over capacity" (`ui/history_window.py:123-124`), while `disk_usage` shows
+  313,532,440,576 bytes free. For a subfolder it forecasts that folder
+  filling the whole drive and ignores everything else on it.
+- Do: store used and free space with each scan and forecast free space
+  reaching 0 at the path's on-disk growth rate.
+- Size: M (new `scans` columns). Verify: a copy of the real database gives a
+  sensible range.
+
+**P1-6. A damaged or newer history database stops the app from starting.**
+- Why: `app.py:81` calls `init_history_db()` unguarded. A junk file raises
+  "file is not a database" and the window never opens. v1.8.0's code against
+  today's schema-2 database fails at startup with "no such column:
+  folder_path"; a scheduled task still pointing at an old exe exits 1 on
+  every run. No backup is made before a migration.
+- Do: on DatabaseError move the file aside with a timestamp, start fresh
+  and say so; refuse to write when `schema_version` is newer than the code
+  knows; copy the file before migrating.
+- Size: S. Verify: tests with a junk file and a `schema_version` 3
+  database.
+
+**P1-7. The main tree freezes on a column click or a delete in a big
+folder.**
+- Why: `_sort_level` (`ui/main_window.py:1091-1099`) moves rows one
+  `tree.move` at a time, which is quadratic in Tk. Measured on this machine
+  (Tk 8.6.15), one folder of 35,000 files: sorting by name took 108 s and by
+  size 51 s (10,000 files: 5.5 s). Deleting one row refreshes every sibling
+  (`ui/main_window.py:1152-1155`): 2.7–3.5 s at 35,000.
+- Do: one `Treeview.set_children` call per level, as the live tree already
+  does (measured 0.03–0.13 s at 10,000 and 0.77 s at 35,000), restriping
+  only the rows whose position changed; after a delete refresh only visible
+  rows and ancestors.
+- Size: S. Verify: under 1 s at 35,000, kept as a benchmark.
+
+**P1-8. `--cli` in the released exe crashes when typed in a console.**
+- Why: the exe is built `--windowed` (`build.yml:87`), so `sys.stdout` is
+  None unless output is redirected, and `cli.py:127` then raises
+  "'NoneType' object has no attribute 'write'" (reproduced with `pythonw`
+  and no standard handles: exit 1). Messages printed to stderr vanish the
+  same way. It works with pipes, which is why the smoke test passes. CSV
+  written to stdout on Windows has `\r\r\n` line endings (`csv.reader` read
+  10 rows for 5).
+- Do: in `--cli` mode attach to the parent console (`AttachConsole`) or ship
+  a small console build; fail with a message when there's nowhere to write;
+  write CSV with `newline=""`.
+- Size: S. Verify: run the exe from cmd.exe and PowerShell.
+
+**P1-9. Sign the Windows build; it no longer needs a purchased
+certificate.**
+- Why: Phase 4 item 1 and E0 wait on buying a certificate. Azure Artifact
+  Signing (formerly Trusted Signing) costs $9.99/month and has been open to
+  individual developers in the US and Canada since it became generally
+  available in January 2026; it has a GitHub Action. SignPath Foundation
+  signs open-source projects for free. README 28-35 already tells users to
+  click past SmartScreen and warns that browsers block the download. Every
+  unsigned build starts with no reputation, and ten tags shipped in three
+  days.
+- Do: sign the exe in `build.yml` (the MSI later), and check the signature
+  in the smoke test.
+- Size: M (identity validation). Verify: `Get-AuthenticodeSignature` says
+  Valid on the release assets.
+
+**P1-10. Release notes, a CHANGELOG, and fewer, bigger releases.**
+- Why: every GitHub release body since v1.04 is empty; the notes exist only
+  in tag messages. The update banner links to a page with no text.
+- Do: `CHANGELOG.md` with a section per version, used as the release body
+  (`body_path` in the release step, or `generate_release_notes: true` at
+  least), and batch changes into releases.
+- Size: S. Verify: the next release page has notes.
+
+**P1-11. CI: test pull requests, least privilege, cover `history.py`.**
+- Why: `build.yml` runs only on pushes to main and tags (lines 7-11), so
+  pull requests, Dependabot's included, are never tested. `contents: write`
+  at workflow level (lines 13-14) gives the test job a write token. mypy
+  (line 46) and coverage (`pyproject.toml` addopts) cover only
+  `storage_scanner/`, so `history.py` (823 lines, owns the database, 79%
+  when measured separately) is in neither gate. Commit 32bbf60 went in with
+  a NameError that ruff reports (fixed in 6d73e1b before the merge).
+- Do: a `pull_request` trigger; `contents: read` by default and write only
+  on release jobs; include `history.py` in mypy and coverage (or move it,
+  P2-14); a pre-commit config running ruff and black.
+- Size: S. Verify: a PR shows the test job.
+
+**P1-12. Benchmarks write into the real app log, and test data sits in the
+real history.**
+- Why: the `benchmarks/scale.py` subprocesses redirect their databases but
+  not the log, so this machine's log holds hundreds of "saved full scan of
+  volume 379422" lines (2026-09-24 to 26), plus older lines for volumes
+  123456789 and 1 from test runs up to 2026-09-24. `tests/conftest.py:13`
+  redirects only the log; the databases depend on each test monkeypatching
+  `history.DB_NAME`, with no safety net. The history database holds
+  synthetic scans from earlier dev sessions (source not traced): four
+  identical `c:\data` rows (123,456,789 bytes, capacity 0, 2026-09-15), two
+  `c:\` rows of exactly 94,000,000,000 bytes (2026-09-17) and a temp-folder
+  scan. The two 94 GB rows are what anomaly detection flags on `C:\`
+  (±2.0 TB, z ±3.7).
+- Do: `conftest.py` points LOCALAPPDATA, XDG_DATA_HOME, HOME and the log
+  folder at a temp dir for the whole session and fails if `history.DB_NAME`
+  is the real one; benchmarks do the same; add "Remove this scan" to Growth
+  History so existing junk can go.
+- Size: S. Verify: after a test run the real log and database mtimes are
+  unchanged.
+
+**P1-13. Re-check files before deleting from lists that can be stale.**
+- Why: `check_stale` (`audit.py:23-61`) compares size only and never checks
+  folders; a same-size replacement passes (reproduced). Cold-start Cleanup
+  rows come from `cleanup_cache.db` and can be days old. Search, Duplicates
+  and Cleanup windows stay open and deletable across a rescan, while
+  `_refuse_delete_during_scan` (`ui/live_tree.py:127-135`) is only called by
+  the main tree and the Cart [code-traced, not reproduced].
+- Do: compare size and mtime (and file ID where available); ask for a
+  rescan before deleting folders from cached rows; close or disable those
+  windows when a scan starts.
+- Size: S. Verify: tests for the same-size replacement and for a Delete in a
+  pre-rescan Search window.
+
+### P2 — soon
+
+**P2-1. The one-file exe takes 5–6 s to start.**
+- Why: `dist\StorageScanner.exe` (the Sep 17 build, same flags as
+  `build.yml:87`) running `--cli` on a one-file folder took 5.32–6.26 s over
+  three runs; the same from source took 0.71–0.90 s. A one-file exe unpacks
+  itself to `%TEMP%` on every launch. The "portable" ZIP is the same exe
+  zipped (`build.yml:101`). Importing `storage_scanner.app` alone takes
+  0.7–1.4 s.
+- Do: put a `--onedir` build in the ZIP (and in a future installer), keep
+  the one-file exe as the single download, and import the automation and
+  audit windows, `urllib` and `webbrowser` lazily.
+- Size: S–M. Verify: launch time for both builds.
+
+**P2-2. The tree can't show very large folders.**
+- Why: the finish rebuild of one level takes 2.1 s at 35,000 rows, 6.7 s at
+  100,000 and 20.0 s at 250,000, at 1.75 KB of process memory per row,
+  against about 120 bytes per file for the tree model itself.
+- Do: insert the first N rows (say 1,000) plus a "N more files (X GB)…" row
+  that loads the rest in pages.
+- Size: M. Verify: a 250,000-file folder opens in under 1 s.
+
+**P2-3. Folders cost six times what files do, and the benchmark doesn't
+show it.**
+- Why: tracemalloc on real scans: `C:\Windows\WinSxS` (124,809 files,
+  128,573 folders) 878 B per file all-in; `C:\Program Files` 191 B. That
+  works out to about 120 B per file plus 736 B per folder; a folder's first
+  file allocates six containers. `benchmarks/scale.py` uses 50 files per
+  folder, but this `C:\` has 4.4 (1,142,488 files, 260,518 folders), so real
+  memory is about 2.5× the gated figure. [inference] About 2.9 GB at 10M
+  files.
+- Do: add a realistic-layout scenario that gates bytes per folder; pack a
+  folder's file columns into one buffer, trim them after the scan, and
+  derive a folder's path from its parent instead of storing it.
+- Size: M. Verify: the new scale.py metric.
+
+**P2-4. The Turbo cache file is 615 MB and 54% empty.**
+- Why: `turbo_scan_cache.db` here: 150,319 pages of 4 KB, 80,987 of them on
+  the free list, for 1,478,444 records, which is about 192 B per record live
+  against `baseline.json`'s 128.1 (real names are longer, and the names
+  index repeats them). It's never vacuumed, rows for volumes that are gone
+  are never removed, and a generic DatabaseError in `get_cached_volume` or
+  `init_cache_db` means full reads forever with no rebuild [code-traced].
+- Do: write each full scan to a new file and swap it in; drop volumes not
+  seen for N days; rebuild on any DatabaseError; show the cache size and a
+  Clear button in Settings.
+- Size: S–M. Verify: the file size stays near the live size after full
+  rescans.
+
+**P2-5. History edge cases give wrong answers.** Reproduced on synthetic
+databases:
+- The growth summary is built from the top 50 rows only (`history.py:442`):
+  50 tracked folders when there are 202, and no "largest shrink" despite a
+  39 GB drop.
+- A deleted folder is never listed, so a 29.9 GB "drop" anomaly names no
+  folder.
+- A folder that crosses the 50 MB threshold between scans shows as "New".
+- One save with the clock three years ahead thinned 96 scans to 3:
+  retention is anchored on the newest `created_at`
+  (`history_retention.py:84-86`).
+- A perfectly steady folder flags a 4 KB change as "far outside its usual
+  pattern" (`anomaly_detection.py:60-63`).
+- A forecast over a very short span prints "999,000,000,000,000,000 days".
+- Do: compute the summary and shrink in SQL over all rows, deleted folders
+  included; skip pruning when the clock jumps; require a minimum absolute or
+  relative change for an anomaly; cap long estimates.
+- Size: M. Verify: each case as a test.
+
+**P2-6. Errors in the window are invisible.**
+- Why: Tk callback exceptions are only logged (`app.py:131-132`), and the UI
+  has no way to open the log folder, so a failing button does nothing
+  (P1-4 leaves an empty window).
+- Do: a short dialog, "Something went wrong — details are in the log", with
+  an Open Log Folder button.
+- Size: S. Verify: force an exception in a callback.
+
+**P2-7. Closing during "Saving history" loses the scan.**
+- Why: the save runs on a daemon thread (`ui/main_window.py:770-773`) and
+  `_on_close` (`app.py:165-168`) destroys the window without waiting.
+  During the save, deletes are allowed (`ui/live_tree.py:130` checks only
+  the scan thread), so a delete can change the tree `record_scan` is
+  reading [code-traced].
+- Do: wait for the save on close with a "Finishing…" note, and block
+  deletes until it's done.
+- Size: S.
+
+**P2-8. F5 can start a second scan before the first one finishes.**
+- Why: F5 calls `start_scan` directly (`ui/main_window.py:292`), whose only
+  guard is `scan_thread.is_alive()` (line 610). Between the worker exiting
+  and `_poll_progress` handling "done", a second scan starts while the first
+  result is still shown and saved [code-traced, not reproduced].
+- Do: tag queue messages with a scan generation and ignore F5 until
+  `_finish_scan` has run.
+- Size: S.
+
+**P2-9. Scheduled scans break quietly when the exe moves, runs from a ZIP,
+or the path has a `%`.**
+- Why: a task keeps the exe path it was saved with. Running the exe from
+  inside the ZIP gives a path under `Temp\Temp1_StorageScanner-portable.zip`
+  that disappears. Downloading a new version beside the old one leaves tasks
+  on the old exe, which exits 1 against a newer database (P1-6).
+  `cron_line` (`schedule.py:215-225`) doesn't escape `%`, which cron turns
+  into a newline: `/home/u/100% done` runs `--cli /home/u/100` (reproduced
+  with a cron-parsing script). Task Scheduler expands `%VAR%` in Arguments,
+  so a folder literally named `%USERNAME%` is scanned under another name
+  [inference]. Quoting of spaces, `&`, `^`, `;`, `$()`, backticks and
+  Unicode round-trips correctly (checked).
+- Do: refuse to schedule from a temp or ZIP path; flag tasks whose exe is
+  older than the running app; escape `%` for cron and Task Scheduler.
+- Size: S.
+
+**P2-10. The update check and PRIVACY.md disagree.**
+- Why: PRIVACY.md line 5 calls the check "optional", but there is no
+  setting. Line 60 says running from source never checks, but
+  `check_for_update` (`update_check.py:90-97`) records the time and fetches
+  whatever the version; this machine's database has `last_update_check_at`
+  2026-09-26 from a `0.0.0-dev` run. Data-build users are never told about
+  new Data builds, because those are pre-releases and `/releases/latest`
+  skips them.
+- Do: a setting and an environment variable to turn it off; no request when
+  the version doesn't parse; fix the text; the Data build checks
+  `/releases` for the newest `data-v` tag.
+- Size: S.
+
+**P2-11. Toast notifications: why none ever appeared here.**
+- Why: notifications are turned off for this whole account
+  (`GlobalToastEnabled=0`; PowerShell's ToastNotifier setting says
+  DisabledForUser), so the "never visibly verified" follow-up can't be
+  closed on this machine as it's set up. `notify.windows_toasts_enabled`
+  (`notify.py:95`) reads that registry value only, which misses Group
+  Policy and per-app blocks. Toasts show as coming from "Windows
+  PowerShell".
+- Do: use `ToastNotifier.Setting`; register an app ID with a Start-menu
+  shortcut (needs an installer) so toasts carry the app's name; turn
+  notifications on and verify once.
+- Size: S to verify, M for the app ID.
+
+**P2-12. Archiving blocks the window.**
+- Why: `archive_file` compresses at the highest level and verifies on the
+  Tk thread: a 100 MB log took 6.2 s; [inference] a 2 GB file would freeze
+  it for about two minutes.
+- Do: run it on a worker thread with progress and cancel.
+- Size: S.
+
+**P2-13. Fold the Data build back into main.**
+- Why: 17 of the `data` branch's 18 commits are "Merge branch 'main' into
+  data"; the feature itself is two modules plus 75 lines in
+  `ui/main_window.py`, the source of the merge conflict noted on
+  2026-09-24. The branch's own `build-data.yml` test job pins
+  `actions/checkout` v4 and `setup-python` v5 while main is on v7, because
+  Dependabot only updates the default branch; the `csv_to_*` tests never run
+  on main.
+- Do: merge Data Tools into main behind the existing import guard (the menu
+  appears only when pyarrow or openpyxl is present), build both variants
+  from one tag, delete the branch.
+- Size: S. Verify: one tag produces both builds.
+
+**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py`.**
+- Why: 1,284 and 912 lines against the 500-line rule, 14% and 39% covered.
+  The duplicate engine (about 280 lines of hashing and matching) lives in a
+  UI module, and the 370-line `_show_duplicates_window` of closures is where
+  32bbf60's NameErrors hid. `mypy --check-untyped-defs` reports 345 errors
+  in 28 files, mostly mixin attributes mypy can't see.
+- Do: move the duplicate engine to a Tk-free `storage_scanner/duplicates.py`
+  with tests; make the Duplicates window a class; split `main_window.py`
+  into scan lifecycle, tree population and sorting, toolbar and menus, and
+  drives and elevation; move `history.py` into the package; describe the
+  shared app attributes in a Protocol.
+- Size: L. Verify: every file under 500 lines; coverage of the moved logic.
+
+**P2-15. Run the tests on Linux and macOS, and settle the Python range.**
+- Why: CI tests only `windows-latest` on 3.12, yet Linux and macOS builds
+  ship. Under WSL (Python 3.14.4): 569 passed and 55 failed, all of them
+  Windows-only tests without a skip marker (`test_schedule.py` 22,
+  `test_scheduled_tasks.py` 15, `test_turbo_scan_integration.py` 7,
+  `test_mft_scan.py` 4, …); the suite has only 2 `skipif` markers. On
+  Windows, 3.11 and 3.14 both pass (631 passed, 2 skipped). README line 278
+  says 3.9+, which is past end of life and not installed or tested anywhere.
+- Do: mark the Windows-only tests; add ubuntu and macOS test jobs; test 3.12
+  and 3.13 (and 3.14); raise the floor to 3.11 in README and
+  `pyproject.toml`.
+- Size: S–M. Verify: green test jobs on all three OSes.
+
+**P2-16. Build provenance and pinned build tools.**
+- Why: there's no artifact attestation. `requirements-dev.txt` uses `>=`, so
+  each release can bundle a different PyInstaller. Pushing a tag and main at
+  the same commit builds everything twice. The smoke test never creates a Tk
+  window, so a broken Tcl/Tk bundle would still pass.
+- Do: `actions/attest-build-provenance`; a pinned lock file for build
+  tools; a `--selftest-gui` flag that opens and closes a hidden window in
+  the smoke test.
+- Size: S.
+
+**P2-17. The sampled-duplicate warning hard-codes "1 MB".**
+- Why: `ui/cart_window.py:186` and `ui/duplicate_window.py:760` hard-code
+  "1 MB", while the same window formats `DUPLICATE_HASH_CHUNK_BYTES`
+  elsewhere (`ui/duplicate_window.py:530`). The constant is 1 MiB
+  (`settings.py:73`), so the text is right today but will drift (the known
+  follow-up, confirmed).
+- Do: format `human_size(DUPLICATE_HASH_CHUNK_BYTES)` in both places.
+- Size: S.
+
+**P2-18. Show what changed since the last scan in the main tree.**
+- Why: the main tree has Name, Size, On Disk, % of Parent and Files
+  (`ui/main_window.py:239-243`). Growth against the previous scan exists
+  only inside Growth History, and it's the thing TreeSize Free and WizTree
+  can't do at all.
+- Do: a sortable "Change since last scan" column (size and %) from
+  `folder_snapshots` for folders over the 50 MB threshold, a "changed only"
+  filter, and growth as a treemap colour (P2-19).
+- Size: M. Verify: rescan after adding a file; the column shows it.
+
+**P2-19. Treemap: nested, in the main window, coloured by type, age or
+growth.**
+- Why: `ui/treemap_window.py` draws one level at a time in a separate
+  window, coloured by size relative to the largest sibling, which repeats
+  what the area already shows (lines 3-6, 121-126). Clicking a label does
+  nothing, since only rectangles are bound. Double-clicking a folder drills
+  in and then reveals whatever file lands under the pointer (reproduced).
+  It isn't synced with the tree, and its area is logical size.
+  WinDirStat and WizTree show the whole hierarchy with shading and file-type
+  colours.
+- Do: an embedded pane with 2–3 nested levels, colour modes (type, age,
+  growth), selection synced with the tree, labels bound, click and
+  double-click kept apart, and area from on-disk size.
+- Size: L.
+
+**P2-20. Everyday table stakes in the main window.**
+- Why:
+  - one selection at a time (`selectmode="browse"`, line 234);
+  - the only keys are Delete, F5 and Return in the path box (lines 91,
+    291-292): no Ctrl+F, Backspace or Alt+Up, Enter to open, Shift+F10 or
+    the Menu key, or Ctrl+C;
+  - the context menu is bound to `<Button-3>` only (line 288), so it doesn't
+    open on macOS (the other windows handle `<Button-2>`);
+  - there are no Modified, Accessed, Owner or Folders columns, though the
+    model has mtime and atime;
+  - "On Disk" sorts by logical size (line 241);
+  - File Types can't drill into an extension, and Largest Files has no
+    context menu;
+  - CSV export writes mtime as an epoch number, leaves out atime, and
+    writes names starting with `= + - @` unescaped, which Excel runs as
+    formulas.
+- Do: fix in that order; each is small.
+- Size: M overall.
+
+**P2-21. High DPI and a dark theme.**
+- Why: nothing declares DPI awareness. The v1.11.0 exe's manifest has
+  `longPathAware` but no `dpiAware`, the code never calls
+  `SetProcessDpiAwareness`, and the venv's Python reports awareness 0, so
+  [inference: this machine is at 100% and never shows it] Windows stretches
+  the window as a bitmap at 125–150%, which blurs it. Row height is fixed in
+  pixels. There's only the light theme (`settings.py:76`): no dark mode and
+  no following the OS setting.
+- Do: per-monitor DPI awareness with row height from font metrics; a dark
+  palette that follows the OS.
+- Size: M. Verify: screenshots at 150%.
+
+**P2-22. Explorer integration and package managers.**
+- Why: no "Scan with Storage Scanner" folder menu, no winget or Scoop
+  manifest, no installer. A path passed on the command line only fills the
+  path box (`app.py:203`); it doesn't start a scan.
+- Do: an optional per-user context-menu entry from Settings;
+  `StorageScanner.exe <folder>` scans right away; winget and Scoop manifests
+  (easier once signed).
+- Size: M.
+
+### P3 — later or strategic
+
+**P3-1. Phase 5 (E1–E6) behind a demand gate.** See Direction above. Keep
+the plan; start it only on a real demand signal, and begin with the CLI and
+scheduled JSON output before any service, ingest API or console. Size: L.
+
+**P3-2. Repo housekeeping.**
+- Why: `git branch -a --merged main` lists `feat/compact-tree`,
+  `feat/live-tree-progress`, `fix/followups`, `new_visuals`,
+  `wip/2026-09-25`, `origin/new_visuals` and `origin/wip/2026-09-25`; only
+  `data` isn't merged (P2-13). `stash@{0}` (based on d79165f, 2026-09-19)
+  holds the Cart and orphaned-install work that landed in 4c07691, plus
+  `TURBO_SCAN_VALIDATION_STATUS.md`, deleted on purpose in c14d8e8. Ignored
+  clutter: `TreeSize.spec` (its entry point `treesize.py` is gone),
+  `dist\StorageScanner.exe` from Sep 17, root `__pycache__` for 3.11, 3.13
+  and 3.14, and a 3.13 venv holding 3.14 build artifacts.
+- Do: delete the merged branches locally and on origin, drop the stash after
+  a last look, remove the stray files, recreate the venv.
+- Size: S.
+
+**P3-3. The `%TEMP%` folder in the repo root.**
+- Why: an empty folder created 2026-09-24 21:22:52 and last changed
+  2026-09-25 20:30:05, the same second as commit 6d73e1b. No app code expands
+  `%VAR%` strings: every path comes from `tempfile`, LOCALAPPDATA or
+  XDG_DATA_HOME (`history.py:27-29`, `logging_setup.py:31`,
+  `file_ops.py:427-429`; the benchmarks use `tempfile`). A literal `%TEMP%`
+  is what a bash shell leaves from a cmd-style path; [inference] here most
+  likely a commit-message file written and removed around 6d73e1b. It's a
+  dev-shell artifact, not a bug users can hit.
+- Do: delete it; use `$TEMP` or `tempfile` in dev scripts.
+- Size: S.
+
+**P3-4. The Obsidian project note is out of date.**
+- Why: its overview still describes a single `treesize.py`, its feature list
+  is June's, and its notes stop at v1.8.0.
+- Do: rewrite it from this backlog.
+- Size: S.
+
+**P3-5. The log loses lines when the app and a scheduled scan overlap.**
+- Why: `RotatingFileHandler` (`logging_setup.py:34-38`) can't rename a file
+  another process has open (WinError 32): 3,362 of 30,000 lines were lost in
+  a two-process repro. The log runs at DEBUG and holds full paths.
+- Do: one log file per process, or a handler that doesn't rename; INFO by
+  default.
+- Size: S.
+
+**P3-6. The "journal wrapped" check uses the wrong field.**
+- Why: `turbo_read.py:277` and `usn_journal.py:225` compare the saved
+  cursor with `LowestValidUsn` rather than `FirstUsn`, so the "USN journal
+  wrapped" reason almost never shows; the journal read fails instead, which
+  is still safe.
+- Do: compare with `first_usn`.
+- Size: S.
+
+**P3-7. Harden the elevated helper's output file.**
+- Why: the unelevated app picks a path in `%TEMP%` (`file_ops.py:427-429`)
+  and the elevated helper writes to it. [inference] Another process running
+  as the same user could swap it for a link and make the helper overwrite a
+  different file; Microsoft doesn't treat UAC as a security boundary, so the
+  risk is low. The result is trusted as-is. Argument quoting was checked and
+  is correct for 8 awkward paths (spaces, `%`, `&`, `^`, Unicode, a trailing
+  backslash, an embedded `--output`).
+- Do: open the output without following links (or hand over an inherited
+  handle), and check that result paths are under the requested root.
+- Size: S.
+
+**P3-8. Orphaned-install detection trusts a registry read that can fail.**
+- Why: if a registry hive can't be read, every install location seen before
+  counts as orphaned (reproduced with an empty snapshot); a nested install
+  location (`Vendor\ProductB`) flags its parent folder.
+- Do: skip the category when far fewer apps come back than last time;
+  ignore folders that contain an installed app.
+- Size: S.
+
+**P3-9. Accessibility.**
+- Why: `ttk.Treeview` exposes nothing to Windows screen readers.
+- Do: finish keyboard-only flows (P2-20), state the limit in README, and
+  count accessibility in any future UI-toolkit decision.
+- Size: M.
+
+**P3-10. A cheap route to bug reports.**
+- Why: no outside issue has ever been filed, crash-report opt-in (item 9) is
+  not started, and there are no issue templates or `SECURITY.md`.
+- Do: a "Copy diagnostic info" button, issue templates, and `SECURITY.md`
+  before anything automatic.
+- Size: S.
+
+**P3-11. Dead code and stale instructions.**
+- Why: `history.py:759-823` (`format_bytes`, `create_usage_history_chart`,
+  `print_growth_report`) has no callers, yet it keeps matplotlib listed as
+  an optional "growth-history charts" dependency (PRIVACY.md line 74, the
+  `requirements-dev.txt` comment) that the GUI never uses. README 42-45
+  gives the Control-click → Open route past Gatekeeper, which [inference,
+  not tested here] macOS 15 removed.
+- Do: delete the dead code and the matplotlib mentions; update the macOS
+  instructions.
+- Size: S.
+
+Checked and fine: scheduled-task XML argument quoting; the elevated
+helper's command line; case-insensitive nesting in the Cart; recycling a
+junction removes only the link; a folder with a locked file fails as a
+whole (nothing half-deleted); history migration run by the GUI and the CLI
+at the same moment (WAL); `is_newer` version comparison (data-v tags and
+pre-release suffixes are never "newer"). Reading the scheduled-task list
+works against real system tasks, but this machine has no task registered by
+the app, so that follow-up stays open until one is.
+
 ## Executive assessment
 
 The project is already beyond a basic disk-usage viewer. It combines concurrent scanning, sortable storage analysis, duplicate detection, safe deletion, historical snapshots, growth comparison, capacity forecasting, a custom Tkinter interface, standalone Windows packaging, and automated GitHub releases.
@@ -69,15 +763,14 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 
 ### Main interface
 
-- Dark cyber-terminal visual theme.
-- Animated header with scan-line grid, neon text treatment, and radar animation.
+- A light "Structural Light" theme (`storage_scanner/settings.py`): hairline borders and one accent blue. The earlier dark cyber-terminal theme and animated radar header are gone, and there is no dark mode (backlog P2-21).
 - Drive and folder selection.
 - Scan and cancel controls.
-- Sortable columns for name, size, parent percentage, and file count.
+- Sortable columns for name, size, on-disk size, parent percentage, and file count.
 - Lazy population of child rows so large result trees are not rendered all at once.
 - Percentage bars and heat coloring to make large consumers stand out.
 - Alternating row colors and distinct directory, file, warning, and placeholder treatments.
-- Status messages, and a live scan progress panel: an overall bar measured against the last scan (or the drive's used space), live counters, the folder being read, and a bar per top-level folder (see "Live scan progress" below).
+- Status messages, and live scan progress: an overall bar measured against the last scan (or the drive's used space), live counters and the folder being read under the tree, while the tree itself fills in with each folder's running totals (see "Live scan progress" and "The tree fills in while it scans" below).
 - Keyboard shortcuts including F5 to rescan and Delete to recycle a selected item.
 
 ### File operations
@@ -383,7 +1076,7 @@ To actually fix it:
 
 ### 9. Treat trust as a product feature
 
-- ❌ Code-sign Windows releases — still blocked on a purchased certificate.
+- ❌ Code-sign Windows releases — not done; no longer needs a purchased certificate (backlog P1-9).
 - ✅ Publish checksums for every release.
 - ✅ Generate an SBOM.
 - ✅ Pin GitHub Action versions to immutable commit SHAs.
@@ -537,9 +1230,9 @@ steps have since run green too (`build-macos`/`build-linux` on `80220b7`).
 4. ✅ Add reversible cleanup plans and audit history (every delete/recycle/archive logged; no auto-undo — see Status update above for why).
 5. ✅ Add CLI, scheduling, and export features — CLI mode with JSON/CSV output and exit codes; `--save-history` so a headless scan lands in scan history like a GUI scan; **Schedule Scans…** (Tools ▸ History & Trust) creating a Windows Task Scheduler task, or giving the crontab line on macOS/Linux; and **Export Results…** (Tools) writing the current scan as CSV or JSON with the same writers as the CLI (`storage_scanner/export.py`). See "Scheduled scans and export" below.
 
-### Phase 4: Distribution and trust — 🚧 partial, blocked on a certificate
+### Phase 4: Distribution and trust — 🚧 partial, signing not done
 
-1. ❌ Sign the executable and installer — needs a purchased code-signing certificate; not something that can be built without one.
+1. ❌ Sign the executable and installer — not done. A $9.99/month signing service now covers individual developers without a purchased certificate; see backlog P1-9.
 2. 🚧 Produce an installer plus portable ZIP — portable ZIP done; no MSI/installer built.
 3. ✅ Publish SHA-256 checksums and an SBOM.
 4. 🚧 Create polished onboarding, documentation, screenshots, and benchmark results — onboarding done (the first-run guide; see item 7 above) and benchmark tooling done (`benchmarks/scan.py`, see item 10); no published benchmark results or screenshots yet.
@@ -1373,8 +2066,9 @@ integration tests pass), the macOS elevated helper, symlinks in the
 Compatible scan tests (this account can't create them, so that test
 skips), and Python 3.12 (CI's version; everything here ran on 3.13).
 
-Next in the plan: E0's last item, code signing, is still blocked on a
-certificate, so E1 (the agent service) is next.
+Next: see "Improvement backlog (review 2026-09-26)" near the top. It puts
+the P0 delete-safety fixes, signing (P1-9) and Turbo Scan correctness ahead
+of E1.
 
 ## The tree fills in while it scans — ✅ done (2026-09-26)
 

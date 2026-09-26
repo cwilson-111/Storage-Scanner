@@ -30,7 +30,9 @@ your machine.
   same app-data folder.
 - **Deletion audit log**: every file the app has sent to the Recycle
   Bin/Trash — when, from where, and how big — stored in that same SQLite
-  database and viewable in the app's own Audit Log window.
+  database and viewable in the app's own Audit Log window. Until P0-2 in
+  the roadmap is fixed, it also records the permanent deletes described
+  below as recycles.
 
 All of it stays on your machine. Nothing here is ever uploaded. You can
 delete the whole app-data folder at any time; nothing about the app's
@@ -38,9 +40,11 @@ behavior depends on it persisting.
 
 ## What it deletes
 
-Only files and folders you explicitly select, and always by sending them
-to the Recycle Bin/Trash — never a permanent delete. See the Audit Log
-window (or the ledger above) for a full record of what's been removed.
+Only files and folders you explicitly select. Deletes go to the Recycle
+Bin/Trash — except that on Windows, items the Recycle Bin can't hold (files
+on subst or network drives, paths over 260 characters) are currently deleted
+permanently. The fix is tracked as P0-1 in the roadmap. See the Audit Log
+window (or the ledger above) for a record of what's been removed.
 
 ## Update check
 

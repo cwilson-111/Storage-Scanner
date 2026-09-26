@@ -180,8 +180,10 @@ packages were bundled.
   archive is written and verified. Works best on text/logs/uncompressed
   documents — already-compressed formats (video, photos, PDFs) won't
   shrink much, and the UI tells you that before you commit.
-- **Everything goes through the Recycle Bin/Trash.** Nothing in this app
-  permanently deletes a file.
+- **Deletes go to the Recycle Bin/Trash** — except that on Windows, items
+  the Recycle Bin can't hold (files on subst or network drives, paths over
+  260 characters) are currently deleted permanently. The fix is tracked as
+  P0-1 in the roadmap.
 - **Getting Started guide** — shown once on first launch, and reopenable
   from Tools ▸ Help ▸ Getting Started…: what Delete actually does on your OS,
   which folders a scan can't read (and what Run as Admin changes), how
@@ -351,13 +353,16 @@ the test suite (`tests/test_benchmark_scan.py`), so CI gates them too.
 The full plan, with what's done and what's next, is in
 [NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
 
-**Next: scale for very large drives.** Scan history now stays bounded and
-compact; next is a smaller in-memory tree, measured by
-`benchmarks/scale.py`.
+**Next: the improvement backlog** ("Improvement backlog (review
+2026-09-26)" near the top of the roadmap). It comes first: delete-safety
+fixes (some deletes on Windows can bypass the Recycle Bin), code signing,
+Turbo Scan correctness and real-hardware verification, then showing what
+changed since the last scan in the main tree and treemap. The scale work
+(bounded history, a compact in-memory tree) is done.
 
-**Then: enterprise monitoring for computers and databases** (Phase 5 in the
-roadmap). The desktop app stays free and local-first; the fleet pieces are
-separate and reuse the same scan engine.
+**Later, on real demand: enterprise monitoring for computers and
+databases** (Phase 5 in the roadmap). The desktop app stays free and
+local-first; the fleet pieces are separate and reuse the same scan engine.
 
 | Step | What it adds |
 |---|---|
