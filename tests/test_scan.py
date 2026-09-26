@@ -184,17 +184,6 @@ def test_scanning_a_single_file_never_posts_a_live_root_reference(tmp_path):
     assert not any(kind == "root" for kind, _payload in messages)
 
 
-def test_progress_bytes_tracks_towards_the_final_rolled_up_size(tmp_path):
-    (tmp_path / "a.bin").write_bytes(b"x" * 100)
-    (tmp_path / "b.bin").write_bytes(b"y" * 200)
-    root, messages = _run_scan_with_messages(tmp_path)
-
-    byte_totals = [payload for kind, payload in messages if kind == "progress_bytes"]
-    assert byte_totals  # at least one was posted
-    assert byte_totals[-1] == root.size == 300
-    assert byte_totals == sorted(byte_totals)  # monotonically non-decreasing
-
-
 # -- find_inaccessible_paths ------------------------------------------------ #
 
 

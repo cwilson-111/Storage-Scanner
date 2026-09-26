@@ -12,6 +12,10 @@ support, a wrapped/recreated journal) just falls back to the plain full read
 Turbo Scan always did before caching existed, and never changes what a scan
 returns. It does report which path it took (MftRead), for the scan-details
 strip.
+
+Each step posts a ("phase", Phase) on progress_q (see
+storage_scanner.scan_progress) -- with done/total counts where the size is
+known up front (MFT records, journal changes), so none of them looks stuck.
 """
 
 import os
@@ -20,6 +24,19 @@ from typing import Optional
 
 from storage_scanner import mft_parser, mft_scan, turbo_cache, usn_journal
 from storage_scanner.logging_setup import logger
+from storage_scanner.scan_progress import REPORT_INTERVAL_SECONDS, Phase, Throttle
+
+PHASE_READING_MFT = "Reading the MFT"
+PHASE_SAVING_CACHE = "Saving the Turbo Scan cache"
+PHASE_BUILDING_TREE = "Building the folder tree"
+PHASE_READING_JOURNAL = "Reading the USN journal"
+PHASE_APPLYING_CHANGES = "Applying journal changes"
+PHASE_LOADING_CACHE = "Loading cached records"
+
+# How many records the MFT read loop parses between checks of its
+# Throttle -- a power of two, checked with a mask, to keep the per-record
+# cost of reporting to one integer AND.
+_RECORD_REPORT_MASK = 1024 - 1
 
 # Every NTFS volume's root directory is always MFT record #5 -- matches
 # mft_scan._ROOT_RECORD_NUMBER, duplicated here rather than imported per
@@ -174,13 +191,21 @@ def scan_subtree_using_cache(record_source, volume_root, target_path, progress_q
     records = _full_scan_and_cache(
         record_source, volume_serial, volume_root, progress_q, cancel_event
     )
+    _post(progress_q, PHASE_BUILDING_TREE)
     node = _subtree_from_records(records, volume_root, target_path)
     return node, MftRead(incremental=False, full_read_reason=reason)
 
 
+def _post(progress_q, label, done=None, total=None, unit=""):
+    if progress_q is not None:
+        progress_q.put(("phase", Phase(label, done, total, unit)))
+
+
 def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, cancel_event):
     records = []
-    for record_number in range(record_source.record_count):
+    total = record_source.record_count
+    throttle = Throttle(REPORT_INTERVAL_SECONDS)
+    for record_number in range(total):
         if cancel_event.is_set():
             # Raise rather than return the partial list built so far --
             # Turbo Scan's contract (see turbo_scan.scan_with_best_engine's
@@ -191,14 +216,16 @@ def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, 
         parsed = mft_parser.parse_base_record(record_number, record_source)
         if parsed is not None:
             records.append(parsed)
-            if progress_q is not None and len(records) % 5000 == 0:
-                progress_q.put(("progress", len(records)))
+        if (record_number & _RECORD_REPORT_MASK) == 0 and throttle.due():
+            _post(progress_q, PHASE_READING_MFT, record_number, total, "records")
+    _post(progress_q, PHASE_READING_MFT, total, total, "records")
 
     root_frn = next(
         (r.frn for r in records if (r.frn & _FRN_RECORD_NUMBER_MASK) == _ROOT_RECORD_NUMBER),
         None,
     )
     if root_frn is not None:
+        _post(progress_q, PHASE_SAVING_CACHE)
         try:
             turbo_cache.save_full_scan(
                 volume_serial,
@@ -234,18 +261,11 @@ def _try_incremental_scan(
     for a damaged cache -- the caller invalidates the cache and falls back
     to a full scan in both cases, just with a logged reason.
 
-    Posts progress the same way _full_scan_and_cache does -- previously
-    this function posted nothing at all, regardless of engine path
-    (in-process or elevated-helper), which is a real, separate gap from
-    the elevated-helper-specific process-boundary fix: even an
-    already-elevated in-process Turbo Scan going through a cached
-    incremental refresh showed zero progress of any kind, found via a
-    real user report. A `("status", text)` message (main_window._poll_
-    progress just sets the status bar text verbatim) marks the start of
-    each phase -- reparsing the dirty records, then loading the requested
-    folder's records; `("progress", n)` during the reparse loop matches
-    _full_scan_and_cache's own existing convention, at a finer interval
-    since a dirty set is typically far smaller than a full volume.
+    Posts a ("phase", Phase) for each step -- reading the journal,
+    reparsing the changed records (with a done/total count), loading the
+    requested folder's records -- whichever engine path runs it: before
+    this function posted anything at all, an incremental refresh showed
+    no progress of any kind, found via a real user report.
     """
     if cached["next_usn"] is None:
         return None  # cached records exist, but no journal cursor was ever established
@@ -257,6 +277,7 @@ def _try_incremental_scan(
     if cached["next_usn"] < state.lowest_valid_usn:
         raise _CacheOutdated("USN journal wrapped since last scan")
 
+    _post(progress_q, PHASE_READING_JOURNAL)
     dirty, new_next_usn = usn_journal.read_journal_changes(
         handle,
         state.journal_id,
@@ -264,9 +285,8 @@ def _try_incremental_scan(
         lowest_valid_usn=state.lowest_valid_usn,
     )
 
-    if progress_q is not None and dirty:
-        progress_q.put(("status", f"Turbo Scan: applying {len(dirty):,} change(s)…"))
-
+    total = len(dirty)
+    throttle = Throttle(REPORT_INTERVAL_SECONDS)
     upserts, deletes = [], []
     for i, dirty_record in enumerate(dirty, start=1):
         if cancel_event.is_set():
@@ -281,13 +301,12 @@ def _try_incremental_scan(
             deletes.append(dirty_record.record_number)
         else:
             upserts.append(parsed)
-        if progress_q is not None and i % 200 == 0:
-            progress_q.put(("progress", i))
+        if i == total or throttle.due():
+            _post(progress_q, PHASE_APPLYING_CHANGES, i, total, "changes")
 
     turbo_cache.apply_incremental_changes(cached["volume_serial"], upserts, deletes, new_next_usn)
 
-    if progress_q is not None:
-        progress_q.put(("status", "Turbo Scan: loading cached records…"))
+    _post(progress_q, PHASE_LOADING_CACHE)
     return _subtree_from_cache(cached, volume_root, target_path)
 
 

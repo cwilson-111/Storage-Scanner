@@ -66,6 +66,12 @@ elif IS_LINUX:
 else:
     DEFAULT_DUPLICATE_EXCLUDES = _WINDOWS_DUPLICATE_EXCLUDES
 
+# Size of each window the duplicate finder hashes: the first, middle, and
+# last DUPLICATE_HASH_CHUNK_BYTES of a file (see DuplicatesMixin). Files up
+# to 3x this size are compared byte-for-byte; larger ones are a sampled
+# match (see cleanup_recommendations.is_sampled_duplicate).
+DUPLICATE_HASH_CHUNK_BYTES = 1024 * 1024
+
 # --------------------------------------------------------------------------- #
 # Theme — "Structural Light": a light, data-tool palette. Fine hairlines and
 # one confident blue instead of neon glow — see After Jarvis (the palette

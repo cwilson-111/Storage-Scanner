@@ -1,12 +1,10 @@
-"""Tests for the partial/full hashing stages of duplicate detection,
-specifically the optimization that skips a second disk read + hash for any
-file no larger than one chunk (see _partial_hash_file's docstring): its
-"first chunk" read already covers the whole file, so a strong confirmation
-digest is computed from those same bytes instead of _full_hash_file
-reopening the file a second time.
+"""Tests for duplicate detection's content matching: size, then the first +
+last chunk, then (for files over two chunks) the middle chunk.
+
+Files up to three chunks are fully covered by those windows and must match
+byte-exactly; larger files are a sampled match by design.
 """
 
-import hashlib
 import sys
 import threading
 from pathlib import Path
@@ -14,7 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner.cleanup_recommendations import is_sampled_duplicate
 from storage_scanner.models import Node
+from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
+from storage_scanner.ui import duplicate_window
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
 
@@ -33,131 +34,95 @@ def _make_app(tmp_path, files):
     app = DuplicatesMixin()
     app.root_node = root
     app._should_skip_duplicate_scan = lambda path: False
-    app.dup_stats = {
-        "files_total": 0,
-        "files_checked": 0,
-        "files_skipped": 0,
-        "bytes_skipped": 0,
-        "partial_hashed": 0,
-        "full_hashed": 0,
-    }
     return app
 
 
-# -- _partial_hash_file's new (partial_digest, full_digest) contract ------- #
+def _groups(app):
+    duplicates = app._find_duplicate_files(cancel_event=threading.Event())
+    return [{n.name for n in nodes} for _size, _digest, nodes in duplicates]
 
 
-def test_partial_hash_returns_a_full_digest_for_a_file_within_one_chunk(tmp_path):
-    content = b"small file content"
-    path = tmp_path / "small.bin"
-    path.write_bytes(content)
-
-    app = DuplicatesMixin()
-    partial_digest, full_digest = app._partial_hash_file(str(path), chunk_size=1024 * 1024)
-
-    assert partial_digest == hashlib.blake2b(content, digest_size=16).hexdigest()
-    assert full_digest == hashlib.blake2b(content, digest_size=32).hexdigest()
-    # And that full digest must be identical to what _full_hash_file itself
-    # would produce -- this optimization must never weaken the final
-    # confirmation strength, only avoid re-reading the file for it.
-    assert full_digest == app._full_hash_file(str(path))
+def _flip(content, index):
+    data = bytearray(content)
+    data[index] ^= 0xFF
+    return bytes(data)
 
 
-def test_partial_hash_returns_no_full_digest_for_a_file_larger_than_one_chunk(tmp_path):
-    # chunk_size deliberately tiny so the test doesn't need a real multi-MB
-    # file on disk to exercise the "larger than one chunk" branch.
-    content = b"0123456789"
-    path = tmp_path / "big.bin"
-    path.write_bytes(content)
-
-    app = DuplicatesMixin()
-    partial_digest, full_digest = app._partial_hash_file(str(path), chunk_size=4)
-
-    assert full_digest is None
-    h = hashlib.blake2b(digest_size=16)
-    h.update(b"0123")  # first 4 bytes
-    h.update(b"6789")  # last 4 bytes
-    assert partial_digest == h.hexdigest()
-
-
-def test_partial_hash_reports_none_none_for_an_unreadable_file(tmp_path):
-    app = DuplicatesMixin()
-    missing = tmp_path / "does_not_exist.bin"
-
-    assert app._partial_hash_file(str(missing)) == (None, None)
-
-
-# -- End-to-end: correctness is unchanged, and the second read is skipped -- #
-
-
-def test_small_identical_files_are_found_as_duplicates_without_a_second_read(tmp_path, monkeypatch):
-    content = b"identical small content" * 10  # well under the 1MB chunk size
+def test_small_identical_files_are_grouped_and_a_unique_file_is_not(tmp_path):
+    content = b"identical small content" * 10
     app = _make_app(
         tmp_path,
-        [
-            ("a.bin", content),
-            ("b.bin", content),
-            ("unique.bin", b"different"),
-        ],
+        [("a.bin", content), ("b.bin", content), ("unique.bin", b"x" * len(content))],
     )
 
-    full_hash_calls = []
-    real_full_hash = app._full_hash_file
-    monkeypatch.setattr(
-        app,
-        "_full_hash_file",
-        lambda path, cancel_event=None: full_hash_calls.append(path)
-        or real_full_hash(path, cancel_event),
+    assert _groups(app) == [{"a.bin", "b.bin"}]
+
+
+def test_unreadable_file_hashes_to_none(tmp_path):
+    app = DuplicatesMixin()
+    missing = str(tmp_path / "does_not_exist.bin")
+
+    assert app._partial_hash_file(missing, 10) is None
+    assert app._middle_hash_file(missing, 10) is None
+
+
+def test_files_that_changed_size_since_the_scan_are_not_matched(tmp_path, monkeypatch):
+    """The scan saw two-chunk files, which head + tail alone cover exactly;
+    both have since grown to five chunks and now differ only in the middle.
+    Hashing the head and tail of the grown files would call them a
+    byte-exact match, so a file whose size no longer matches the scan is
+    left out instead."""
+    chunk = 4
+    monkeypatch.setattr(duplicate_window, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
+    grown = bytes(5 * chunk)
+    app = _make_app(tmp_path, [("a.bin", grown), ("b.bin", _flip(grown, len(grown) // 2))])
+    for node in app.root_node.children:
+        node.size = 2 * chunk
+
+    assert _groups(app) == []
+
+
+def test_any_single_byte_difference_splits_files_up_to_three_chunks(tmp_path, monkeypatch):
+    """Head, middle and tail windows together cover every byte of a file up
+    to three chunks, including the in-between sizes where they overlap or
+    the middle window has to exactly bridge the gap -- so every single-byte
+    difference, at every position and every size, must keep files apart."""
+    chunk = 4
+    monkeypatch.setattr(duplicate_window, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
+
+    files = []
+    for size in range(1, 3 * chunk + 1):
+        original = bytes(range(size))
+        files.append((f"orig_{size}", original))
+        files.append((f"copy_{size}", original))
+        files.extend((f"flip_{size}_{i}", _flip(original, i)) for i in range(size))
+
+    groups = _groups(_make_app(tmp_path, files))
+
+    assert sorted(map(sorted, groups)) == sorted(
+        sorted({f"orig_{size}", f"copy_{size}"}) for size in range(1, 3 * chunk + 1)
     )
 
-    duplicates = app._find_duplicate_files(cancel_event=threading.Event())
 
-    assert len(duplicates) == 1
-    _size, _digest, nodes = duplicates[0]
-    assert {n.name for n in nodes} == {"a.bin", "b.bin"}
-    # The whole point of the optimization: neither small duplicate candidate
-    # should trigger a second read via _full_hash_file, since the partial
-    # hash pass already computed a strong confirmation digest from the same
-    # bytes it had already read.
-    assert full_hash_calls == []
+def test_large_files_differing_only_between_sampled_windows_are_grouped(tmp_path):
+    """The accepted tradeoff: above three chunks, only the first, middle and
+    last chunk are compared, so a difference between them goes unseen."""
+    size = 4 * DUPLICATE_HASH_CHUNK_BYTES
+    original = bytes(size)
+    # Head is [0, 1C), middle is [1.5C, 2.5C): 1.25C falls between them.
+    between_windows = _flip(original, DUPLICATE_HASH_CHUNK_BYTES + DUPLICATE_HASH_CHUNK_BYTES // 4)
+
+    app = _make_app(tmp_path, [("a.bin", original), ("b.bin", between_windows)])
+
+    assert _groups(app) == [{"a.bin", "b.bin"}]
+    assert is_sampled_duplicate(size)
 
 
-def test_large_identical_files_still_go_through_full_hash_confirmation(tmp_path, monkeypatch):
-    # Force a tiny "chunk size" for this run so the files only need to be a
-    # few hundred bytes, not a real multi-MB file, to land in the "larger
-    # than one chunk" branch -- proving the cache is *not* used when the
-    # partial hash didn't already cover the whole file.
-    tiny_chunk = 64
-    content = (b"x" * 200) + b"UNIQUE-MIDDLE-BYTES" + (b"y" * 200)
-    app = _make_app(tmp_path, [("a.bin", content), ("b.bin", content)])
+def test_large_files_differing_only_in_the_middle_chunk_are_not_grouped(tmp_path):
+    size = 4 * DUPLICATE_HASH_CHUNK_BYTES
+    original = bytes(size)
+    middle_changed = _flip(original, size // 2)
 
-    # _find_duplicate_files always calls _partial_hash_file with its
-    # default chunk_size, so pin that default down to tiny_chunk for this
-    # test instead of threading a parameter through the pipeline.
-    real_partial = app._partial_hash_file
-    monkeypatch.setattr(
-        app,
-        "_partial_hash_file",
-        lambda path, cancel_event=None, chunk_size=1024 * 1024: real_partial(
-            path, cancel_event, tiny_chunk
-        ),
-    )
+    app = _make_app(tmp_path, [("a.bin", original), ("b.bin", middle_changed)])
 
-    full_hash_calls = []
-    real_full_hash = app._full_hash_file
-    monkeypatch.setattr(
-        app,
-        "_full_hash_file",
-        lambda path, cancel_event=None: full_hash_calls.append(path)
-        or real_full_hash(path, cancel_event),
-    )
-
-    duplicates = app._find_duplicate_files(cancel_event=threading.Event())
-
-    assert len(duplicates) == 1
-    _size, _digest, nodes = duplicates[0]
-    assert {n.name for n in nodes} == {"a.bin", "b.bin"}
-    # Both candidates are larger than the (forced tiny) chunk size, so the
-    # partial hash never covered the whole file -- the full-hash
-    # confirmation pass must still run for correctness.
-    assert len(full_hash_calls) == 2
+    assert _groups(app) == []

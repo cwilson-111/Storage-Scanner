@@ -10,6 +10,14 @@ from typing import Optional
 
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import Node
+from storage_scanner.scan_progress import (
+    FLUSH_EVERY_ENTRIES,
+    REPORT_INTERVAL_SECONDS,
+    Phase,
+    WalkTracker,
+)
+
+PHASE_ADDING_UP = "Adding up folder sizes"
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -178,8 +186,13 @@ def scan(path, progress_q, cancel_event, workers=None):
     risk of pool-starvation deadlock no matter how deep the tree goes.
     Sizes are rolled up afterwards in a fast in-memory pass.
 
-    Posts the running file count to `progress_q` and stops early if
-    `cancel_event` is set.
+    Posts progress to `progress_q` (see storage_scanner.scan_progress) and
+    stops early if `cancel_event` is set: a ("walk", WalkSnapshot) every
+    REPORT_INTERVAL_SECONDS from a reporter thread plus one final exact
+    one once every directory has been read, then a ("phase", ...) for the
+    roll-up. A directory reports its counts every FLUSH_EVERY_ENTRIES
+    entries while it's still being read, so one huge folder keeps the
+    totals moving instead of freezing them until it's done.
 
     Also posts `("root", root)` once, immediately, for a directory target
     (never for a single-file target, which returns before there's
@@ -191,13 +204,8 @@ def scan(path, progress_q, cancel_event, workers=None):
     every *directory* Node's size/alloc_size/file_count stays at its
     zeroed default until _rollup() below runs once, at the very end -- a
     reader must never trust those fields as meaningful before "done" is
-    posted. Also posts `("progress_bytes", total)` alongside every
-    existing `("progress", count)` message, a running total of bytes
-    seen in already-listed directories (post hard-link-dedup, so it
-    tracks towards the same final number `_rollup()` will produce) --
-    cheap, piggybacking on the same already-held counter_lock, unlike a
-    live per-directory size which would need repeatedly re-summing the
-    whole tree.
+    posted. The walk snapshots' byte total is post-hard-link-dedup, so it
+    tracks towards the same number `_rollup()` will produce.
     """
     path = os.path.abspath(path)
     name = path if path.endswith(os.sep) else os.path.basename(path) or path
@@ -215,133 +223,163 @@ def scan(path, progress_q, cancel_event, workers=None):
             root.file_count = 1
         except OSError:
             root.error = True
-        progress_q.put(("progress", root.file_count))
         return root
 
     progress_q.put(("root", root))
 
+    n = workers or _worker_count()
+    tracker = WalkTracker(n)
     work = queue.Queue()
-    work.put(root)
-
-    scanned = [0]
-    scanned_bytes = [0]
-    counter_lock = threading.Lock()
+    work.put((root, None))
 
     # Hard links share one (device, file-index) pair; count their bytes once
     # so a file linked into several folders doesn't inflate the total.
     seen_inodes = set()
     inode_lock = threading.Lock()
 
-    def _scan_one(node):
-        """List a single directory, attach children, queue sub-dirs."""
+    def _publish(worker, slot, files, nbytes, entries, subdirs, finished):
+        """Add counts to the tracker, then queue the subdirectories found
+        since the last call -- in that order (see WalkTracker)."""
+        slots = tracker.record(
+            worker, slot, files, nbytes, entries, [d.name for d in subdirs], finished
+        )
+        for child, child_slot in zip(subdirs, slots):
+            work.put((child, child_slot))
+
+    def _scan_one(worker, node, slot):
+        """List a single directory, attach children, queue sub-dirs.
+
+        Iterates the listing as it arrives rather than list()-ing it first:
+        enumerating C:\\Windows\\WinSxS\\Manifests alone takes ~8 s, and
+        counting as entries arrive is what keeps a big folder's progress
+        moving. An error part-way through keeps the entries read so far
+        and marks the directory incomplete (node.error), like one that
+        couldn't be opened at all."""
         if cancel_event.is_set():
             return
-        try:
-            entries = list(os.scandir(node.path))
-        except OSError:
-            node.error = True
-            return
-
+        tracker.begin(worker, slot, node.path)
+        flush_every = FLUSH_EVERY_ENTRIES
         local_files = 0
         local_bytes = 0
-        for entry in entries:
-            if cancel_event.is_set():
-                return
-            try:
-                if _IS_WINDOWS:
-                    # entry.stat() on Windows never populates real
-                    # st_ino/st_dev/st_nlink (always 0/0/1) -- it's built
-                    # from the cheap WIN32_FIND_DATA the directory listing
-                    # itself already returned, which carries no file-index
-                    # or link-count info at all. A real os.stat() call is
-                    # the only way to get accurate hard-link identity --
-                    # without it, hard-link dedup below silently never
-                    # triggers on Windows (every ino comes back 0).
-                    st_info = os.stat(entry.path, follow_symlinks=False)
-                else:
-                    st_info = entry.stat(follow_symlinks=False)
-            except OSError:
-                st_info = None
+        entries_read = 0
+        subdirs = []
+        try:
+            with os.scandir(node.path) as listing:
+                for entry in listing:
+                    if cancel_event.is_set():
+                        return
+                    try:
+                        if _IS_WINDOWS:
+                            # entry.stat() on Windows never populates real
+                            # st_ino/st_dev/st_nlink (always 0/0/1) -- it's
+                            # built from the cheap WIN32_FIND_DATA the
+                            # directory listing itself already returned,
+                            # which carries no file-index or link-count info
+                            # at all. A real os.stat() call is the only way
+                            # to get accurate hard-link identity -- without
+                            # it, hard-link dedup below silently never
+                            # triggers on Windows (every ino comes back 0).
+                            st_info = os.stat(entry.path, follow_symlinks=False)
+                        else:
+                            st_info = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        st_info = None
 
-            # Reparse points (symlinks, junctions, mount points) never get
-            # traversed: their target may already be scanned elsewhere (or
-            # loop back into this tree), which would double-count size or
-            # recurse forever. They're recorded as a leaf instead.
-            attrs = getattr(st_info, "st_file_attributes", 0) if st_info is not None else 0
-            is_reparse = bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-            is_placeholder = is_cloud_placeholder_attrs(attrs)
-            try:
-                is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse
-            except OSError:
-                is_dir = False
+                    # Reparse points (symlinks, junctions, mount points)
+                    # never get traversed: their target may already be
+                    # scanned elsewhere (or loop back into this tree), which
+                    # would double-count size or recurse forever. They're
+                    # recorded as a leaf instead.
+                    attrs = getattr(st_info, "st_file_attributes", 0) if st_info is not None else 0
+                    is_reparse = bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+                    is_placeholder = is_cloud_placeholder_attrs(attrs)
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse
+                    except OSError:
+                        is_dir = False
 
-            child = Node(entry.path, entry.name, is_dir)
-            # A cloud placeholder file can also carry the reparse-point bit
-            # (OneDrive Files On-Demand uses IO_REPARSE_TAG_CLOUD) — treat it
-            # as a placeholder, not a symlink/junction, so it renders and
-            # sorts like the real file it represents rather than a link.
-            child.is_link = is_reparse and not is_placeholder
-            child.is_cloud_placeholder = is_placeholder
-            if st_info is not None:
-                child.mtime = st_info.st_mtime
-                child.atime = st_info.st_atime
-            node.children.append(child)  # only this worker touches node.children
+                    child = Node(entry.path, entry.name, is_dir)
+                    # A cloud placeholder file can also carry the
+                    # reparse-point bit (OneDrive Files On-Demand uses
+                    # IO_REPARSE_TAG_CLOUD) — treat it as a placeholder, not
+                    # a symlink/junction, so it renders and sorts like the
+                    # real file it represents rather than a link.
+                    child.is_link = is_reparse and not is_placeholder
+                    child.is_cloud_placeholder = is_placeholder
+                    if st_info is not None:
+                        child.mtime = st_info.st_mtime
+                        child.atime = st_info.st_atime
+                    node.children.append(child)  # only this worker touches node.children
 
-            if is_dir:
-                work.put(child)  # discovered later, sized in rollup
-            else:
-                if st_info is None:
-                    child.error = True
-                else:
-                    size = st_info.st_size
-                    alloc_size = _measure_alloc_size(entry.path, st_info)
-                    ino = getattr(st_info, "st_ino", 0)
-                    nlink = getattr(st_info, "st_nlink", 1)
-                    if ino and nlink > 1:
-                        key = (getattr(st_info, "st_dev", 0), ino)
-                        with inode_lock:
-                            if key in seen_inodes:
-                                child.hardlink_dup = True
-                                size = 0
-                                alloc_size = 0
-                            else:
-                                seen_inodes.add(key)
-                    child.size = size
-                    child.alloc_size = alloc_size
-                child.file_count = 1
-                local_files += 1
-                local_bytes += child.size
+                    if is_dir:
+                        subdirs.append(child)  # queued by _publish, sized in rollup
+                    else:
+                        if st_info is None:
+                            child.error = True
+                        else:
+                            size = st_info.st_size
+                            alloc_size = _measure_alloc_size(entry.path, st_info)
+                            ino = getattr(st_info, "st_ino", 0)
+                            nlink = getattr(st_info, "st_nlink", 1)
+                            if ino and nlink > 1:
+                                key = (getattr(st_info, "st_dev", 0), ino)
+                                with inode_lock:
+                                    if key in seen_inodes:
+                                        child.hardlink_dup = True
+                                        size = 0
+                                        alloc_size = 0
+                                    else:
+                                        seen_inodes.add(key)
+                            child.size = size
+                            child.alloc_size = alloc_size
+                        child.file_count = 1
+                        local_files += 1
+                        local_bytes += child.size
 
-        if local_files:
-            with counter_lock:
-                scanned[0] += local_files
-                scanned_bytes[0] += local_bytes
-                count = scanned[0]
-                total_bytes = scanned_bytes[0]
-            progress_q.put(("progress", count))
-            progress_q.put(("progress_bytes", total_bytes))
+                    entries_read += 1
+                    if entries_read >= flush_every:
+                        _publish(
+                            worker, slot, local_files, local_bytes, entries_read, subdirs, False
+                        )
+                        local_files = local_bytes = entries_read = 0
+                        subdirs = []
+        except OSError:
+            node.error = True
+        _publish(worker, slot, local_files, local_bytes, entries_read, subdirs, True)
 
-    def _worker():
+    def _worker(worker):
         while True:
             try:
-                node = work.get()
+                node, slot = work.get()
             except Exception:
                 logger.debug("Scan worker queue.get() failed, exiting", exc_info=True)
                 return
             try:
-                _scan_one(node)
+                _scan_one(worker, node, slot)
             finally:
                 work.task_done()
 
-    n = workers or _worker_count()
-    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(n)]
+    walk_done = threading.Event()
+
+    def _reporter():
+        while not walk_done.wait(REPORT_INTERVAL_SECONDS):
+            progress_q.put(("walk", tracker.snapshot()))
+
+    reporter = threading.Thread(target=_reporter, daemon=True)
+    reporter.start()
+    threads = [threading.Thread(target=_worker, args=(i,), daemon=True) for i in range(n)]
     for t in threads:
         t.start()
-    work.join()  # block until every queued directory has been processed
+    try:
+        work.join()  # block until every queued directory has been processed
+    finally:
+        walk_done.set()
+        reporter.join()
+    progress_q.put(("walk", tracker.snapshot()))
 
     # Roll sizes/counts up the tree (iterative post-order; deep trees safe).
+    progress_q.put(("phase", Phase(PHASE_ADDING_UP)))
     _rollup(root)
-    progress_q.put(("progress", scanned[0]))
     return root
 
 
@@ -354,10 +392,11 @@ def find_inaccessible_paths(root):
     file whose metadata couldn't be read.
 
     This is the only way to discover those paths after a scan: a directory
-    node with error=True has no children at all (scandir failed before any
-    were even discovered, see _scan_one above), so its entire subtree is
-    silently absent from the tree -- not sized as 0 by mistake, genuinely
-    never counted. Surfacing the *paths* lets a user recognize a familiar
+    node with error=True has no children at all when it couldn't be opened
+    (or only the entries read before a mid-listing failure, see _scan_one
+    above), so the rest of its subtree is silently absent from the tree --
+    not sized as 0 by mistake, genuinely never counted. Surfacing the
+    *paths* lets a user recognize a familiar
     culprit (System Volume Information, a backup tool's own storage) and
     decide what to do about it themselves; there's no reliable way to
     estimate how large an unreadable directory actually is without being

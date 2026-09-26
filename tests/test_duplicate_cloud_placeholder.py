@@ -89,7 +89,7 @@ def test_two_concurrent_scans_do_not_cross_contaminate_stats(tmp_path):
         "files_skipped": 42,
         "bytes_skipped": 12345,
         "partial_hashed": 999,
-        "full_hashed": 999,
+        "middle_hashed": 999,
     }
     before = dict(app.dup_stats)
 

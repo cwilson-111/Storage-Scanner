@@ -2,8 +2,12 @@
   "files": 20000,
   "python": "3.13",
   "metrics": {
-    "tree_bytes_per_file": 394.0,
-    "history_bytes_per_scan": 40960,
+    "tree_bytes_per_file": 393.9,
+    "history_bytes_per_scan": 10103,
+    "history_daily_scans_kept": 145,
+    "history_daily_scans_db_bytes": 1335296,
+    "history_20k_save_steps_per_row": 61.0,
+    "history_20k_growth_steps_per_row": 21.8,
     "turbo_cache_bytes_per_record": 128.1,
     "turbo_small_subtree_records_loaded": 51
   }
