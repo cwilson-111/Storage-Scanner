@@ -337,7 +337,7 @@ certificate.**
 - Size: S. Verify: a PR shows the test job.
 
 **P1-12. Benchmarks write into the real app log, and test data sits in the
-real history.**
+real history — ✅ done (2026-09-26)**
 - Why: the `benchmarks/scale.py` subprocesses redirect their databases but
   not the log, so this machine's log holds hundreds of "saved full scan of
   volume 379422" lines (2026-09-24 to 26), plus older lines for volumes
@@ -355,6 +355,10 @@ real history.**
   History so existing junk can go.
 - Size: S. Verify: after a test run the real log and database mtimes are
   unchanged.
+- Done: `conftest.py` sandboxes those variables and refuses a real DB or log
+  path; `scale.py` children and `scan.py` log to a temp folder.
+- Verified: real log and DB mtimes unchanged by pytest + `scale.py --check`.
+- Not done: "Remove this scan" in Growth History.
 
 **P1-13. Re-check files before deleting from lists that can be stale.**
 - Why: `check_stale` (`audit.py:23-61`) compares size only and never checks

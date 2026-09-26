@@ -202,24 +202,20 @@ def _run_one(name, n_files):
     print(json.dumps(metrics))
 
 
-# Global state set by main() before any subprocess.run calls
-_BENCH_APP_DATA_DIR = None
-_BENCH_LOG_DIR = None
+def sandbox_env(sandbox):
+    """The environment for a scenario subprocess, with its app-data folder
+    (history.APP_DATA_DIR, where the Turbo and cleanup caches live too) and
+    its log inside `sandbox`, never the real ones. The same variables as
+    smoke_test_build.py."""
+    env = dict(os.environ)
+    for name in ("LOCALAPPDATA", "XDG_DATA_HOME", "HOME"):
+        env[name] = os.path.join(sandbox, "appdata")
+    env["STORAGE_SCANNER_LOG_DIR"] = os.path.join(sandbox, "logs")
+    return env
 
-def run_scenario(name, n_files):
+
+def run_scenario(name, n_files, env):
     """Run one scenario in a fresh interpreter; returns its metrics."""
-    # Build the environment with redirected app data and log dirs
-    env = os.environ.copy()
-    if _BENCH_APP_DATA_DIR:
-        env["LOCALAPPDATA"] = _BENCH_APP_DATA_DIR
-        env["APPDATA"] = _BENCH_APP_DATA_DIR
-        env["XDG_DATA_HOME"] = _BENCH_APP_DATA_DIR
-        env["XDG_STATE_HOME"] = _BENCH_APP_DATA_DIR
-        env["HOME"] = _BENCH_APP_DATA_DIR
-        env["USERPROFILE"] = _BENCH_APP_DATA_DIR
-    if _BENCH_LOG_DIR:
-        env["STORAGE_SCANNER_LOG_DIR"] = _BENCH_LOG_DIR
-
     result = subprocess.run(
         [sys.executable, os.path.abspath(__file__), "--one", name, "--files", str(n_files)],
         capture_output=True,
@@ -280,11 +276,6 @@ def main(argv=None):
         _run_one(args.one, args.files)
         return 0
 
-    # Set up isolated directories for benchmarks before running scenarios
-    global _BENCH_APP_DATA_DIR, _BENCH_LOG_DIR
-    _BENCH_APP_DATA_DIR = tempfile.mkdtemp(prefix="storage-scanner-bench-appdata-")
-    _BENCH_LOG_DIR = tempfile.mkdtemp(prefix="storage-scanner-bench-logs-")
-
     baseline_doc = None
     if os.path.exists(BASELINE_PATH):
         with open(BASELINE_PATH, encoding="utf-8") as f:
@@ -298,14 +289,16 @@ def main(argv=None):
 
     print(f"Synthetic volume: {n_files:,} files, {len(layout(n_files)) - 1:,} folders")
     metrics = {}
-    try:
-        for name in IN_MEMORY_SCENARIOS:
-            metrics.update(run_scenario(name, n_files))
-        if args.disk_files:
-            metrics.update(run_scenario("compatible_scan", args.disk_files))
-    except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 2
+    with tempfile.TemporaryDirectory(prefix="storage-scanner-bench-") as sandbox:
+        env = sandbox_env(sandbox)
+        try:
+            for name in IN_MEMORY_SCENARIOS:
+                metrics.update(run_scenario(name, n_files, env))
+            if args.disk_files:
+                metrics.update(run_scenario("compatible_scan", args.disk_files, env))
+        except RuntimeError as exc:
+            print(exc, file=sys.stderr)
+            return 2
 
     baseline = (baseline_doc or {}).get("metrics", {})
     same_size = baseline_doc is not None and baseline_doc.get("files") == n_files
