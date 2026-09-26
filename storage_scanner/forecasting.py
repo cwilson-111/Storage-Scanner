@@ -170,27 +170,13 @@ def forecast_days_until_full(history, drive_capacity_bytes, now=None):
 
 
 def format_forecast_range(forecast):
-    """Format the days range from a Forecast namedtuple for display.
-
-    Handles the case where days_optimistic is None (when the slow slope
-    is <= 0), showing an open-ended range like "at least N days".
-
-    Returns a string like "~123–456 days" or "at least 123 days", or None
-    if the forecast status is not "ok" or no estimate is available.
-    """
-    if forecast.status != "ok" or forecast.days_estimate is None:
-        return None
-
-    spread = forecast.days_pessimistic
-
-    # If no pessimistic bound or it equals optimistic, show a point estimate
-    if spread is None or forecast.days_optimistic == spread:
+    """The days-until-full range of an "ok" Forecast with days left, as
+    text: fewest days first ("~80–120 days"). Noisy history can leave the
+    slow end of the slope band not growing at all, and so no upper bound
+    (days_optimistic None): that reads "at least N days"."""
+    low, high = forecast.days_pessimistic, forecast.days_optimistic
+    if high is None:
+        return f"at least {low:,} days"
+    if low == high:
         return f"~{forecast.days_estimate:,} days"
-
-    # If optimistic is None, show an open-ended range (at least the pessimistic)
-    if forecast.days_optimistic is None:
-        return f"at least {spread:,} days"
-
-    # Normal case: both bounds exist
-    lo, hi = sorted([forecast.days_optimistic, spread])
-    return f"~{lo:,}–{hi:,} days"
+    return f"~{low:,}–{high:,} days"

@@ -237,7 +237,8 @@ checklist.**
   a compressed folder and a junction root. Record the results here.
 - Size: M. Verify: the results section exists and matches.
 
-**P1-4. Growth History opens as an empty window for noisy histories.**
+**P1-4. Growth History opens as an empty window for noisy histories — ✅
+done (2026-09-26)**
 - Why: `forecasting.py:158` returns `days_optimistic=None` when the slow
   slope isn't positive, while `days_pessimistic` is set. Then
   `ui/history_window.py:130` sorts `[None, int]` and raises TypeError after
@@ -248,6 +249,11 @@ checklist.**
 - Do: show an open-ended range ("at least N days"), build the window after
   computing, and see P2-6.
 - Size: S. Verify: a test with daily sizes of 100, 80, 120, 85 and 105 GB.
+- Done: "at least N days" when there's no upper bound; the window is built
+  only after the forecast and anomalies are computed.
+- Verified: the 100/80/120/85/105 GB test goes through `_format_forecast`
+  (main's raises TypeError on it).
+- Not done: P2-6's error dialog.
 
 **P1-5. The forecast says the drive is already full when it isn't.**
 - Why: `forecasting.py:131` compares the scanned path's logical total (the
