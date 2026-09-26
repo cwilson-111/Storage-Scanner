@@ -288,6 +288,27 @@ def is_sampled_duplicate(size):
     return size > 3 * DUPLICATE_HASH_CHUNK_BYTES
 
 
+def get_sampled_duplicates_from_groups(target_nodes, duplicate_groups):
+    """Identify which nodes in target_nodes come from sampled duplicate groups.
+
+    Returns a tuple: (sampled_count, sampled_nodes_set)
+    where sampled_count is the number of target_nodes that are in groups
+    larger than 3 * DUPLICATE_HASH_CHUNK_BYTES (meaning only first/middle/last
+    1 MB was compared, not the full content).
+    """
+    sampled_set = set()
+    target_set = set(target_nodes)
+
+    for size, _digest, nodes in duplicate_groups:
+        if is_sampled_duplicate(size):
+            # This group was only sampled, so any target nodes in it are sampled
+            for node in nodes:
+                if node in target_set:
+                    sampled_set.add(node)
+
+    return len(sampled_set), sampled_set
+
+
 def build_duplicate_recommendations(duplicate_groups):
     """Turn `_find_duplicate_files()`'s output — [(size, digest, nodes), ...]
     — into Recommendations: keep one file per group, flag the rest.
