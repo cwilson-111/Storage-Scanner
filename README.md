@@ -98,17 +98,21 @@ packages were bundled.
   points are recorded but never traversed (no double-counting, no infinite
   loops); hard links are deduplicated so a file linked into multiple folders
   only counts once.
-- **Live progress, per folder** — while a scan runs, a panel shows an
-  overall progress bar, live counts (files, folders, size, files/s,
-  elapsed time), the folder being read right now (and how long it's taken,
-  once it's slow), and a bar for every top-level folder: queued, scanning
-  with its size and file count so far, or done. The bars measure against
-  the last scan of the same folder, or a drive's used space when you scan
-  a whole drive for the first time; with neither, the overall bar animates
-  and the counts carry the progress. Even a single huge folder keeps the
-  counts moving, and Turbo Scan shows each of its steps (MFT records read
-  out of the total, journal changes applied, saving its cache) instead of
-  going quiet.
+- **The tree fills in while it scans** — like TreeSize, every folder row
+  shows its size so far, on-disk size, share of its parent (bar and heat
+  colour) and file count as it's read, and whether it's still queued (◌,
+  greyed), being read (⏳) or done; rows re-sort by size as they grow, and a
+  folder you open mid-scan fills in its own subfolders the same way.
+  Re-sorting keeps your selection, open folders and place in the list, and
+  when the scan finishes the tree keeps them too. One line under the tree
+  has the overall bar, live counts (files, folders, size, files/s, elapsed
+  time), what to expect (the file count of the last scan of the same
+  folder, or a drive's used space the first time you scan a whole drive)
+  and the folder being read right now (with how long it's taken, once it's
+  slow). Even a single huge folder keeps the counts moving, and Turbo Scan
+  shows each of its steps on the scanned folder's row (MFT records read out
+  of the total, journal changes applied, saving its cache) until its tree is
+  built.
 - **Logical vs. actual disk usage** — tracks allocated size separately from
   logical size, so sparse files, NTFS-compressed files, and OneDrive-style
   online-only placeholders don't inflate what's actually on disk.

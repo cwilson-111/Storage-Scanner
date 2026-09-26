@@ -169,6 +169,8 @@ class CartMixin:
             self._refresh_cart_indicator()
 
         def execute_deletions():
+            if self._refuse_delete_during_scan(parent=win):
+                return
             effective = self.cart.resolve_effective_items()
             if not effective:
                 messagebox.showinfo("Storage Scanner", "Cart is empty.", parent=win)
