@@ -1375,3 +1375,105 @@ skips), and Python 3.12 (CI's version; everything here ran on 3.13).
 
 Next in the plan: E0's last item, code signing, is still blocked on a
 certificate, so E1 (the agent service) is next.
+
+## The tree fills in while it scans — ✅ done (2026-09-26)
+
+Asked for: the live numbers in the main tree, like TreeSize, instead of a
+per-folder table under it. Before this, the tree showed the target with
+"…(loading)" and every folder greyed with "…" until the scan ended, while a
+separate "Top-level folders: N of M done" table carried the live numbers.
+
+**What changed:**
+
+- `storage_scanner/scan_progress.py`: `WalkTracker` keeps running totals for
+  *every* folder, not 200 top-level slots. `record()` adds a directory's
+  counts (size, on disk, files) to its own `Node` and to each folder above it
+  under the lock it already took once per directory, and keeps per folder the
+  number of unread directories in its subtree (a dict that only holds folders
+  still in progress), so any folder is queued → scanning → done. The scan
+  posts `("live_tree", tracker)` once; the UI reads the rows it shows through
+  `tracker.folders()`. `_rollup()` then recomputes every total from the file
+  rows, so the finished tree never depends on the running totals (a test
+  checks they end identical).
+- `storage_scanner/live_tree_model.py` (no Tk): what a row shows —
+  shared by finished rows and live ones (queued ◌ greyed with no numbers,
+  scanning ⏳ with totals so far, done identical to the finished row) — and
+  a stable re-sort. `storage_scanner/ui/live_tree.py` (`LiveTreeMixin`) puts
+  it on screen on the existing 100 ms poll: new rows are appended for at most
+  30 ms a tick, only rows in the viewport are recomputed and only changed ones
+  redrawn (the viewport is walked from one Tk call, since under a running scan
+  every Tk call waits for the GIL), open levels re-sort with
+  `Treeview.set_children` (keeps selection and open folders) when rows arrive
+  and every 0.5 s, never while a mouse button is held, and the focused row
+  stays on its line. Deeper levels come for free from the same totals: a
+  folder opened mid-scan fills in its subfolders' live sizes too.
+- Turbo Scan and the elevated helpers have no tree until they finish, so the
+  target's row names the step ("⏳ C:\ — Reading the MFT — 45%"); a Turbo
+  fallback swaps in the live tree. Cancel freezes the rows. Finish rebuilds
+  the tree exactly as before, then reopens the folders opened during the scan,
+  reselects the focused row and restores the top row.
+- The per-folder table is gone. The progress line under the tree is two
+  lines: headline, bar, percentage and counters; then the estimate and a
+  shortened "Now: …\folder — 43 s, 34,000 items".
+- Deleting (main tree or cart) waits until the scan ends: a folder deleted
+  mid-read left its totals undefined. `_refresh_row` (after a delete) had
+  been writing three values into four columns; it now shares the row code.
+
+**Found along the way:**
+
+- *The "Expecting about 1,142,488 files, 2.1 TB" estimate for `C:\`.* It was
+  the last scan's total from history (scan 26: 2,254,686,413,442 bytes,
+  reproduced from a copy of the real database) — the sum of *logical* file
+  sizes, not a double count: hard links are counted once and reparse points
+  aren't followed. It exceeds the whole drive (2,047,346,946,048 bytes, 1.73
+  TB used) because of sparse files; one Google Play Games emulator image,
+  `userdata.img`, is 512 GiB logical and 3.3 GiB on disk. The estimate now
+  quotes only the file count it measures against; the drive-used fallback
+  compares bytes on disk with used space (it compared logical bytes, so
+  sparse files filled the bar early).
+- *On Disk was wrong for every file over 4 GiB.* `GetCompressedFileSizeW`'s
+  high DWORD was dropped: a 9,048,948,736-byte game archive read as
+  459,014,144 bytes on disk. `C:\Program Files` went from 99.9 GB to 130.0 GB
+  on disk (logical 129.9 GB, unchanged). Only files of 4 GiB or more ask for
+  the high part, so the fix costs nothing on the rest.
+- *Every scan leaked its worker threads,* each blocked on the queue forever.
+  With the tracker holding the tree, that would have kept every scan's tree
+  alive (measured: 135k → 271k → 406k folders after three `C:\Windows`
+  scans); workers now exit and are joined, and the count stays at 135k.
+
+**Measured** (same machine, warm cache, the real window driven by a script
+that times a 50 ms heartbeat and counts queue messages; "before" is
+234963e):
+
+| | Before | After |
+|---|---|---|
+| `C:\Program Files` (49,343 files, 4 runs): messages, stalls > 250 ms | 22–24, 0 | 21–23, 0 |
+| `C:\Windows` (175,888 files, 3 runs): messages, stalls > 250 ms | 160–191, 0 (max 0.21 s) | 155–167, 1–2 (0.25–0.33 s) |
+| `C:\Windows\WinSxS` (23,525 folders in one level, 2 runs): worst stall | 45.9 s, 24.9 s | 0.87 s, 0.82 s |
+| `C:\Windows\WinSxS\Manifests` (35,822 files, 2 runs): worst stall | 49.7 s, 81.0 s | 0.88 s, 0.94 s |
+
+The old live preview re-listed a level's names and asked Tk for its child
+count for every row it added, O(n²) on a big level. The remaining stalls:
+the finish rebuild of a 23,525- or 35,822-row level (0.6–0.8 s, the same code
+as before); on `C:\Windows`, the finish also reopening the 5,007-row
+`System32` the script had expanded, and one mid-scan stall that coincides
+with a 0.2–0.36 s generation-2 garbage collection (the old build pays the
+same collections, just with less tick work on top). Engine only, interleaved
+fresh processes on `C:\Program Files`: 1.75 s median before, 1.77 s with the
+tracker change alone.
+
+Verified: `tests/test_scan_progress.py` (states at any depth, a subfolder
+found mid-listing can't finish its parents, part-way totals reaching every
+ancestor, running totals ending equal to the roll-up, cancel, no leftover
+threads), `tests/test_live_tree_model.py` (queued/scanning/done rows, a
+done row identical to the finished one, a file's share of a growing folder,
+error/cloud rows, stable re-sort), `tests/test_scan_progress_model.py`
+(estimate choice, the C:\ estimate case, on-disk bar, the root row's step),
+the >4 GiB on-disk test; ruff, black, mypy, full pytest with the coverage
+floor, `benchmarks/scale.py --check`. The real window on `C:\Program Files`,
+`C:\Windows` (with `System32` expanded and selected mid-scan), a cancel
+mid-scan, `WinSxS` and `Manifests`; Turbo Scan, a Turbo fallback and the
+elevated helper were driven in the real window with their real step labels
+from a simulated engine. **Not verified:** a real Turbo Scan (needs admin
+rights and a UAC prompt) and the macOS/Linux elevated helpers on their own
+platforms.

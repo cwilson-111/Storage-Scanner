@@ -82,11 +82,14 @@ def test_measure_alloc_size_falls_back_to_logical_size_without_st_blocks():
 
 
 class _FakeKernel32:
-    def __init__(self, low, last_error=0):
+    def __init__(self, low, last_error=0, high=0):
         self.low = low
         self.last_error = last_error
+        self.high = high
 
     def GetCompressedFileSizeW(self, path, high_out):
+        if high_out is not None:
+            ctypes.cast(high_out, ctypes.POINTER(ctypes.c_ulong)).contents.value = self.high
         return self.low
 
 
@@ -122,6 +125,17 @@ def test_windows_alloc_size_already_cluster_aligned_is_unchanged(monkeypatch):
     monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: 4096)
 
     assert _windows_alloc_size(r"C:\file.bin", fallback=0) == 8192
+
+
+def test_windows_alloc_size_keeps_the_upper_32_bits_of_a_file_over_4_gib(monkeypatch):
+    # A real 9,048,948,736-byte game archive (Black Ops III's base.xpak):
+    # reading only the low DWORD billed it 459,014,144 bytes on disk.
+    fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=459_014_144, high=2))
+    monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
+    monkeypatch.setattr(ctypes, "GetLastError", lambda: 0, raising=False)
+    monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: 4096)
+
+    assert _windows_alloc_size(r"C:\base.xpak", fallback=9_048_948_736) == 9_048_948_736
 
 
 def test_windows_alloc_size_falls_back_on_invalid_file_size(monkeypatch):
