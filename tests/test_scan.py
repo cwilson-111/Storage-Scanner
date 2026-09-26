@@ -160,27 +160,14 @@ def test_symlinked_directory_is_not_traversed(tmp_path):
     assert root.size == children["real"].size + link_node.size
 
 
-def test_scanning_a_directory_posts_a_live_root_reference_before_done(tmp_path):
-    # storage_scanner.ui.main_window's live-tree preview (see scan()'s own
-    # docstring) needs a reference to the exact same Node its worker
-    # threads go on to mutate, posted before any scanning work happens --
-    # not a copy, and not just at the very end alongside the final result.
-    (tmp_path / "a.bin").write_bytes(b"x" * 100)
-    root, messages = _run_scan_with_messages(tmp_path)
-
-    root_messages = [payload for kind, payload in messages if kind == "root"]
-    assert len(root_messages) == 1
-    assert root_messages[0] is root
-
-
-def test_scanning_a_single_file_never_posts_a_live_root_reference(tmp_path):
+def test_scanning_a_single_file_never_posts_a_live_tree(tmp_path):
     # A single-file target returns instantly -- there's no in-progress
     # tree worth watching, so scan() shouldn't claim there is one.
     target = tmp_path / "solo.bin"
     target.write_bytes(b"x" * 100)
     _root, messages = _run_scan_with_messages(target)
 
-    assert not any(kind == "root" for kind, _payload in messages)
+    assert not any(kind == "live_tree" for kind, _payload in messages)
 
 
 # -- find_inaccessible_paths ------------------------------------------------ #

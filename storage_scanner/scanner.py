@@ -116,7 +116,14 @@ def _windows_alloc_size(path, fallback):
     than a crashed scan.
     """
     try:
-        low = ctypes.windll.kernel32.GetCompressedFileSizeW(path, None)
+        # The on-disk size only needs its upper 32 bits for a file of 4 GiB
+        # or more: it's the logical size for an ordinary file and less for
+        # a compressed or sparse one. Asking for them costs an out-parameter
+        # per call, so smaller files skip it.
+        high = ctypes.c_ulong(0) if fallback >> 32 else None
+        low = ctypes.windll.kernel32.GetCompressedFileSizeW(
+            path, None if high is None else ctypes.byref(high)
+        )
         # ctypes defaults a windll call's return type to signed c_int;
         # GetCompressedFileSizeW's real return is an unsigned DWORD, so a
         # low-DWORD value >= 0x80000000 (a compressed size with that bit
@@ -132,9 +139,9 @@ def _windows_alloc_size(path, fallback):
             low &= 0xFFFFFFFF
         if low == _INVALID_FILE_SIZE and ctypes.GetLastError() != 0:
             return fallback
-        # High 32 bits aren't retrievable without a second out-param this
-        # call doesn't use; files large enough for that to matter are rare
-        # enough here that the logical size fallback is an acceptable trade.
+        # Without the upper 32 bits every file over 4 GiB was billed its
+        # size modulo 4 GiB: a 9.0 GB game archive read as 0.4 GB on disk.
+        size = low if high is None else (high.value << 32) | low
 
         # GetCompressedFileSizeW only returns something smaller than the
         # logical size for a genuinely compressed or sparse file -- for an
@@ -151,8 +158,8 @@ def _windows_alloc_size(path, fallback):
         # accepted imprecision, not worth a costlier check to eliminate.)
         cluster_size = _get_cluster_size(path)
         if cluster_size:
-            low = -(-low // cluster_size) * cluster_size
-        return low
+            size = -(-size // cluster_size) * cluster_size
+        return size
     except OSError:
         return fallback
 
@@ -220,19 +227,18 @@ def scan(path, progress_q, cancel_event, workers=None):
     entries while it's still being read, so one huge folder keeps the
     totals moving instead of freezing them until it's done.
 
-    Also posts `("root", root)` once, immediately, for a directory target
-    (never for a single-file target, which returns before there's
-    anything worth watching) -- a live reference to the same Node this
-    function's worker threads go on to mutate in place as they walk. A
-    caller (see storage_scanner.ui.main_window's live-tree preview) may
-    read from it concurrently while the scan is still running: appending
-    to node.dirs and node's file rows is safe to read mid-mutation under
-    the GIL (see models.Node.add_file for the row order that makes it so),
-    and every *directory* Node's size/alloc_size/file_count stays at its
-    zeroed default until _rollup() below runs once, at the very end -- a
-    reader must never trust those fields as meaningful before "done" is
-    posted. The walk snapshots' byte total is post-hard-link-dedup, so it
-    tracks towards the same number `_rollup()` will produce.
+    Also posts `("live_tree", tracker)` once, before reading anything,
+    for a directory target (never for a single-file target, which returns
+    before there's anything worth watching): the WalkTracker of the same
+    Node tree this function's worker threads go on to build in place. A
+    caller (see storage_scanner.ui.live_tree) may read the tree while the
+    scan is still running: appending to node.dirs and node's file rows is
+    safe to read mid-mutation under the GIL (see models.Node.add_file for
+    the row order that makes it so), and a *directory* Node's
+    size/alloc_size/file_count are its running totals so far -- read them
+    through tracker.folders(), which also says whether it's done. _rollup()
+    recomputes them from the file rows once the walk ends, so the returned
+    tree's numbers are exactly what they'd be without the live totals.
     """
     path = os.path.abspath(path)
     if not os.path.isdir(path):
@@ -240,30 +246,29 @@ def scan(path, progress_q, cancel_event, workers=None):
     name = path if path.endswith(os.sep) else os.path.basename(path) or path
     root = Node(path, name)
 
-    progress_q.put(("root", root))
-
     n = workers or _worker_count()
-    tracker = WalkTracker(n)
+    tracker = WalkTracker(root, n)
+    progress_q.put(("live_tree", tracker))
     work = queue.Queue()
-    work.put((root, None))
+    work.put((root, ()))
 
     # Hard links share one (device, file-index) pair; count their bytes once
     # so a file linked into several folders doesn't inflate the total.
     seen_inodes = set()
     inode_lock = threading.Lock()
 
-    def _publish(worker, slot, files, nbytes, entries, subdirs, finished):
+    def _publish(worker, node, chain, files, nbytes, nalloc, entries, subdirs, finished):
         """Add counts to the tracker, then queue the subdirectories found
         since the last call -- in that order (see WalkTracker)."""
-        slots = tracker.record(
-            worker, slot, files, nbytes, entries, [d.name for d in subdirs], finished
-        )
-        for child, child_slot in zip(subdirs, slots):
-            work.put((child, child_slot))
+        tracker.record(worker, node, chain, files, nbytes, nalloc, entries, subdirs, finished)
+        if subdirs:
+            child_chain = (*chain, node)
+            for child in subdirs:
+                work.put((child, child_chain))
 
-    def _scan_one(worker, node, slot):
+    def _scan_one(worker, node, chain):
         """List a single directory, attach its subfolders and file rows,
-        queue sub-dirs.
+        queue sub-dirs. `chain` is every folder above `node`, root first.
 
         Iterates the listing as it arrives rather than list()-ing it first:
         enumerating C:\\Windows\\WinSxS\\Manifests alone takes ~8 s, and
@@ -273,10 +278,11 @@ def scan(path, progress_q, cancel_event, workers=None):
         couldn't be opened at all."""
         if cancel_event.is_set():
             return
-        tracker.begin(worker, slot, node.path)
+        tracker.begin(worker, node)
         flush_every = FLUSH_EVERY_ENTRIES
         local_files = 0
         local_bytes = 0
+        local_alloc = 0
         entries_read = 0
         subdirs = []
         try:
@@ -357,28 +363,41 @@ def scan(path, progress_q, cancel_event, workers=None):
                                 flags,
                             )
                             local_bytes += size
+                            local_alloc += alloc_size
                         local_files += 1
 
                     entries_read += 1
                     if entries_read >= flush_every:
                         _publish(
-                            worker, slot, local_files, local_bytes, entries_read, subdirs, False
+                            worker,
+                            node,
+                            chain,
+                            local_files,
+                            local_bytes,
+                            local_alloc,
+                            entries_read,
+                            subdirs,
+                            False,
                         )
-                        local_files = local_bytes = entries_read = 0
+                        local_files = local_bytes = local_alloc = entries_read = 0
                         subdirs = []
         except OSError:
             node.error = True
-        _publish(worker, slot, local_files, local_bytes, entries_read, subdirs, True)
+        _publish(
+            worker, node, chain, local_files, local_bytes, local_alloc, entries_read, subdirs, True
+        )
 
     def _worker(worker):
         while True:
             try:
-                node, slot = work.get()
+                item = work.get()
             except Exception:
                 logger.debug("Scan worker queue.get() failed, exiting", exc_info=True)
                 return
+            if item is None:  # the walk is over
+                return
             try:
-                _scan_one(worker, node, slot)
+                _scan_one(worker, *item)
             finally:
                 work.task_done()
 
@@ -398,11 +417,19 @@ def scan(path, progress_q, cancel_event, workers=None):
     finally:
         walk_done.set()
         reporter.join()
+        # Let the workers go: a worker left waiting on the queue would keep
+        # its closures -- the tracker, and through it the whole tree -- alive
+        # for as long as the app runs, one more tree for every scan.
+        for _ in threads:
+            work.put(None)
+        for t in threads:
+            t.join()
     progress_q.put(("walk", tracker.snapshot()))
 
-    # Roll sizes/counts up the tree (iterative post-order; deep trees safe).
+    # Roll sizes/counts up the tree (iterative post-order; deep trees safe),
+    # replacing the walk's running totals with sums of the file rows.
     progress_q.put(("phase", Phase(PHASE_ADDING_UP)))
-    _rollup(root)
+    _rollup(root, own_sizes=False)
     return root
 
 
@@ -439,9 +466,12 @@ def find_inaccessible_paths(root):
     return errors
 
 
-def _rollup(root):
+def _rollup(root, own_sizes=True):
     """Sum file rows and subfolder totals into each directory, bottom-up,
-    on a freshly built tree (no removed rows yet).
+    on a freshly built tree (no removed rows yet). With `own_sizes` a
+    folder's own size fields are added to (the MFT engine sets them to its
+    directory record's size); without, they're replaced (scan() leaves the
+    walk's running totals there).
 
     A directory also inherits `error=True` from any child that couldn't be
     fully read (an unreadable subdirectory, or a file whose stat() failed)
@@ -469,9 +499,13 @@ def _rollup(root):
                 alloc_size += child.alloc_size
                 file_count += child.file_count
                 error = error or child.error
-            node.size += size
-            node.alloc_size += alloc_size
-            node.file_count += file_count
+            if own_sizes:
+                size += node.size
+                alloc_size += node.alloc_size
+                file_count += node.file_count
+            node.size = size
+            node.alloc_size = alloc_size
+            node.file_count = file_count
             if error:
                 node.error = True
         else:

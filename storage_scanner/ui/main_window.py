@@ -10,7 +10,6 @@ import os
 import queue
 import subprocess
 import threading
-import time
 from tkinter import (
     BOTH,
     BOTTOM,
@@ -44,7 +43,8 @@ from storage_scanner.file_ops import (
     run_elevated_scan_linux,
     run_elevated_scan_macos,
 )
-from storage_scanner.formatting import bar, human_size
+from storage_scanner.formatting import human_size
+from storage_scanner.live_tree_model import node_display, sort_key_function
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
@@ -61,6 +61,7 @@ from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
+from storage_scanner.ui.live_tree import PLACEHOLDER_TEXT
 
 # The scan-details strip's second row: what the scan found, as opposed to
 # how it ran. One row of everything outgrew the default window width.
@@ -287,6 +288,8 @@ class MainWindowMixin:
         # Lazy load children when a node is expanded.
         self.tree.bind("<<TreeviewOpen>>", self._on_open)
         self.tree.bind("<Double-1>", self._on_double_click)
+        self._live_reset()
+        self._live_bind(self.tree, vsb)
 
         # Right-click context menu.
         self.menu = Menu(self.root, tearoff=0)
@@ -690,22 +693,7 @@ class MainWindowMixin:
         if turbo_enabled is None:  # restarting elevated; this window is gone
             return
 
-        # Reset state.
-        self.cancel_event.clear()
-        self.tree.delete(*self.tree.get_children())
-        self.node_by_iid.clear()
-        self.root_node = None
-        self._live_root_node = None
-        self._live_root_iid = None
-        self._live_total_bytes = 0
-        self._live_expanded_iids = set()
-        self._last_live_refresh = 0.0
-        self.duplicates = None
-        self._duplicates_scan_root = None
-        self.cart.clear()
-        self._refresh_cart_indicator()
-        self._hide_scan_details()
-
+        self._begin_scan_view(target)
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
         self.tools_btn.config(state="disabled")
@@ -743,21 +731,7 @@ class MainWindowMixin:
             messagebox.showerror("Storage Scanner", "A scan is already running.")
             return
 
-        self.cancel_event.clear()
-        self.tree.delete(*self.tree.get_children())
-        self.node_by_iid.clear()
-        self.root_node = None
-        self._live_root_node = None
-        self._live_root_iid = None
-        self._live_total_bytes = 0
-        self._live_expanded_iids = set()
-        self._last_live_refresh = 0.0
-        self.duplicates = None
-        self._duplicates_scan_root = None
-        self.cart.clear()
-        self._refresh_cart_indicator()
-        self._hide_scan_details()
-
+        self._begin_scan_view(target)
         self.scan_btn.config(state="disabled")
         self.elevate_btn.config(state="disabled")
         self.tools_btn.config(state="disabled")
@@ -789,8 +763,8 @@ class MainWindowMixin:
         try:
             while True:
                 kind, payload = self.progress_q.get_nowait()
-                if kind == "root":
-                    self._start_live_tree(payload)
+                if kind == "live_tree":
+                    self._live_attach(payload)
                 elif kind == "done":
                     node, report = payload
                     self._finish_scan(node, report)
@@ -799,13 +773,10 @@ class MainWindowMixin:
                     self._finish_error(payload)
                     return
                 else:
-                    if kind == "walk":
-                        self._live_total_bytes = payload.bytes
                     self._scan_progress_message(kind, payload)
         except queue.Empty:
             pass
-        self._maybe_refresh_live_tree()
-        self._scan_progress_refresh()
+        self._live_tick(self._scan_progress_refresh())
         self.root.after(100, self._poll_progress)
 
     # -- History helper functions ------------------------------------------ #
@@ -821,13 +792,14 @@ class MainWindowMixin:
             self._refresh_tools_state()
             return
 
-        # Whatever the live-scan preview inserted (see _start_live_tree) is
-        # purely provisional -- discard it and rebuild from scratch here,
-        # from `node`'s own final, authoritative, rolled-up numbers, rather
-        # than try to reconcile provisional rows in place.
+        # The rows the live tree filled in (see ui/live_tree.py) are
+        # rebuilt here from `node`'s final, rolled-up numbers, rather than
+        # reconciled in place; then the folders opened during the scan are
+        # reopened and the focused row and scroll position put back.
+        view_state = self._live_view_state()
+        self._live_reset()
         self.tree.delete(*self.tree.get_children())
         self.node_by_iid.clear()
-        self._live_root_node = None
 
         self.root_node = node
         logger.debug(
@@ -841,6 +813,8 @@ class MainWindowMixin:
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
         self.tree.item(root_iid, open=True)
         self._populate_children(root_iid, node)
+        if view_state is not None:
+            self._restore_view_state(view_state)
         logger.debug(
             "_finish_scan: after populate, tree has %d top-level row(s), "
             "root row has %d child row(s)",
@@ -876,6 +850,7 @@ class MainWindowMixin:
 
     def _finish_error(self, msg):
         self._scan_progress_end(FAILED)
+        self._live_freeze()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
@@ -891,72 +866,6 @@ class MainWindowMixin:
         state = "normal" if self.root_node is not None else "disabled"
         for menu, index in self._scan_only_tools:
             menu.entryconfigure(index, state=state)
-
-    # -- Live scan preview (Compatible engine only) ------------------------- #
-    #
-    # storage_scanner.scanner.scan() builds its Node tree in place, in a
-    # background thread, as it walks -- node.dirs and each folder's file rows
-    # already grow live;
-    # the only thing missing was the UI ever looking at it before "done".
-    # Turbo Scan has no equivalent tree to preview (MFT records come back
-    # in arbitrary order, not directory-walk order, so nothing resembling
-    # a folder tree exists until the whole volume has been parsed) -- it
-    # simply never posts a "root" message, so none of this ever activates
-    # for a Turbo Scan. Everything inserted here is purely provisional:
-    # _finish_scan always discards it and rebuilds from the final,
-    # authoritative rolled-up tree, so a wrong/stale number here can never
-    # end up on screen once the scan completes.
-    _LIVE_REFRESH_INTERVAL_SECONDS = 0.5
-
-    def _start_live_tree(self, root_node):
-        """Handle a ("root", node) progress message: insert the scan
-        target's own row immediately, open, so newly-discovered top-level
-        children start appearing as soon as the first refresh tick finds
-        them."""
-        self._live_root_node = root_node
-        self._live_total_bytes = 0
-        self._live_expanded_iids = set()
-        self._live_root_iid = self._insert_node("", root_node, parent_size=1, live=True)
-        self.tree.item(self._live_root_iid, open=True)
-
-    def _maybe_refresh_live_tree(self):
-        if self._live_root_node is None:
-            return
-        now = time.monotonic()
-        if now - self._last_live_refresh < self._LIVE_REFRESH_INTERVAL_SECONDS:
-            return
-        self._last_live_refresh = now
-        self._refresh_live_tree()
-
-    def _refresh_live_tree(self):
-        """Update the running byte total shown on the root row, and pull
-        in any newly-discovered children under it and under every row the
-        user has manually expanded (self._live_expanded_iids) -- never
-        recurses into rows nobody has looked at, so cost stays bounded by
-        how much of the tree is actually on screen, not by how much of
-        the disk has been scanned so far."""
-        self.tree.set(self._live_root_iid, "size", human_size(self._live_total_bytes))
-        for parent_iid in (self._live_root_iid, *self._live_expanded_iids):
-            node = self.node_by_iid.get(parent_iid)
-            if node is not None:
-                self._sync_live_children(parent_iid, node)
-
-    def _sync_live_children(self, parent_iid, node):
-        existing_names = {
-            self.node_by_iid[iid].name
-            for iid in self.tree.get_children(parent_iid)
-            if iid in self.node_by_iid
-        }
-        # node's subfolders and file rows are still being appended to by a
-        # background worker thread -- safe to read mid-append under the GIL
-        # (each append is atomic, and models.Node.add_file fills the row
-        # count's column last; at worst this snapshot misses the very latest
-        # arrival, picked up on the next throttled tick instead).
-        for child in node.children:
-            if child.name in existing_names:
-                continue
-            index = len(self.tree.get_children(parent_iid))
-            self._insert_node(parent_iid, child, parent_size=1, index=index, live=True)
 
     def _show_turbo_fallback_banner(self, reason):
         """Dismissible banner explaining a scan silently used the
@@ -1132,6 +1041,7 @@ class MainWindowMixin:
         self.dup_cancel_event.set()
         self.status_var.set("Cancelling …")
         self._scan_progress_cancel_requested()
+        self._live_freeze()
 
     # -- Status-bar progress bar (duplicate scan; scans use ScanProgressMixin) #
     def _start_determinate_progress(self, maximum):
@@ -1159,101 +1069,46 @@ class MainWindowMixin:
             self._heat_tags.add(name)
         return name
 
-    def _insert_node(self, parent_iid, node, parent_size, index=0, live=False):
-        # `live=True` means `node` came from a scan still in progress: a
-        # directory's size/alloc_size/file_count are only meaningful after
-        # scanner._rollup() runs once, at the very end (see scan()'s own
-        # docstring) -- showing them, or a percent-of-parent computed from
-        # them, before then would just be a misleading, usually-wrong
-        # placeholder. A *file*'s own size is real and known immediately,
-        # so it's shown as-is; only the percent/heat-color columns (which
-        # need a trustworthy parent total) stay suppressed for every live
-        # row, file or directory alike.
-        fraction = 0 if live else ((node.size / parent_size) if parent_size else 0)
-        percent = "—" if live else f"{bar(fraction)} {fraction * 100:5.1f}%"
-        items = "" if live else (f"{node.file_count:,}" if node.is_dir else "")
-        if node.error:
-            tags = ["error"]
-        elif node.is_cloud_placeholder:
-            tags = ["cloud"]
-        elif node.is_link:
-            tags = ["link"]
-        else:
-            tags = [self._heat_tag(fraction)]  # foreground = space-hog heat
-            if node.is_dir:
-                tags.append("dir")  # bold, keeps heat color
-        tags.append("odd" if index % 2 else "even")
-
-        if node.error:
-            icon = "⚠"
-        elif node.is_cloud_placeholder:
-            icon = "☁"
-        elif node.is_link:
-            icon = "↪"
-        elif node.is_dir:
-            icon = "📁"
-        else:
-            icon = "📄"
-
-        if live and node.is_dir:
-            # Not sized yet -- this directory's own scan may not even have
-            # started (see the docstring note above).
-            size_text = alloc_text = "…"
-        else:
-            # A cloud placeholder's `size` is its full logical size (what
-            # it'll be once downloaded); `alloc_size` is what's actually
-            # using local disk right now — worth showing side by side
-            # rather than picking one.
-            size_text = human_size(node.size)
-            alloc_text = human_size(node.alloc_size)
-            if node.is_cloud_placeholder:
-                alloc_text += " (online-only)"
-
-        label = f"{icon} {node.name}" + (
-            "\\" if node.is_dir and not node.name.endswith("\\") else ""
-        )
+    def _insert_node(self, parent_iid, node, parent_size, index=0):
+        """A finished scan's row for `node` (see live_tree_model.row_display
+        for what each column shows), with a placeholder child so an
+        expandable folder gets its arrow."""
+        display = node_display(node, parent_size)
         iid = self.tree.insert(
             parent_iid,
             END,
-            text=label,
-            values=(size_text, alloc_text, percent, items),
-            tags=tuple(tags),
+            text=display.text,
+            values=display.values,
+            tags=self._row_tags(display, index),
         )
         self.node_by_iid[iid] = node
-
-        # Give expandable dirs a placeholder child so the [+] arrow appears.
         if node.has_children:
-            self.tree.insert(iid, END, text="…(loading)", tags=("placeholder",))
+            self.tree.insert(iid, END, text=PLACEHOLDER_TEXT, tags=("placeholder",))
         return iid
 
-    def _populate_children(self, parent_iid, node, live=False):
+    def _populate_children(self, parent_iid, node):
         # Remove placeholder if present.
         kids = self.tree.get_children(parent_iid)
-        if len(kids) == 1 and self.tree.item(kids[0], "text") == "…(loading)":
+        if len(kids) == 1 and self.tree.item(kids[0], "text") == PLACEHOLDER_TEXT:
             self.tree.delete(kids[0])
         elif kids:
             return  # already populated
 
-        ordered = sorted(node.children, key=self._node_sort_key, reverse=self._sort_reverse)
+        ordered = sorted(
+            node.children, key=sort_key_function(self._sort_key), reverse=self._sort_reverse
+        )
         for index, child in enumerate(ordered):
-            self._insert_node(parent_iid, child, parent_size=node.size or 1, index=index, live=live)
-
-    def _node_sort_key(self, node):
-        if self._sort_key == "name":
-            return node.name.lower()
-        if self._sort_key == "items":
-            return node.file_count
-        return node.size
+            self._insert_node(parent_iid, child, parent_size=node.size or 1, index=index)
 
     def _on_open(self, _event):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
         if not node or not node.is_dir:
             return
-        live = self._live_root_node is not None
-        self._populate_children(iid, node, live=live)
-        if live:
-            self._live_expanded_iids.add(iid)
+        if self._live_tracker is not None:  # the tree of a scan still on screen
+            self._live_open(iid, node)
+        else:
+            self._populate_children(iid, node)
 
     def _on_double_click(self, _event):
         iid = self.tree.focus()
@@ -1295,6 +1150,9 @@ class MainWindowMixin:
     def _resort_tree(self):
         """Re-order every already-populated level in place (preserves which
         nodes are expanded; lazy children sort on expand via _populate)."""
+        if self._live_tracker is not None:
+            self._live_resort()
+            return
 
         def walk(parent_iid):
             self._sort_level(parent_iid)
@@ -1309,9 +1167,8 @@ class MainWindowMixin:
         kids = [k for k in self.tree.get_children(parent_iid) if k in self.node_by_iid]
         if not kids:
             return
-        kids.sort(
-            key=lambda iid: self._node_sort_key(self.node_by_iid[iid]), reverse=self._sort_reverse
-        )
+        sort_key = sort_key_function(self._sort_key)
+        kids.sort(key=lambda iid: sort_key(self.node_by_iid[iid]), reverse=self._sort_reverse)
         for index, iid in enumerate(kids):
             self.tree.move(iid, parent_iid, index)
             self._set_stripe(iid, index)
@@ -1323,16 +1180,13 @@ class MainWindowMixin:
         self.tree.item(iid, tags=tuple(tags))
 
     def _refresh_row(self, iid):
-        """Recompute a row's size / percent / files text from its node."""
+        """Recompute a row's size / on disk / percent / files text from its node."""
         node = self.node_by_iid.get(iid)
         if not node:
             return
         parent_node = self.node_by_iid.get(self.tree.parent(iid))
         parent_size = (parent_node.size if parent_node else node.size) or 1
-        fraction = (node.size / parent_size) if parent_size else 0
-        percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
-        items = f"{node.file_count:,}" if node.is_dir else ""
-        self.tree.item(iid, values=(human_size(node.size), percent, items))
+        self.tree.item(iid, values=node_display(node, parent_size).values)
 
     # -- Constraints Functions --------------------------------------------- #
     def _forget_subtree(self, iid):
@@ -1388,7 +1242,7 @@ class MainWindowMixin:
     def _delete_selected(self):
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
-        if not node:
+        if not node or self._refuse_delete_during_scan():
             return
         kind = "folder" if node.is_dir else "file"
         if not messagebox.askyesno(

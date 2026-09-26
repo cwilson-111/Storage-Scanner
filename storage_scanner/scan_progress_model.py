@@ -1,28 +1,28 @@
-"""What the scan progress panel shows, worked out from a scan's progress
-messages (see storage_scanner.scan_progress). No Tk here, so it can be
-tested directly; storage_scanner/ui/scan_progress_panel.py only puts a
-ProgressView on screen.
+"""What the scan progress line under the tree shows, worked out from a
+scan's progress messages (see storage_scanner.scan_progress). No Tk here,
+so it can be tested directly; storage_scanner/ui/scan_progress_panel.py
+only puts a ProgressView on screen. The folders themselves fill in inside
+the main tree (storage_scanner.live_tree_model).
 
 The overall bar needs to know how much work to expect, which a directory
 walk can't know up front. load_estimate() looks it up before the scan:
-the previous scan of the same path from scan history (file count, total
-size, and the file count of each top-level folder it kept), else the drive's
-used space when the target is a volume root. With neither, the bar
-animates instead and the live counters carry the progress. Turbo Scan's
-steps bring their own done/total counts (MFT records, journal changes).
+the file count of the previous scan of the same path, from scan history,
+else the drive's used space when the target is a volume root. With
+neither, the bar animates instead and the live counters carry the
+progress. Turbo Scan's steps bring their own done/total counts (MFT
+records, journal changes).
 """
 
 import os
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import history
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.scan_history import normalize_scan_path
-from storage_scanner.scan_progress import DONE, QUEUED, SCANNING
 
 RUNNING = "running"
 CANCELLING = "cancelling"
@@ -38,89 +38,62 @@ ESTIMATE_DRIVE_USED = "drive used space"
 # broken.
 RUNNING_FRACTION_CAP = 0.99
 
-# How many of the last scan's biggest folders load_estimate reads to find
-# the target's direct children. History keeps only folders of 50 MB and
-# up; read biggest first, a child that doesn't make this cut gets a live bar.
-_PRIOR_FOLDER_ROWS = 5000
-
-_CURRENT_PATH_CHARS = 110
+# The "Now:" folder is shortened to this many characters, keeping its end.
+_CURRENT_PATH_CHARS = 60
 # A folder being read this long gets its time and item count shown, so a
 # slow folder reads as busy rather than stuck.
 _SLOW_FOLDER_SECONDS = 2.0
 # Rates over less time than this are mostly noise.
 _MIN_RATE_SECONDS = 1.0
 
-_STATE_TEXT = {QUEUED: "queued", SCANNING: "scanning", DONE: "done"}
-_STATE_ORDER = {SCANNING: 0, QUEUED: 1, DONE: 2}
-_MORE_KEY = "more"
-
 
 @dataclass(frozen=True)
 class ScanEstimate:
-    total_bytes: Optional[int]
+    """How much work a scan should expect: the last scan's file count, or
+    the drive's used (on-disk) bytes. Never the last scan's total size: that
+    is the sum of logical file sizes, which sparse and compressed files and
+    online-only cloud files push past what's on disk -- C:\\ once "expected"
+    2.1 TB on a 1.9 TB drive, 0.5 TB of it one sparse emulator disk image."""
+
     total_files: Optional[int]
+    disk_bytes: Optional[int]
     source: str  # ESTIMATE_LAST_SCAN | ESTIMATE_DRIVE_USED
     taken_at: Optional[str] = None  # the last scan's created_at
-    # os.path.normcase(top-level folder name) -> its file count in the last scan
-    folder_files: dict = field(default_factory=dict)
 
 
-def choose_estimate(target, last_scan, folder_rows, volume_used_bytes):
-    """The best estimate available for scanning `target`, or None.
+def choose_estimate(last_scan, volume_used_bytes):
+    """The best estimate available, or None.
 
     `last_scan` is history.get_latest_scan_snapshot()'s row (created_at,
-    total_size, file_count, folder_count) or None; `folder_rows` are that
-    scan's (folder_path, file_count) pairs; `volume_used_bytes` is the
-    drive's used space when `target` is a volume root, else None. The last
-    scan wins: it counted what this scanner counts, where used space also
-    includes what a scan can't see (the page file, unreadable folders).
+    total_size, file_count, folder_count) for the target, or None;
+    `volume_used_bytes` is the drive's used space when the target is a
+    volume root, else None. The last scan wins: it counted what this scanner
+    counts, where used space also includes what a scan can't see (the page
+    file, unreadable folders, NTFS's own metadata).
     """
-    if last_scan is not None:
-        taken_at, total_size, file_count = last_scan[0], last_scan[1], last_scan[2]
-        if total_size > 0 or file_count > 0:
-            return ScanEstimate(
-                total_bytes=total_size or None,
-                total_files=file_count or None,
-                source=ESTIMATE_LAST_SCAN,
-                taken_at=taken_at,
-                folder_files=_direct_children(target, folder_rows),
-            )
+    if last_scan is not None and last_scan[2] > 0:
+        return ScanEstimate(
+            total_files=last_scan[2],
+            disk_bytes=None,
+            source=ESTIMATE_LAST_SCAN,
+            taken_at=last_scan[0],
+        )
     if volume_used_bytes:
         return ScanEstimate(
-            total_bytes=volume_used_bytes, total_files=None, source=ESTIMATE_DRIVE_USED
+            total_files=None, disk_bytes=volume_used_bytes, source=ESTIMATE_DRIVE_USED
         )
     return None
-
-
-def _direct_children(target, folder_rows):
-    parent = normalize_scan_path(target)
-    counts = {}
-    for folder_path, file_count in folder_rows:
-        folder = os.path.normpath(folder_path)
-        name = os.path.basename(folder)
-        if name and normalize_scan_path(os.path.dirname(folder)) == parent:
-            counts[os.path.normcase(name)] = file_count
-    return counts
 
 
 def load_estimate(target):
     """choose_estimate() with its inputs read from scan history and the
     drive. Never raises -- an estimate is a nicety, not a reason to fail a
     scan. Reads the history database, so call it off the UI thread."""
-    scan_path = normalize_scan_path(target)
-    last_scan, folder_rows = None, []
+    last_scan = None
     try:
-        last_scan = history.get_latest_scan_snapshot(scan_path)
-        if last_scan is not None:
-            scan_id = history.get_latest_scan_id(scan_path)
-            # Against no previous scan, "growth" rows are just this scan's
-            # folders with their sizes and file counts -- the one history
-            # reader that lists them.
-            rows = history.get_folder_growth(scan_id, None, limit=_PRIOR_FOLDER_ROWS)
-            folder_rows = [(row[0], row[6]) for row in rows]
+        last_scan = history.get_latest_scan_snapshot(normalize_scan_path(target))
     except Exception:  # noqa: BLE001 - an estimate is optional
         logger.warning("Could not read scan history to estimate %r", target, exc_info=True)
-        last_scan, folder_rows = None, []
 
     used = None
     if os.path.ismount(target):
@@ -128,17 +101,7 @@ def load_estimate(target):
             used = shutil.disk_usage(target).used
         except OSError:
             logger.debug("disk_usage(%r) failed", target, exc_info=True)
-    return choose_estimate(target, last_scan, folder_rows, used)
-
-
-@dataclass(frozen=True)
-class FolderRow:
-    key: str  # stable across updates, for the panel's row identity
-    name: str
-    state: str
-    size: str
-    files: str
-    fill: float  # how full the row's bar is, 0..1
+    return choose_estimate(last_scan, used)
 
 
 @dataclass(frozen=True)
@@ -149,8 +112,9 @@ class ProgressView:
     counters: str
     estimate: str
     current: str
-    folders_summary: str
-    folders: tuple  # FolderRow, scanning first, then queued, then done
+    # The step under way when there's no folder tree to fill in yet (Turbo
+    # Scan, an elevated helper), for the tree's root row; "" otherwise.
+    step: str
 
 
 def _clamp(value, low, high):
@@ -179,7 +143,7 @@ class ScanProgressModel:
 
     handle() only stores the latest message of each kind, so a burst of
     messages costs almost nothing; view() does the formatting, once per
-    panel refresh.
+    refresh.
     """
 
     def __init__(self, target, clock=time.monotonic):
@@ -246,11 +210,13 @@ class ScanProgressModel:
         if self.walk is None or self.estimate is None:
             return None
         if self.estimate.total_files:
-            # Files, not bytes, when known: time goes on per-file work, and
-            # one huge file would otherwise jump the bar.
+            # Files when known: time goes on per-file work, and one huge
+            # file would otherwise jump the bar.
             ratio = self.walk.files / self.estimate.total_files
-        elif self.estimate.total_bytes:
-            ratio = self.walk.bytes / self.estimate.total_bytes
+        elif self.estimate.disk_bytes:
+            # On disk against on disk: a sparse file's logical size can be
+            # hundreds of times what it uses.
+            ratio = self.walk.alloc_bytes / self.estimate.disk_bytes
         else:
             return None
         return _clamp(ratio, 0.0, RUNNING_FRACTION_CAP)
@@ -258,7 +224,6 @@ class ScanProgressModel:
     def view(self):
         now = self._clock()
         fraction = self.fraction()
-        rows, summary = self._folder_rows()
         return ProgressView(
             headline=self._headline(),
             fraction=fraction,
@@ -266,8 +231,7 @@ class ScanProgressModel:
             counters=self._counters(now),
             estimate=self._estimate_text(),
             current=self._current_text(),
-            folders_summary=summary,
-            folders=rows,
+            step=self._step_text(fraction),
         )
 
     def _counted_phase(self):
@@ -285,7 +249,14 @@ class ScanProgressModel:
             return "Scan complete"
         if self.phase is not None:
             return f"{self.phase.label}…"
-        return f"Scanning {self.target}…"
+        return "Scanning…"
+
+    def _step_text(self, fraction):
+        if self.outcome != RUNNING or self.phase is None:
+            return ""
+        if self._counted_phase() is not None and fraction is not None:
+            return f"{self.phase.label} — {int(fraction * 100)}%"
+        return f"{self.phase.label}…"
 
     def _counters(self, now):
         parts = []
@@ -311,19 +282,12 @@ class ScanProgressModel:
         estimate = self.estimate
         if estimate is None:
             if self.estimate_known and self.walk is not None:
-                return "No earlier scan of this folder to compare with — showing live counts"
+                return "No earlier scan to compare with"
             return ""
-        amounts = []
-        if estimate.total_files:
-            amounts.append(f"{estimate.total_files:,} files")
-        if estimate.total_bytes:
-            amounts.append(human_size(estimate.total_bytes))
         if estimate.source == ESTIMATE_LAST_SCAN:
-            when = f" ({estimate.taken_at[:10]})" if estimate.taken_at else ""
-            origin = f"the last scan{when}"
-        else:
-            origin = "the drive's used space"
-        return f"Expecting about {', '.join(amounts)}, going by {origin}"
+            when = f", {estimate.taken_at[:10]}" if estimate.taken_at else ""
+            return f"Expecting about {estimate.total_files:,} files (last scan{when})"
+        return f"Expecting about {human_size(estimate.disk_bytes)} on disk (drive's used space)"
 
     def _current_text(self):
         walk = self.walk
@@ -333,71 +297,7 @@ class ScanProgressModel:
             return ""
         text = f"Now: {_shorten(walk.current_path)}"
         if walk.current_seconds >= _SLOW_FOLDER_SECONDS:
-            text += f" — {walk.current_seconds:.0f} s in this folder"
+            text += f" — {walk.current_seconds:.0f} s"
             if walk.current_entries:
-                text += f", {walk.current_entries:,} items so far"
+                text += f", {walk.current_entries:,} items"
         return text
-
-    def _folder_rows(self):
-        walk = self.walk
-        if walk is None:
-            return (), ""
-        prior = self.estimate.folder_files if self.estimate is not None else {}
-        largest = max((folder.files for folder in walk.top_folders), default=0)
-        indexed = sorted(
-            enumerate(walk.top_folders),
-            key=lambda item: (
-                _STATE_ORDER[item[1].state],
-                -item[1].bytes if item[1].state == DONE else item[0],
-            ),
-        )
-        rows = [
-            self._row(
-                str(index), folder.name, folder, prior.get(os.path.normcase(folder.name)), largest
-            )
-            for index, folder in indexed
-        ]
-        total = len(walk.top_folders)
-        done = sum(1 for folder in walk.top_folders if folder.state == DONE)
-        scanning = sum(1 for folder in walk.top_folders if folder.state == SCANNING)
-        more = walk.more_folders
-        if more is not None:
-            rows.append(self._row(_MORE_KEY, f"+ {more.folders:,} more folders", more, None, 0))
-            total += more.folders
-            if more.state == DONE:
-                done += more.folders
-        if not total:
-            return (), ""
-        summary = f"Top-level folders: {done:,} of {total:,} done"
-        if scanning:
-            summary += f", {scanning:,} scanning"
-        return tuple(rows), summary
-
-    @staticmethod
-    def _row(key, name, folder, prior_files, largest):
-        """A folder's bar fills against its file count in the last scan
-        when that's known -- files, like the overall bar, because time
-        goes on per-file work and a few big files would fill a size-based
-        bar long before the folder is done. Otherwise it fills against the
-        top-level folder with the most files so far, so it still grows
-        while being scanned. Either way it never fills before the folder
-        is done."""
-        if folder.state == DONE:
-            fill = 1.0
-        elif folder.state == QUEUED:
-            fill = 0.0
-        elif prior_files:
-            fill = min(folder.files / prior_files, RUNNING_FRACTION_CAP)
-        elif largest:
-            fill = min(folder.files / largest, RUNNING_FRACTION_CAP)
-        else:
-            fill = 0.0
-        queued = folder.state == QUEUED
-        return FolderRow(
-            key=key,
-            name=name,
-            state=_STATE_TEXT[folder.state],
-            size="" if queued else human_size(folder.bytes),
-            files="" if queued else f"{folder.files:,}",
-            fill=fill,
-        )
