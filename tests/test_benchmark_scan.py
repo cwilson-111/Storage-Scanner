@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "benchmarks"))
 
 from generated_tree import TreeSpec, generate_tree, remove_tree, verify
 
+from storage_scanner.models import Node
 from storage_scanner.scanner import scan
 
 _spec = importlib.util.spec_from_file_location("benchmark_scan", ROOT / "benchmarks" / "scan.py")
@@ -60,7 +61,9 @@ def test_verify_reports_a_followed_link(generated):
     root_node = _scan(generated.root)
     links_node = next(c for c in root_node.children if c.name == "links")
     link = next(c for c in links_node.children if c.path == generated.links[0])
-    link.is_dir = True  # what a scanner that traversed the link would produce
+    # What a scanner that traversed the link would produce: a folder there.
+    links_node.remove_child(link)
+    links_node.dirs.append(Node(link.path, link.name))
 
     problems = verify(root_node, generated)
 

@@ -5,24 +5,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.cart import CartManager
-from storage_scanner.models import Node
+from storage_scanner.models import FileNode, Node
 
 
 def _root():
-    return Node("C:/root", "root", is_dir=True)
+    return Node("C:/root", "root")
 
 
 def _file(parent, name, size=0):
-    node = Node(f"{parent.path}/{name}", name, is_dir=False)
-    node.size = size
-    parent.children.append(node)
-    return node
+    return FileNode(parent, parent.add_file(name, size))
 
 
 def _dir(parent, name, size=0):
-    node = Node(f"{parent.path}/{name}", name, is_dir=True)
+    node = Node(f"{parent.path}/{name}", name)
     node.size = size
-    parent.children.append(node)
+    parent.dirs.append(node)
     return node
 
 
@@ -191,6 +188,21 @@ def test_add_sampled_flag_tracks_sampled_duplicates():
     cart.add(f1, "Duplicate Files", is_sampled=True)
     cart.add(f2, "Duplicate Files", is_sampled=False)
 
+    assert cart.count_sampled_in_effective_items() == 1
+
+
+def test_a_sampled_flag_follows_the_file_not_the_view_it_came_through():
+    """The main tree and the duplicate window each hold their own FileNode
+    for a file; queueing it from both is one entry, flagged as sampled."""
+    cart = CartManager()
+    root = _root()
+    from_main_tree = _file(root, "large.bin", size=5_000_000)
+    from_duplicates = FileNode(root, from_main_tree.index)
+
+    cart.add(from_main_tree, "Main tree")
+    cart.add(from_duplicates, "Duplicate Files", is_sampled=True)
+
+    assert cart.items() == [(from_main_tree, "Duplicate Files")]
     assert cart.count_sampled_in_effective_items() == 1
 
 

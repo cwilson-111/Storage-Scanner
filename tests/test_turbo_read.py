@@ -97,11 +97,10 @@ def _valid_cache(monkeypatch, dirty=(), new_next_usn=500):
 
 
 def _make_tree():
-    root = Node("C:\\Data", "Data", True)
-    docs = Node("C:\\Data\\Docs", "Docs", True)
-    photo = Node("C:\\Data\\Docs\\Photo.JPG", "Photo.JPG", False)
-    docs.children.append(photo)
-    root.children.append(docs)
+    root = Node("C:\\Data", "Data")
+    docs = Node("C:\\Data\\Docs", "Docs")
+    docs.add_file("Photo.JPG")
+    root.dirs.append(docs)
     return root
 
 

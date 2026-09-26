@@ -60,23 +60,20 @@ def build_node_tree(n_files):
     from storage_scanner.models import Node
     from storage_scanner.scanner import _rollup
 
-    root = Node(VOLUME_ROOT, VOLUME_ROOT, True)
+    root = Node(VOLUME_ROOT, VOLUME_ROOT)
     nodes = {(): root}
     for parts, count in layout(n_files):
         if parts:
             parent = nodes[parts[:-1]]
-            folder = Node(os.path.join(parent.path, parts[-1]), parts[-1], True)
+            folder = Node(os.path.join(parent.path, parts[-1]), parts[-1])
             folder.mtime = folder.atime = _MTIME
-            parent.children.append(folder)
+            parent.dirs.append(folder)
             nodes[parts] = folder
         folder = nodes[parts]
         for index in range(count):
-            name = f"file_{index:04d}.dat"
-            child = Node(os.path.join(folder.path, name), name, False)
-            child.size = child.alloc_size = _file_size(len(parts), index)
-            child.mtime = child.atime = _MTIME + index
-            child.file_count = 1
-            folder.children.append(child)
+            size = _file_size(len(parts), index)
+            mtime = _MTIME + index
+            folder.add_file(f"file_{index:04d}.dat", size, size, mtime, mtime)
     _rollup(root)
     return root
 

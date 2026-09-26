@@ -6,12 +6,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.models import Node
+from storage_scanner.models import FLAG_CLOUD_PLACEHOLDER, Node
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
 
 def _make_app(tmp_path, contents=b"identical content"):
-    root = Node(str(tmp_path), tmp_path.name, is_dir=True)
+    root = Node(str(tmp_path), tmp_path.name)
 
     keep1 = tmp_path / "keep1.bin"
     keep1.write_bytes(contents)
@@ -20,15 +20,13 @@ def _make_app(tmp_path, contents=b"identical content"):
     cloud = tmp_path / "cloud.bin"
     cloud.write_bytes(contents)  # same content, but flagged as a placeholder
 
-    for name, path, is_placeholder in [
-        ("keep1.bin", keep1, False),
-        ("keep2.bin", keep2, False),
-        ("cloud.bin", cloud, True),
+    for name, is_placeholder in [
+        ("keep1.bin", False),
+        ("keep2.bin", False),
+        ("cloud.bin", True),
     ]:
-        node = Node(str(path), name, is_dir=False)
-        node.size = len(contents)
-        node.is_cloud_placeholder = is_placeholder
-        root.children.append(node)
+        flags = FLAG_CLOUD_PLACEHOLDER if is_placeholder else 0
+        root.add_file(name, len(contents), flags=flags)
     root.size = len(contents) * 3
 
     app = DuplicatesMixin()

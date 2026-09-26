@@ -114,7 +114,7 @@ def _progress_and_cancel():
 
 
 def test_uses_compatible_engine_directly_when_turbo_not_applicable(monkeypatch):
-    fake_node = Node("C:\\Data", "Data", True)
+    fake_node = Node("C:\\Data", "Data")
     fake_node.file_count = 7
     calls = []
 
@@ -146,7 +146,7 @@ def test_uses_compatible_engine_directly_when_turbo_not_applicable(monkeypatch):
 
 
 def test_successful_turbo_scan_reports_turbo_engine_and_skips_compatible(monkeypatch):
-    fake_node = Node("C:\\Data", "Data", True)
+    fake_node = Node("C:\\Data", "Data")
     fake_node.file_count = 123
     monkeypatch.setattr(turbo_scan, "choose_engine", lambda *a, **k: turbo_scan.ENGINE_TURBO)
     monkeypatch.setattr(turbo_scan, "_attempt_turbo_scan", lambda *a, **k: (fake_node, INCREMENTAL))
@@ -172,7 +172,7 @@ def test_successful_turbo_scan_reports_turbo_engine_and_skips_compatible(monkeyp
 
 
 def test_turbo_failure_falls_back_to_compatible_with_a_reason(monkeypatch):
-    fallback_node = Node("C:\\Data", "Data", True)
+    fallback_node = Node("C:\\Data", "Data")
     fallback_node.file_count = 9
 
     monkeypatch.setattr(turbo_scan, "choose_engine", lambda *a, **k: turbo_scan.ENGINE_TURBO)
@@ -197,7 +197,7 @@ def test_turbo_failure_falls_back_to_compatible_with_a_reason(monkeypatch):
 
 
 def test_turbo_disabled_setting_read_from_app_metadata_when_not_passed(monkeypatch):
-    fake_node = Node("C:\\Data", "Data", True)
+    fake_node = Node("C:\\Data", "Data")
     fake_node.file_count = 1
     monkeypatch.setattr(turbo_scan, "get_app_metadata", lambda key, default: "0")
     monkeypatch.setattr(turbo_scan.scanner, "scan", lambda *a, **k: fake_node)
@@ -215,7 +215,7 @@ def test_turbo_disabled_setting_read_from_app_metadata_when_not_passed(monkeypat
 
 
 def test_already_elevated_uses_in_process_path(monkeypatch):
-    fake_node = Node("C:\\Data", "Data", True)
+    fake_node = Node("C:\\Data", "Data")
     monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
     called = {}
 
@@ -238,7 +238,7 @@ def test_already_elevated_uses_in_process_path(monkeypatch):
 
 
 def test_not_elevated_uses_elevated_helper_path(monkeypatch):
-    fake_node = Node("C:\\Data", "Data", True)
+    fake_node = Node("C:\\Data", "Data")
     monkeypatch.setattr(turbo_scan, "IS_ROOT", False)
     called = {}
     monkeypatch.setattr(
@@ -263,7 +263,7 @@ def test_not_elevated_uses_elevated_helper_path(monkeypatch):
 def test_elevated_helper_result_carries_the_node_and_how_the_mft_was_read(monkeypatch):
     # The helper runs in another process; this is the far side of the
     # envelope mft_scan_cli.run_mft_scan writes.
-    node = Node("C:\\Data", "Data", True)
+    node = Node("C:\\Data", "Data")
     node.file_count = 4
     mft_read = MftRead(incremental=False, full_read_reason="USN journal was recreated")
     monkeypatch.setattr(

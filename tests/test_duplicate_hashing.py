@@ -20,15 +20,12 @@ from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
 
 def _make_app(tmp_path, files):
-    """files: list of (name, contents) tuples, all added as children of one
+    """files: list of (name, contents) tuples, all added as file rows of one
     root directory node."""
-    root = Node(str(tmp_path), tmp_path.name, is_dir=True)
+    root = Node(str(tmp_path), tmp_path.name)
     for name, contents in files:
-        path = tmp_path / name
-        path.write_bytes(contents)
-        node = Node(str(path), name, is_dir=False)
-        node.size = len(contents)
-        root.children.append(node)
+        (tmp_path / name).write_bytes(contents)
+        root.add_file(name, len(contents))
     root.size = sum(len(c) for _n, c in files)
 
     app = DuplicatesMixin()
@@ -76,8 +73,9 @@ def test_files_that_changed_size_since_the_scan_are_not_matched(tmp_path, monkey
     monkeypatch.setattr(duplicate_window, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
     grown = bytes(5 * chunk)
     app = _make_app(tmp_path, [("a.bin", grown), ("b.bin", _flip(grown, len(grown) // 2))])
-    for node in app.root_node.children:
-        node.size = 2 * chunk
+    sizes = app.root_node.file_sizes
+    for i in range(len(sizes)):
+        sizes[i] = 2 * chunk  # what the scan saw, before they grew
 
     assert _groups(app) == []
 
