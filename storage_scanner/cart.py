@@ -41,6 +41,7 @@ class CartManager:
     def clear(self):
         self._nodes.clear()
         self._sampled.clear()
+
     def __len__(self):
         return len(self._nodes)
 

@@ -179,10 +179,14 @@ class CartMixin:
             # Check for sampled duplicates in the cart
             sampled_count = self.cart.count_sampled_in_effective_items()
             sampled_warning = (
-                f"\n\n⚠ {sampled_count} item(s) are from sampled duplicate matches "
-                "(only first, middle, and last 1 MB compared — bytes between "
-                "the compared windows weren't checked)."
-            ) if sampled_count else ""
+                (
+                    f"\n\n⚠ {sampled_count} item(s) are from sampled duplicate matches "
+                    "(only first, middle, and last 1 MB compared — bytes between "
+                    "the compared windows weren't checked)."
+                )
+                if sampled_count
+                else ""
+            )
 
             if not messagebox.askyesno(
                 f"Delete to {TRASH_NAME}",

@@ -179,3 +179,78 @@ def test_items_preserves_insertion_order():
     cart.add(f3, "Search & Filter")
 
     assert [node for node, _label in cart.items()] == [f1, f2, f3]
+
+
+def test_add_sampled_flag_tracks_sampled_duplicates():
+    """CartManager tracks nodes added with is_sampled=True."""
+    cart = CartManager()
+    root = _root()
+    f1 = _file(root, "file1.txt", size=100)
+    f2 = _file(root, "file2.txt", size=100)
+
+    cart.add(f1, "Duplicate Files", is_sampled=True)
+    cart.add(f2, "Duplicate Files", is_sampled=False)
+
+    assert cart.count_sampled_in_effective_items() == 1
+
+
+def test_add_sampled_then_re_add_unsampled_clears_flag():
+    """Re-adding a sampled node without is_sampled clears the flag."""
+    cart = CartManager()
+    root = _root()
+    f = _file(root, "file.txt", size=100)
+
+    cart.add(f, "Main tree", is_sampled=True)
+    assert cart.count_sampled_in_effective_items() == 1
+
+    # Re-add without is_sampled flag
+    cart.add(f, "Updated source", is_sampled=False)
+    assert cart.count_sampled_in_effective_items() == 0
+
+
+def test_remove_clears_sampled_flag():
+    """Removing a node also removes it from the sampled set."""
+    cart = CartManager()
+    root = _root()
+    f = _file(root, "file.txt", size=100)
+
+    cart.add(f, "Duplicate Files", is_sampled=True)
+    assert cart.count_sampled_in_effective_items() == 1
+
+    cart.remove(f)
+    # After removing, the file isn't even in the cart, so count is 0
+    assert len(cart) == 0
+    assert cart.count_sampled_in_effective_items() == 0
+
+
+def test_clear_clears_sampled_flags():
+    """Clearing the cart also clears all sampled flags."""
+    cart = CartManager()
+    root = _root()
+    f1 = _file(root, "file1.txt", size=100)
+    f2 = _file(root, "file2.txt", size=100)
+
+    cart.add(f1, "Duplicate Files", is_sampled=True)
+    cart.add(f2, "Duplicate Files", is_sampled=True)
+    assert cart.count_sampled_in_effective_items() == 2
+
+    cart.clear()
+    assert len(cart) == 0
+    assert cart.count_sampled_in_effective_items() == 0
+
+
+def test_sampled_file_nested_under_queued_folder_is_not_counted():
+    """count_sampled_in_effective_items counts sampled items after de-nesting."""
+    cart = CartManager()
+    root = _root()
+    folder = _dir(root, "Documents", size=5000)
+    f = _file(folder, "large.bin", size=100)
+
+    # Add both: the folder (which contains the file) and the file itself (sampled)
+    cart.add(folder, "Main tree", is_sampled=False)
+    cart.add(f, "Duplicate Files", is_sampled=True)
+
+    # After resolving effective items, the folder wins (parent takes precedence)
+    # So the file is dropped from effective items, and the count should be 0
+    # because the effective folder itself is not sampled
+    assert cart.count_sampled_in_effective_items() == 0

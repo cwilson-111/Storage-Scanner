@@ -286,6 +286,8 @@ def is_sampled_duplicate(size):
     compared.
     """
     return size > 3 * DUPLICATE_HASH_CHUNK_BYTES
+
+
 def get_sampled_duplicates_from_groups(target_nodes, duplicate_groups):
     """Identify which nodes in target_nodes come from sampled duplicate groups.
 

@@ -1,13 +1,10 @@
 """Tests for sampled duplicate matching logic."""
 
-import pytest
-
 from storage_scanner.cleanup_recommendations import (
     get_sampled_duplicates_from_groups,
     is_sampled_duplicate,
 )
 from storage_scanner.models import Node
-from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
 
 
 class TestSampledDuplicateDetection:
@@ -97,9 +94,7 @@ class TestSampledDuplicateDetection:
 
         groups = [(10 * 1024 * 1024, "digest1", [node_in_group])]
 
-        count, nodes = get_sampled_duplicates_from_groups(
-            [node_not_in_group], groups
-        )
+        count, nodes = get_sampled_duplicates_from_groups([node_not_in_group], groups)
 
         assert count == 0
         assert node_not_in_group not in nodes
