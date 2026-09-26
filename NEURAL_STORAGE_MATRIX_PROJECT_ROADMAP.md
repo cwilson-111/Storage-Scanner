@@ -747,7 +747,7 @@ only**, never table data.
 
 | Step | Delivers | Done when |
 |---|---|---|
-| E0 | Local history retention and compact schema; compact in-memory tree; code signing | Benchmarks show bounded history growth and < 150 bytes per file; signed builds ship |
+| E0 | Local history retention and compact schema (✅ 2026-09-25); compact in-memory tree; code signing | Benchmarks show bounded history growth (✅ 145 scans kept of 800 daily) and < 150 bytes per file; signed builds ship |
 | E1 | Agent service, policy file, delta payloads, offline queue, MSI/pkg | 100-machine internal pilot runs 30 days with no data loss |
 | E2 | Ingest API, Timescale store, retention and downsampling | Load test passes at 10k synthetic machines |
 | E3 | SQL Server + PostgreSQL connectors first, then MySQL, Oracle, Mongo | Log-growth and bloat alerts fire correctly against test instances |
@@ -1060,9 +1060,9 @@ record counts are exact.
 | Whole-volume rescan time | 11.4 s | **10.6 s** |
 | Peak memory (turbo scenario) | 1.78 GB | **1.19 GB** |
 
-The same 1M run exposed the next bottleneck: **saving one scan to history
-takes 38 s** at 20,001 folder rows, and each of the 30 scheduled scans
-stored 2.5 MB. That's the history-retention and compact-schema step.
+The same 1M run exposed the next bottleneck: saving one scan to history
+took 38 s at 20,001 folder rows, and each of the 30 scheduled scans stored
+2.5 MB. Fixed in the next section.
 
 Verified: `test_turbo_cache.py` covers the round trip of every field,
 subtree-only loading, reparse-point expansion, case-insensitive path lookup
@@ -1074,9 +1074,120 @@ incremental, with the on-disk spelling and the same contents as a full read.
 **Not verified:** a Turbo Scan on real hardware with the new cache (needs
 admin rights and a UAC prompt).
 
-Next in the plan: history retention and a compact schema, then a compact
-in-memory tree (the benchmark's `tree_bytes_per_file` is the number to
-move).
+## History retention and a compact schema — ✅ done (2026-09-25)
+
+Second step of the scale plan, and E0's "bounded history growth".
+
+**What was slow.** Not the save itself: one transaction, 0.17 s for 20,001
+folder rows. The time went into the comparison `record_scan` runs right
+after it, against the previous scan. That joined the two scans' rows on
+folder path text with only single-column indexes, and SQLite compared
+every folder of one scan with every folder of the other: about 120,000
+VM steps per folder row, 69–77 s on this machine (the 38 s above was an
+earlier run). And nothing was ever deleted: each row repeated the full
+path and the scan's `created_at`, so a 20k-folder scan added 2.45 MB,
+forever.
+
+**Compact schema** (version 2, `storage_scanner/history_schema.py`):
+
+- `folder_paths(id, path UNIQUE)` stores each folder path once.
+- `folder_snapshots(scan_id, path_id, size_bytes, file_count)` is a
+  `WITHOUT ROWID` table keyed `(scan_id, path_id)`. One scan's rows are one
+  primary-key range, and "the same folder in the previous scan" is a
+  primary-key lookup on two integers. `created_at` lives on `scans` only.
+- Growth joins on those integers. Equal growth is now ordered by path; it
+  used to be arbitrary.
+- A save stages its folders in a temp table, adds new paths, then inserts
+  its rows with one join, in path-id order.
+- **Migration:** `init_history_db()` does it once, automatically, in one
+  `BEGIN IMMEDIATE` transaction, from `app_metadata`'s `schema_version`
+  (1 → 2). A database from before `app_metadata` is recognised by its
+  `folder_path` column. A failure rolls back to the untouched version 1
+  tables. Rows of scans that no longer exist are dropped. A one-off
+  `VACUUM` afterwards gives back the old layout's pages.
+
+**Retention** (`storage_scanner/history_retention.py`), per scan path, in
+the same transaction as each save:
+
+- every scan from the last 30 days is kept;
+- older ones keep the newest scan of each day until 90 days old, of each
+  ISO week until a year, of each month until two years, then of each year;
+- a path's first scan is always kept.
+
+Keeping the newest of each bucket means the scan a new save is compared
+with is never the one pruned. Folder paths that no kept scan uses any more
+are deleted too: only the pruned scans' paths that the new scan doesn't
+have are checked, with one primary-key probe per kept scan. The window is
+`app_metadata` key `history_keep_all_days` (days, or `forever` to never
+thin), set from Tools ▸ Settings ▸ Keep Every Saved Scan For. The Settings
+menu now shows on every OS, not just Windows. There's no routine `VACUUM`:
+in steady state each prune frees about what the next save needs, and
+SQLite reuses free pages.
+
+**What forecasting and anomaly detection needed.** The forecast fits
+every kept point. Thinning leaves its line where it was, and keeping the
+first scan keeps the time span its confidence depends on. Anomaly
+detection compared raw scan-to-scan changes, so on a thinned history a
+month-long gap looked like a spike: a test reproduces the old detector
+flagging five week- and month-long gaps in a thinned 500-day history. It
+now judges growth per day, a k-day gap counting as k days of growth with
+k days of variance. With evenly spaced scans that's exactly the old
+z-score, and gaps under a day still count as one day.
+
+**Benchmarks.** Two new `benchmarks/scale.py` scenarios, every new metric
+gated. `history_20k` saves a 20,001-folder scan twice and compares them,
+whatever `--files` is. It's gated on SQLite VM steps per folder row
+(counted with a progress handler), because the regression to catch is a
+slow query and step counts repeat where timings don't: identical on SQLite
+3.45.1, 3.45.3 and 3.50.4. `history_retention` saves daily for 800 days on
+a simulated clock. The history scenarios moved to `scale_history.py` and
+the synthetic volume to `scale_volume.py`, keeping each file under 500
+lines.
+
+| | Before | After |
+|---|---|---|
+| Comparing two 20,001-folder scans | 68.8–77.0 s | **0.02–0.03 s** |
+| VM steps per folder row for that comparison | 120,025 | **21.8** |
+| Saving a 20,001-folder scan | 0.17–0.24 s | **0.08–0.13 s** |
+| Bytes added by each further 20k-folder scan | 2,451,456 | **~368,000** (plus 1.66 MB once for the paths) |
+| History bytes per scan (CI volume: 401 rows, 30 scans) | 40,960 | **10,103** |
+| After 800 daily scans (401 rows each): scans kept | 800 | **145** |
+| ...database size | 32,964,608 | **1,335,296** |
+| Migrating 60 scans × 20,001 folders (1.2M rows) | — | **4.9 s**, 149.2 MB → 20.9 MB |
+
+"Before" is the previous commit running the same scenarios; timings are
+local and indicative, sizes and counts exact.
+
+**On a copy of this machine's real history** (23 scans, 25,846 folder
+rows, 6.2 MB; read-only copy, the original untouched): migration took
+0.16 s including the `VACUUM`. Scans, folder rows (25,846) and distinct
+paths (2,846) are the same before and after; the file went from 6,180,864
+to 1,011,712 bytes. `get_scan_history`, `list_scans_for_path`,
+`get_scan_ids_by_created_at`, `get_latest_scan_snapshot` and the forecast
+return the same as the old code on the unmigrated copy, and the complete
+growth of all 17 consecutive scan pairs (23,197 rows) is identical. The
+top-50 lists differ only in which unchanged folders fill the last places,
+which used to be arbitrary. The same two anomalies are flagged on `C:\`,
+at z = ±3.47 instead of ±3.62. Nothing would be pruned yet; after 30 days
+the twelve test scans taken within 40 minutes on 2026-09-17 thin to the
+last one.
+
+Verified: `test_history_migration.py` migrates version 1 databases built
+from the literal old DDL (with and without `app_metadata`), reproducing the
+old growth query's results; a second start changes nothing; a failed
+migration leaves version 1 as it was; the file shrinks.
+`test_history_retention.py` checks every tier boundary to the second, the
+first-scan rule, the setting, path cleanup, other paths untouched, growth
+after a pruning save, and anomalies and forecast on thinned vs. full
+history. `test_history.py` covers growth for new, grown, unchanged, shrunk
+and deleted folders and the tie order under a limit. The CLI
+(`--cli <folder> --save-history`) run twice against a temporary app-data
+folder reported the new folder and the growth, and the real main window
+wrote and restored the setting from its menu. **Not verified:** macOS or
+Linux (CI tests Windows only).
+
+Next in the plan: a compact in-memory tree (the benchmark's
+`tree_bytes_per_file` is the number to move).
 
 ## Live scan progress — ✅ done (2026-09-25)
 

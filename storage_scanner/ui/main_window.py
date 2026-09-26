@@ -32,7 +32,7 @@ from tkinter import (
 )
 
 from history import get_app_metadata, set_app_metadata, set_budget
-from storage_scanner import turbo_scan
+from storage_scanner import history_retention, turbo_scan
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import (
@@ -61,6 +61,15 @@ from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
 # The scan-details strip's second row: what the scan found, as opposed to
 # how it ran. One row of everything outgrew the default window width.
 _SCAN_OUTCOME_FIELDS = ("Unreadable paths", "Result")
+
+# Settings ▸ Keep Every Saved Scan For: (label, stored value).
+_HISTORY_KEEP_ALL_CHOICES = (
+    ("7 days", "7"),
+    ("30 days", "30"),
+    ("90 days", "90"),
+    ("1 year", "365"),
+    ("Forever (never thin out history)", history_retention.KEEP_FOREVER),
+)
 
 
 class MainWindowMixin:
@@ -155,21 +164,38 @@ class MainWindowMixin:
         add_scan_only(self.tools_menu, "Export Results…", self.export_results)
         self._refresh_tools_state()  # no tree yet: scan-only items start greyed out
 
-        # Turbo Scan (NTFS MFT fast path) is Windows-only and off by
-        # default — persisted the same way as the schema_version key, via
-        # history.py's app_metadata table (there's no other settings
-        # storage in this app to reuse).
+        # Settings persist the same way as the schema_version key, via
+        # history.py's app_metadata table (there's no other settings storage
+        # in this app to reuse). Turbo Scan (NTFS MFT fast path) is
+        # Windows-only and off by default.
+        settings_menu = Menu(self.tools_menu, tearoff=0)
         if IS_WINDOWS:
             self.turbo_scan_var = BooleanVar(
                 value=get_app_metadata("turbo_scan_enabled", "0") == "1"
             )
-            settings_menu = Menu(self.tools_menu, tearoff=0)
             settings_menu.add_checkbutton(
                 label="Turbo Scan (Experimental) — NTFS MFT fast path",
                 variable=self.turbo_scan_var,
                 command=self._on_toggle_turbo_scan,
             )
-            self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
+        # How long every saved scan is kept before older history thins out
+        # (storage_scanner.history_retention); applied at the next save.
+        self.history_keep_all_var = StringVar(
+            value=get_app_metadata(
+                history_retention.KEEP_ALL_DAYS_KEY,
+                str(history_retention.DEFAULT_KEEP_ALL_DAYS),
+            )
+        )
+        keep_all_menu = Menu(settings_menu, tearoff=0)
+        for label, value in _HISTORY_KEEP_ALL_CHOICES:
+            keep_all_menu.add_radiobutton(
+                label=label,
+                value=value,
+                variable=self.history_keep_all_var,
+                command=self._on_change_history_keep_all,
+            )
+        settings_menu.add_cascade(label="Keep Every Saved Scan For", menu=keep_all_menu)
+        self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
 
         # Last, where a Help menu conventionally sits: the first-run guide
         # (storage_scanner/ui/onboarding_window.py) opens itself once and
@@ -453,6 +479,9 @@ class MainWindowMixin:
     # -- Scan lifecycle ---------------------------------------------------- #
     def _on_toggle_turbo_scan(self):
         set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
+
+    def _on_change_history_keep_all(self):
+        set_app_metadata(history_retention.KEEP_ALL_DAYS_KEY, self.history_keep_all_var.get())
 
     # What _ask_turbo_scan_mode returns.
     TURBO_RESTART_AS_ADMIN = "restart"

@@ -21,7 +21,10 @@ your machine.
   `~/Library/Application Support/NeuralStorageMatrix/storage_history.db`
   (macOS), `%LOCALAPPDATA%\NeuralStorageMatrix\storage_history.db`
   (Windows), or `~/.local/share/NeuralStorageMatrix/storage_history.db`
-  (Linux, following the XDG Base Directory spec).
+  (Linux, following the XDG Base Directory spec). Saved scans older than
+  30 days thin out automatically to one a day, week, month and then year
+  (Tools ▸ Settings ▸ Keep Every Saved Scan For); nothing else in this
+  database is ever pruned.
 - **Diagnostic logs** (for troubleshooting crashes, since a windowed build
   has no console to print to): a rotating log file under `logs/` in that
   same app-data folder.

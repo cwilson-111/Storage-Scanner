@@ -193,7 +193,20 @@ packages were bundled.
   ("low"/"medium"/"high"), instead of a single number presented as certain.
 - **Anomaly detection** — flags scan-to-scan size changes that are
   statistical outliers for that specific path (a sudden spike or a
-  mass-deletion-shaped drop), based on that path's own history.
+  mass-deletion-shaped drop), based on that path's own history. Changes are
+  judged as growth per day, so scans a week or a month apart compare fairly
+  with scans a day apart.
+- **History that doesn't grow forever** — every scan from the last 30 days
+  is kept; older ones thin out to the newest scan of each day (up to 90
+  days old), week (up to a year), month (up to two years), then year, and a
+  folder's first scan is always kept. A daily scheduled scan settles at
+  about 145 saved scans per folder instead of adding one every day forever.
+  Change the 30 days, or turn thinning off, under Tools ▸ Settings ▸ Keep
+  Every Saved Scan For; it applies from the next save. Each folder path is
+  stored once, so a 20,000-folder scan adds about 0.37 MB (it was 2.5 MB)
+  and comparing two of them takes hundredths of a second (it took over a
+  minute). Histories saved by earlier versions are converted automatically
+  on first launch.
 - **Audit Log** — every delete/recycle action the app has ever performed,
   from any window, with date, source, path, size, and result — a durable
   record of what to go look for in the Recycle Bin/Trash if you need it back.
@@ -296,8 +309,10 @@ mypy storage_scanner/  # type checking
 All four read their settings from `pyproject.toml`, and CI runs the same
 four commands as the `test` job every release build depends on, plus
 `python benchmarks/scale.py --check`, which fails the build if memory per
-file, history size per scan, Turbo cache size per record, or the records a
-folder rescan loads get more than 15% worse than `benchmarks/baseline.json`.
+file, history size per scan, the scans and bytes two years of daily scans
+leave behind, the SQLite work to save and compare a 20,000-folder scan,
+Turbo cache size per record, or the records a folder rescan loads get more
+than 15% worse than `benchmarks/baseline.json`.
 
 ### Benchmarking the scanner
 
@@ -332,9 +347,9 @@ the test suite (`tests/test_benchmark_scan.py`), so CI gates them too.
 The full plan, with what's done and what's next, is in
 [NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
 
-**Next: scale for very large drives and long histories.** History that
-doesn't grow forever (retention plus a compact layout), then a smaller
-in-memory tree, measured by `benchmarks/scale.py`.
+**Next: scale for very large drives.** Scan history now stays bounded and
+compact; next is a smaller in-memory tree, measured by
+`benchmarks/scale.py`.
 
 **Then: enterprise monitoring for computers and databases** (Phase 5 in the
 roadmap). The desktop app stays free and local-first; the fleet pieces are
