@@ -170,7 +170,7 @@ class TreemapMixin:
             redraw_canvas()
 
         def on_click(node):
-            if node.is_dir and node.children:
+            if node.has_children:
                 stack.append(node)
                 redraw_breadcrumb()
                 redraw_canvas()

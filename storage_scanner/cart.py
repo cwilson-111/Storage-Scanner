@@ -14,26 +14,34 @@ import os
 
 
 class CartManager:
-    """Tracks which `Node`s are queued for deletion and where each was
-    added from. `Node` has no `__eq__`/`__hash__` override, so it's
-    identity-hashable by default -- the same assumption
-    duplicate_window.py's own `set()`s of `Node` already rely on. Adding
-    the same node twice just updates its source label, not duplicates it.
+    """Tracks which nodes are queued for deletion and where each was
+    added from. A folder `Node` hashes by identity; a `FileNode` view hashes
+    and compares by the file row it reads (see storage_scanner.models), so
+    the same file looked up twice is still one entry -- the same assumption
+    duplicate_window.py's own sets of nodes rely on. Adding the same node
+    twice just updates its source label, not duplicates it.
     """
 
     def __init__(self):
         self._nodes = {}  # Node -> source_label
+        self._sampled = set()  # Nodes that are sampled duplicates
 
-    def add(self, node, source_label):
+    def add(self, node, source_label, is_sampled=False):
         if node is None:
             return
         self._nodes[node] = source_label
+        if is_sampled:
+            self._sampled.add(node)
+        else:
+            self._sampled.discard(node)
 
     def remove(self, node):
         self._nodes.pop(node, None)
+        self._sampled.discard(node)
 
     def clear(self):
         self._nodes.clear()
+        self._sampled.clear()
 
     def __len__(self):
         return len(self._nodes)
@@ -43,6 +51,11 @@ class CartManager:
 
     def total_bytes(self):
         return sum(node.size for node in self._nodes)
+
+    def count_sampled_in_effective_items(self):
+        """Count how many items in effective (non-nested) items are sampled."""
+        effective = self.resolve_effective_items()
+        return sum(1 for node, _label in effective if node in self._sampled)
 
     def items(self):
         """[(node, source_label), ...], insertion order (dicts preserve it)."""

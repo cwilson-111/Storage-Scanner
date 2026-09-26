@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner import scanner
-from storage_scanner.models import Node
+from storage_scanner.models import FileNode, Node, detached_file, row_flags
 from storage_scanner.scanner import _rollup, find_inaccessible_paths, scan
 
 
@@ -35,6 +35,10 @@ def _run_scan_with_messages(path):
 
 def _by_name(node):
     return {child.name: child for child in node.children}
+
+
+def _file(parent, name, size=0, **kw):
+    return FileNode(parent, parent.add_file(name, size, **kw))
 
 
 def test_hardlinks_are_not_double_counted(tmp_path):
@@ -103,16 +107,14 @@ def test_rollup_propagates_a_grandchilds_error_all_the_way_to_the_root():
     icon in main_window._insert_node reads node.error directly) -- not
     just the one row that actually failed to list, which a user could
     easily never have expanded."""
-    root = Node("C:\\Data", "Data", True)
-    mid = Node("C:\\Data\\mid", "mid", True)
-    locked = Node("C:\\Data\\mid\\locked", "locked", True)
+    root = Node("C:\\Data", "Data")
+    mid = Node("C:\\Data\\mid", "mid")
+    locked = Node("C:\\Data\\mid\\locked", "locked")
     locked.error = True  # os.scandir() raised OSError on this one
-    ok_file = Node("C:\\Data\\ok.bin", "ok.bin", False)
-    ok_file.size = 100
-    ok_file.file_count = 1
+    _file(root, "ok.bin", 100)
 
-    mid.children = [locked]
-    root.children = [mid, ok_file]
+    mid.dirs.append(locked)
+    root.dirs.append(mid)
 
     _rollup(root)
 
@@ -124,13 +126,10 @@ def test_rollup_propagates_a_grandchilds_error_all_the_way_to_the_root():
 
 
 def test_rollup_leaves_error_false_when_nothing_failed():
-    root = Node("C:\\Data", "Data", True)
-    child = Node("C:\\Data\\ok", "ok", True)
-    f = Node("C:\\Data\\ok\\a.bin", "a.bin", False)
-    f.size = 50
-    f.file_count = 1
-    child.children = [f]
-    root.children = [child]
+    root = Node("C:\\Data", "Data")
+    child = Node("C:\\Data\\ok", "ok")
+    _file(child, "a.bin", 50)
+    root.dirs.append(child)
 
     _rollup(root)
 
@@ -188,53 +187,47 @@ def test_scanning_a_single_file_never_posts_a_live_root_reference(tmp_path):
 
 
 def test_find_inaccessible_paths_returns_empty_for_a_clean_tree():
-    root = Node("/root", "root", is_dir=True)
-    child = Node("/root/ok.bin", "ok.bin", is_dir=False)
-    root.children.append(child)
+    root = Node("/root", "root")
+    _file(root, "ok.bin")
 
     assert find_inaccessible_paths(root) == []
 
 
 def test_find_inaccessible_paths_finds_a_directory_that_could_not_be_listed():
-    root = Node("/root", "root", is_dir=True)
-    locked = Node("/root/System Volume Information", "System Volume Information", is_dir=True)
+    root = Node("/root", "root")
+    locked = Node("/root/System Volume Information", "System Volume Information")
     locked.error = True  # scandir() failed -- no children were ever discovered
-    root.children.append(locked)
+    root.dirs.append(locked)
 
     assert find_inaccessible_paths(root) == [locked]
 
 
 def test_find_inaccessible_paths_finds_a_file_whose_metadata_could_not_be_read():
-    root = Node("/root", "root", is_dir=True)
-    ok = Node("/root/ok.bin", "ok.bin", is_dir=False)
-    bad = Node("/root/locked.bin", "locked.bin", is_dir=False)
-    bad.error = True
-    root.children.extend([ok, bad])
+    root = Node("/root", "root")
+    _file(root, "ok.bin")
+    bad = _file(root, "locked.bin", flags=row_flags(error=True))
 
     assert find_inaccessible_paths(root) == [bad]
 
 
 def test_find_inaccessible_paths_finds_errors_nested_several_levels_deep():
-    root = Node("/root", "root", is_dir=True)
-    sub = Node("/root/sub", "sub", is_dir=True)
-    deep = Node("/root/sub/deep", "deep", is_dir=True)
-    bad_file = Node("/root/sub/deep/locked.bin", "locked.bin", is_dir=False)
-    bad_file.error = True
-    root.children.append(sub)
-    sub.children.append(deep)
-    deep.children.append(bad_file)
+    root = Node("/root", "root")
+    sub = Node("/root/sub", "sub")
+    deep = Node("/root/sub/deep", "deep")
+    root.dirs.append(sub)
+    sub.dirs.append(deep)
+    bad_file = _file(deep, "locked.bin", flags=row_flags(error=True))
 
     assert find_inaccessible_paths(root) == [bad_file]
 
 
 def test_find_inaccessible_paths_collects_every_error_across_separate_branches():
-    root = Node("/root", "root", is_dir=True)
-    bad_a = Node("/root/a", "a", is_dir=True)
+    root = Node("/root", "root")
+    bad_a = Node("/root/a", "a")
     bad_a.error = True
-    bad_b = Node("/root/b.bin", "b.bin", is_dir=False)
-    bad_b.error = True
-    ok = Node("/root/c", "c", is_dir=True)
-    root.children.extend([bad_a, bad_b, ok])
+    ok = Node("/root/c", "c")
+    root.dirs.extend([bad_a, ok])
+    bad_b = _file(root, "b.bin", flags=row_flags(error=True))
 
     found = find_inaccessible_paths(root)
 
@@ -244,7 +237,6 @@ def test_find_inaccessible_paths_collects_every_error_across_separate_branches()
 def test_find_inaccessible_paths_includes_the_root_itself_when_it_errored():
     # A single-file scan target whose own os.stat() failed (see scan()'s
     # early-return path) -- the whole "tree" is just this one errored node.
-    root = Node("/solo.bin", "solo.bin", is_dir=False)
-    root.error = True
+    root = detached_file("/solo.bin", flags=row_flags(error=True))
 
     assert find_inaccessible_paths(root) == [root]

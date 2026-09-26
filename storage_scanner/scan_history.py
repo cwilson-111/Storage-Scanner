@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import history
 from storage_scanner.budgets import check_budget_for_path
 from storage_scanner.logging_setup import logger
+from storage_scanner.models import iter_folders
 
 # Only folders at least this big (plus the scan root) get a history row, so
 # a huge scan doesn't write millions of rows nobody will chart.
@@ -34,21 +35,14 @@ def collect_folder_sizes(root_node, min_size=MIN_FOLDER_SIZE_FOR_HISTORY):
     total folder count of the whole tree."""
     folder_sizes = {}
     folder_count = 0
-    stack = [root_node]
 
-    while stack:
-        node = stack.pop()
-
-        if node.is_dir:
-            folder_count += 1
-
-            if node.size >= min_size or node is root_node:
-                folder_sizes[node.path] = {
-                    "size": node.size,
-                    "file_count": node.file_count,
-                }
-
-            stack.extend(node.children)
+    for node in iter_folders(root_node):
+        folder_count += 1
+        if node.size >= min_size or node is root_node:
+            folder_sizes[node.path] = {
+                "size": node.size,
+                "file_count": node.file_count,
+            }
 
     return folder_sizes, folder_count
 

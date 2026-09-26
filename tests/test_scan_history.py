@@ -20,12 +20,12 @@ def _db(tmp_path, monkeypatch):
 
 
 def _tree(root_path, big_size=60 * MB, small_size=1 * MB):
-    root = Node(root_path, "root", True)
-    big = Node(os.path.join(root_path, "big"), "big", True)
-    small = Node(os.path.join(root_path, "small"), "small", True)
+    root = Node(root_path, "root")
+    big = Node(os.path.join(root_path, "big"), "big")
+    small = Node(os.path.join(root_path, "small"), "small")
     big.size, big.file_count = big_size, 3
     small.size, small.file_count = small_size, 2
-    root.children = [big, small]
+    root.dirs.extend([big, small])
     root.size = big.size + small.size
     root.file_count = 5
     return root

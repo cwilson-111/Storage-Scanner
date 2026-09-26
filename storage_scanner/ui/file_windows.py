@@ -3,12 +3,15 @@
 A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
+import heapq
 import os
 from collections import defaultdict
+from operator import attrgetter
 from tkinter import BOTH, END, TOP, E, Toplevel, W, X, ttk
 
 from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
+from storage_scanner.models import FileNode, iter_file_rows
 from storage_scanner.platform_support import FILE_MANAGER_NAME, resource_path
 from storage_scanner.settings import COLORS, heat_color
 
@@ -23,17 +26,12 @@ class FileWindowsMixin:
             except (ValueError, AttributeError):
                 count = 25
 
-        # Collect every file in the scanned tree (iterative; deep-tree safe).
-        files = []
-        stack = [self.root_node]
-        while stack:
-            node = stack.pop()
-            if node.is_dir:
-                stack.extend(node.children)
-            else:
-                files.append(node)
-        files.sort(key=lambda n: n.size, reverse=True)
-        top = files[:count]
+        # The `count` largest files in the scanned tree.
+        top = heapq.nlargest(
+            count,
+            (FileNode(folder, i) for folder, rows in iter_file_rows(self.root_node) for i in rows),
+            key=attrgetter("size"),
+        )
         if not top:
             self.status_var.set("No files found.")
             return
@@ -122,14 +120,11 @@ class FileWindowsMixin:
         # Aggregate bytes + counts by lowercased extension across the tree.
         sizes = defaultdict(int)
         counts = defaultdict(int)
-        stack = [self.root_node]
-        while stack:
-            node = stack.pop()
-            if node.is_dir:
-                stack.extend(node.children)
-            else:
-                ext = os.path.splitext(node.name)[1].lower() or "(no extension)"
-                sizes[ext] += node.size
+        for folder, indexes in iter_file_rows(self.root_node):
+            names, file_sizes = folder.file_names, folder.file_sizes
+            for i in indexes:
+                ext = os.path.splitext(names[i])[1].lower() or "(no extension)"
+                sizes[ext] += file_sizes[i]
                 counts[ext] += 1
         rows = sorted(sizes.items(), key=lambda kv: kv[1], reverse=True)
         total = self.root_node.size or 1

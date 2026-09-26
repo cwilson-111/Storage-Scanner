@@ -42,6 +42,7 @@ import time
 from collections import namedtuple
 
 from storage_scanner.formatting import human_size
+from storage_scanner.models import FLAG_HARDLINK_DUP, FileNode, iter_file_rows
 from storage_scanner.settings import DEFAULT_DUPLICATE_EXCLUDES, DUPLICATE_HASH_CHUNK_BYTES
 
 DEFAULT_OLD_DAYS = 180
@@ -96,53 +97,52 @@ def find_protected_and_review_candidates(
     cutoff = now - old_days * 86400
 
     recommendations = []
-    stack = [root_node]
-    while stack:
-        node = stack.pop()
-        if node.is_dir:
-            stack.extend(node.children)
-            continue
-        if node.hardlink_dup or node.size <= 0:
-            continue  # nothing recoverable here; the "real" link is elsewhere
-
-        protected = is_protected_path(node.path) or node.is_cloud_placeholder
-        if protected:
-            reason = (
-                "Cloud placeholder file — not stored locally, nothing to reclaim."
-                if node.is_cloud_placeholder
-                else "Located in an OS or application-managed path."
-            )
-            recommendations.append(
-                Recommendation(
-                    node=node,
-                    category=CATEGORY_PROTECTED,
-                    reason=reason,
-                    risk="N/A",
-                    recoverable_bytes=0,
-                    action="Leave alone",
-                )
-            )
-            continue
-
-        if node.size >= large_bytes and _last_touched(node) < cutoff:
-            days_old = int((now - _last_touched(node)) / 86400)
-            recommendations.append(
-                Recommendation(
-                    node=node,
-                    category=CATEGORY_REVIEW,
-                    reason=(
-                        f"Large file ({node.size / (1024**2):,.0f} MB) not modified "
-                        f"or accessed in ~{days_old:,} days — worth checking "
-                        f"whether you still need it."
-                    ),
-                    risk="Medium — not verified safe, just a candidate to look at",
-                    recoverable_bytes=node.size,
-                    action="Review, then delete or archive if unneeded",
-                )
-            )
+    for folder, rows in iter_file_rows(root_node):
+        sizes, flags = folder.file_sizes, folder.file_flags
+        for i in rows:
+            if flags[i] & FLAG_HARDLINK_DUP or sizes[i] <= 0:
+                continue  # nothing recoverable here; the "real" link is elsewhere
+            node = FileNode(folder, i)
+            recommendation = _protected_or_review(node, now, cutoff, large_bytes)
+            if recommendation is not None:
+                recommendations.append(recommendation)
 
     recommendations.sort(key=lambda r: r.recoverable_bytes, reverse=True)
     return recommendations
+
+
+def _protected_or_review(node, now, cutoff, large_bytes):
+    protected = is_protected_path(node.path) or node.is_cloud_placeholder
+    if protected:
+        reason = (
+            "Cloud placeholder file — not stored locally, nothing to reclaim."
+            if node.is_cloud_placeholder
+            else "Located in an OS or application-managed path."
+        )
+        return Recommendation(
+            node=node,
+            category=CATEGORY_PROTECTED,
+            reason=reason,
+            risk="N/A",
+            recoverable_bytes=0,
+            action="Leave alone",
+        )
+
+    if node.size >= large_bytes and _last_touched(node) < cutoff:
+        days_old = int((now - _last_touched(node)) / 86400)
+        return Recommendation(
+            node=node,
+            category=CATEGORY_REVIEW,
+            reason=(
+                f"Large file ({node.size / (1024**2):,.0f} MB) not modified "
+                f"or accessed in ~{days_old:,} days — worth checking "
+                f"whether you still need it."
+            ),
+            risk="Medium — not verified safe, just a candidate to look at",
+            recoverable_bytes=node.size,
+            action="Review, then delete or archive if unneeded",
+        )
+    return None
 
 
 # Explicit .lower() rather than os.path.normcase(): normcase only folds
@@ -215,12 +215,9 @@ def find_orphaned_install_folders(root_node, orphaned_locations):
     user data (save files, exported settings) worth keeping regardless.
     """
     recommendations = []
-    stack = [root_node]
+    stack = [root_node] if root_node.is_dir else []
     while stack:
         node = stack.pop()
-        if not node.is_dir:
-            continue
-
         normalized = os.path.normcase(os.path.normpath(node.path))
         if normalized in orphaned_locations:
             recommendations.append(
@@ -241,7 +238,7 @@ def find_orphaned_install_folders(root_node, orphaned_locations):
             )
             continue  # don't also flag anything nested inside it
 
-        stack.extend(node.children)
+        stack.extend(node.dirs)
 
     recommendations.sort(key=lambda r: r.recoverable_bytes, reverse=True)
     return recommendations
@@ -286,6 +283,27 @@ def is_sampled_duplicate(size):
     compared.
     """
     return size > 3 * DUPLICATE_HASH_CHUNK_BYTES
+
+
+def get_sampled_duplicates_from_groups(target_nodes, duplicate_groups):
+    """Identify which nodes in target_nodes come from sampled duplicate groups.
+
+    Returns a tuple: (sampled_count, sampled_nodes_set)
+    where sampled_count is the number of target_nodes that are in groups
+    larger than 3 * DUPLICATE_HASH_CHUNK_BYTES (meaning only first/middle/last
+    1 MB was compared, not the full content).
+    """
+    sampled_set = set()
+    target_set = set(target_nodes)
+
+    for size, _digest, nodes in duplicate_groups:
+        if is_sampled_duplicate(size):
+            # This group was only sampled, so any target nodes in it are sampled
+            for node in nodes:
+                if node in target_set:
+                    sampled_set.add(node)
+
+    return len(sampled_set), sampled_set
 
 
 def build_duplicate_recommendations(duplicate_groups):

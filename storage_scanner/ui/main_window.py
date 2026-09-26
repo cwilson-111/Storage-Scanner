@@ -895,7 +895,8 @@ class MainWindowMixin:
     # -- Live scan preview (Compatible engine only) ------------------------- #
     #
     # storage_scanner.scanner.scan() builds its Node tree in place, in a
-    # background thread, as it walks -- node.children already grows live;
+    # background thread, as it walks -- node.dirs and each folder's file rows
+    # already grow live;
     # the only thing missing was the UI ever looking at it before "done".
     # Turbo Scan has no equivalent tree to preview (MFT records come back
     # in arbitrary order, not directory-walk order, so nothing resembling
@@ -946,11 +947,12 @@ class MainWindowMixin:
             for iid in self.tree.get_children(parent_iid)
             if iid in self.node_by_iid
         }
-        # node.children is still being appended to by a background worker
-        # thread -- safe to iterate mid-append under the GIL (list.append
-        # is atomic; at worst this snapshot misses the very latest arrival,
-        # picked up on the next throttled tick instead).
-        for child in list(node.children):
+        # node's subfolders and file rows are still being appended to by a
+        # background worker thread -- safe to read mid-append under the GIL
+        # (each append is atomic, and models.Node.add_file fills the row
+        # count's column last; at worst this snapshot misses the very latest
+        # arrival, picked up on the next throttled tick instead).
+        for child in node.children:
             if child.name in existing_names:
                 continue
             index = len(self.tree.get_children(parent_iid))
@@ -1220,7 +1222,7 @@ class MainWindowMixin:
         self.node_by_iid[iid] = node
 
         # Give expandable dirs a placeholder child so the [+] arrow appears.
-        if node.is_dir and node.children:
+        if node.has_children:
             self.tree.insert(iid, END, text="…(loading)", tags=("placeholder",))
         return iid
 
@@ -1362,8 +1364,8 @@ class MainWindowMixin:
                 an.size -= node.size
                 an.file_count -= node.file_count
             anc = self.tree.parent(anc)
-        if parent_node and node in parent_node.children:
-            parent_node.children.remove(node)
+        if parent_node:
+            parent_node.remove_child(node)
 
         self._forget_subtree(iid)
         self.tree.delete(iid)

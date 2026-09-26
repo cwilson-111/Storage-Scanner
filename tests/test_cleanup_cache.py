@@ -16,7 +16,7 @@ from storage_scanner.cleanup_recommendations import (
     CATEGORY_REVIEW,
     Recommendation,
 )
-from storage_scanner.models import Node
+from storage_scanner.models import Node, detached_file
 
 SCAN_PATH = "C:/Example"
 
@@ -29,7 +29,9 @@ def _init_db(tmp_path, monkeypatch):
 
 
 def _node(path, name, is_dir=False, size=100):
-    n = Node(path, name, is_dir=is_dir)
+    if not is_dir:
+        return detached_file(path, size=size)
+    n = Node(path, name)
     n.size = size
     return n
 
@@ -121,18 +123,19 @@ def test_a_second_save_fully_replaces_the_first_for_the_same_path(tmp_path, monk
     loaded = cleanup_cache.load_recommendations(SCAN_PATH)
 
     assert len(loaded) == 1
-    assert loaded[0].node.path == "C:/Example/new.bin"
+    assert loaded[0].node.path == second[0].node.path
     assert loaded[0].category == CATEGORY_DUPLICATE
 
 
 def test_saving_to_one_scan_path_does_not_affect_another(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
-    cleanup_cache.save_recommendations("C:/A", [_rec(_node("C:/A/x.bin", "x.bin"))])
+    a_rec = _rec(_node("C:/A/x.bin", "x.bin"))
+    cleanup_cache.save_recommendations("C:/A", [a_rec])
     cleanup_cache.save_recommendations("C:/B", [_rec(_node("C:/B/y.bin", "y.bin"))])
 
     assert len(cleanup_cache.load_recommendations("C:/A")) == 1
     assert len(cleanup_cache.load_recommendations("C:/B")) == 1
-    assert cleanup_cache.load_recommendations("C:/A")[0].node.path == "C:/A/x.bin"
+    assert cleanup_cache.load_recommendations("C:/A")[0].node.path == a_rec.node.path
 
 
 def test_get_computed_at_is_none_for_an_unseen_scan_path(tmp_path, monkeypatch):

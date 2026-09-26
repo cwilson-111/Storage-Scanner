@@ -22,27 +22,40 @@ from storage_scanner.cleanup_recommendations import (
     is_protected_path,
     pick_keeper,
 )
-from storage_scanner.models import Node
+from storage_scanner.models import FileNode, Node, join_path, row_flags
 from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
 
 NOW = time.time()
 DAY = 86400
 
 
-def _file(parent, name, size=0, mtime=0.0, atime=None, is_cloud_placeholder=False):
-    node = Node(f"{parent.path}/{name}", name, is_dir=False)
-    node.size = size
-    node.mtime = mtime
-    node.atime = atime if atime is not None else mtime
-    node.is_cloud_placeholder = is_cloud_placeholder
-    parent.children.append(node)
-    return node
+def _file(
+    parent,
+    name,
+    size=0,
+    mtime=0.0,
+    atime=None,
+    is_cloud_placeholder=False,
+    hardlink_dup=False,
+):
+    index = parent.add_file(
+        name,
+        size,
+        mtime=mtime,
+        atime=atime if atime is not None else mtime,
+        flags=row_flags(hardlink_dup=hardlink_dup, is_cloud_placeholder=is_cloud_placeholder),
+    )
+    return FileNode(parent, index)
 
 
 def _dir(parent, name):
-    node = Node(f"{parent.path}/{name}", name, is_dir=True)
-    parent.children.append(node)
+    node = Node(join_path(parent.path, name), name)
+    parent.dirs.append(node)
     return node
+
+
+def _folder(path):
+    return Node(path, os.path.basename(path))
 
 
 def _protected_marker():
@@ -72,7 +85,7 @@ def test_protected_path_matches_known_os_markers(monkeypatch):
 
 
 def test_large_old_file_is_flagged_as_review_candidate():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     old_mtime = NOW - 200 * DAY
     _file(root, "movie.mkv", size=200 * 1024 * 1024, mtime=old_mtime)
 
@@ -85,7 +98,7 @@ def test_large_old_file_is_flagged_as_review_candidate():
 
 
 def test_recent_large_file_is_not_flagged():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     _file(root, "recent.mkv", size=200 * 1024 * 1024, mtime=NOW - 5 * DAY)
 
     recs = find_protected_and_review_candidates(root, now=NOW)
@@ -94,7 +107,7 @@ def test_recent_large_file_is_not_flagged():
 
 
 def test_small_old_file_is_not_flagged():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     _file(root, "notes.txt", size=1024, mtime=NOW - 400 * DAY)
 
     recs = find_protected_and_review_candidates(root, now=NOW)
@@ -106,7 +119,7 @@ def test_recent_atime_prevents_review_flag_even_with_old_mtime():
     """A file touched recently (atime) shouldn't be flagged as "unused"
     just because its content hasn't changed (mtime) — e.g. a reference PDF
     you reopen often but never edit."""
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     _file(
         root,
         "reference.pdf",
@@ -126,7 +139,7 @@ def test_system_path_is_protected_not_reviewed(monkeypatch):
         "DEFAULT_DUPLICATE_EXCLUDES",
         (_protected_marker(),),
     )
-    root = Node(os.path.join(os.sep, "System"), "System", is_dir=True)
+    root = Node(os.path.join(os.sep, "System"), "System")
     _file(root, "big.bin", size=500 * 1024 * 1024, mtime=NOW - 400 * DAY)
 
     recs = find_protected_and_review_candidates(root, now=NOW)
@@ -137,7 +150,7 @@ def test_system_path_is_protected_not_reviewed(monkeypatch):
 
 
 def test_cloud_placeholder_is_protected():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     _file(
         root,
         "bigfile.zip",
@@ -154,9 +167,8 @@ def test_cloud_placeholder_is_protected():
 
 
 def test_hardlink_dup_and_zero_size_files_are_never_flagged():
-    root = Node("/root", "root", is_dir=True)
-    dup = _file(root, "linked.bin", size=0, mtime=NOW - 400 * DAY)
-    dup.hardlink_dup = True
+    root = Node("/root", "root")
+    _file(root, "linked.bin", size=0, mtime=NOW - 400 * DAY, hardlink_dup=True)
     _file(root, "empty.bin", size=0, mtime=NOW - 400 * DAY)
 
     recs = find_protected_and_review_candidates(root, now=NOW)
@@ -165,7 +177,7 @@ def test_hardlink_dup_and_zero_size_files_are_never_flagged():
 
 
 def test_recommendations_sorted_by_recoverable_bytes_descending():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     old = NOW - 300 * DAY
     _file(root, "small.bin", size=101 * 1024 * 1024, mtime=old)
     _file(root, "big.bin", size=900 * 1024 * 1024, mtime=old)
@@ -176,32 +188,27 @@ def test_recommendations_sorted_by_recoverable_bytes_descending():
 
 
 def test_pick_keeper_prefers_non_transient_path():
-    in_downloads = Node("/Users/me/Downloads/photo.jpg", "photo.jpg", is_dir=False)
-    in_downloads.mtime = 100
-    in_pictures = Node("/Users/me/Pictures/photo.jpg", "photo.jpg", is_dir=False)
-    in_pictures.mtime = 200  # newer, but not in a transient folder
+    in_downloads = _file(_folder("/Users/me/Downloads"), "photo.jpg", mtime=100)
+    # newer, but not in a transient folder
+    in_pictures = _file(_folder("/Users/me/Pictures"), "photo.jpg", mtime=200)
 
     keeper = pick_keeper([in_downloads, in_pictures])
 
-    assert keeper is in_pictures
+    assert keeper == in_pictures
 
 
 def test_pick_keeper_prefers_older_mtime_when_neither_is_transient():
-    older = Node("/Users/me/Pictures/a.jpg", "a.jpg", is_dir=False)
-    older.mtime = 100
-    newer = Node("/Users/me/Pictures/b.jpg", "b.jpg", is_dir=False)
-    newer.mtime = 200
+    pictures = _folder("/Users/me/Pictures")
+    older = _file(pictures, "a.jpg", mtime=100)
+    newer = _file(pictures, "b.jpg", mtime=200)
 
-    assert pick_keeper([older, newer]) is older
+    assert pick_keeper([older, newer]) == older
 
 
 def test_build_duplicate_recommendations_flags_everyone_but_the_keeper():
-    keeper = Node("/Users/me/Pictures/keeper.jpg", "keeper.jpg", is_dir=False)
-    keeper.mtime = 100
-    copy1 = Node("/Users/me/Downloads/copy1.jpg", "copy1.jpg", is_dir=False)
-    copy1.mtime = 200
-    copy2 = Node("/Users/me/Desktop/copy2.jpg", "copy2.jpg", is_dir=False)
-    copy2.mtime = 300
+    keeper = _file(_folder("/Users/me/Pictures"), "keeper.jpg", mtime=100)
+    copy1 = _file(_folder("/Users/me/Downloads"), "copy1.jpg", mtime=200)
+    copy2 = _file(_folder("/Users/me/Desktop"), "copy2.jpg", mtime=300)
 
     groups = [(1024, "somehash", [keeper, copy1, copy2])]
     recs = build_duplicate_recommendations(groups)
@@ -223,12 +230,12 @@ def test_build_duplicate_recommendations_flags_everyone_but_the_keeper():
     ],
 )
 def test_duplicate_risk_is_low_only_while_every_byte_was_compared(size, risk_level):
-    keeper = Node("/Users/me/Pictures/keeper.bin", "keeper.bin", is_dir=False)
-    copy = Node("/Users/me/Downloads/copy.bin", "copy.bin", is_dir=False)
+    keeper = _file(_folder("/Users/me/Pictures"), "keeper.bin")
+    copy = _file(_folder("/Users/me/Downloads"), "copy.bin")
 
     (rec,) = build_duplicate_recommendations([(size, ("edges", "middle"), [keeper, copy])])
 
-    assert rec.node is copy
+    assert rec.node == copy
     assert rec.risk.split(" — ")[0] == risk_level
 
 
@@ -237,7 +244,7 @@ def _normalized(path):
 
 
 def test_exact_orphan_match_flags_the_folder_without_recursing_into_children():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     orphan_folder = _dir(root, "Program Files/SomeApp")
     orphan_folder.size = 5000
     leftover = _file(orphan_folder, "leftover.dll", size=1234)
@@ -251,11 +258,11 @@ def test_exact_orphan_match_flags_the_folder_without_recursing_into_children():
     assert recs[0].recoverable_bytes == 5000
     # The file inside must never be independently flagged -- deleting the
     # folder already reclaims it; a second row would double-count it.
-    assert not any(r.node is leftover for r in recs)
+    assert not any(r.node == leftover for r in recs)
 
 
 def test_a_substring_match_that_is_not_an_exact_node_path_is_never_flagged():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     folder = _dir(root, "Program Files/SomeApp")
     folder.size = 5000
     # orphaned_locations names a *different*, longer path that happens to
@@ -268,7 +275,7 @@ def test_a_substring_match_that_is_not_an_exact_node_path_is_never_flagged():
 
 
 def test_a_sibling_folder_not_in_orphaned_locations_is_left_alone():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     orphan_folder = _dir(root, "Program Files/SomeApp")
     orphan_folder.size = 5000
     sibling = _dir(root, "Program Files/OtherApp")
@@ -286,7 +293,7 @@ def test_a_subfolder_of_an_already_flagged_orphan_is_not_flagged_again():
     own subfolders (e.g. a stale/duplicate registry entry) -- once the
     parent is flagged, walking stops there, so the child is never reached
     or independently flagged."""
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     parent = _dir(root, "Program Files/SomeApp")
     parent.size = 5000
     child = _dir(parent, "SubComponent")
@@ -300,7 +307,7 @@ def test_a_subfolder_of_an_already_flagged_orphan_is_not_flagged_again():
 
 
 def test_no_matches_returns_no_recommendations():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     _dir(root, "Program Files/StillInstalled")
 
     recs = find_orphaned_install_folders(root, set())
@@ -309,7 +316,7 @@ def test_no_matches_returns_no_recommendations():
 
 
 def test_drop_nested_under_removes_a_recommendation_inside_a_container():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     container = _dir(root, "Program Files/SomeApp")
     inside = _file(container, "old_log.txt", size=100)
     elsewhere = _file(root, "unrelated.bin", size=200)
@@ -336,14 +343,14 @@ def test_drop_nested_under_removes_a_recommendation_inside_a_container():
     kept = _drop_nested_under(review_recs, {container.path})
 
     assert len(kept) == 1
-    assert kept[0].node is elsewhere
+    assert kept[0].node == elsewhere
 
 
 def test_drop_nested_under_does_not_remove_a_sibling_with_a_shared_prefix():
     """SomeApp and SomeApp2 share a string prefix but are not nested --
     a naive (non-path-aware) prefix check would wrongly drop SomeApp2's
     contents too."""
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     container = _dir(root, "Program Files/SomeApp")
     sibling_file = _file(_dir(root, "Program Files/SomeApp2"), "notes.txt", size=50)
 
@@ -364,7 +371,7 @@ def test_drop_nested_under_does_not_remove_a_sibling_with_a_shared_prefix():
 
 
 def test_drop_nested_under_with_no_containers_is_a_noop():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     f = _file(root, "a.bin", size=10)
     recs = [
         Recommendation(

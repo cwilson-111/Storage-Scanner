@@ -34,7 +34,7 @@ class _FakeRecordSource:
 
 
 def _make_node():
-    node = Node("C:\\Data", "Data", True)
+    node = Node("C:\\Data", "Data")
     node.size = 123
     node.file_count = 5
     return node

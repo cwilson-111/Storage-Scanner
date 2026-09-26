@@ -175,14 +175,27 @@ class CartMixin:
                 return
 
             total = sum(node.size for node, _label in effective)
+
+            # Check for sampled duplicates in the cart
+            sampled_count = self.cart.count_sampled_in_effective_items()
+            sampled_warning = (
+                (
+                    f"\n\n⚠ {sampled_count} item(s) are from sampled duplicate matches "
+                    "(only first, middle, and last 1 MB compared — bytes between "
+                    "the compared windows weren't checked)."
+                )
+                if sampled_count
+                else ""
+            )
+
             if not messagebox.askyesno(
                 f"Delete to {TRASH_NAME}",
-                f"Send {len(effective):,} item(s) ({human_size(total)}) " f"to the {TRASH_NAME}?",
+                f"Send {len(effective):,} item(s) ({human_size(total)}) "
+                f"to the {TRASH_NAME}?{sampled_warning}",
                 icon="warning",
                 parent=win,
             ):
                 return
-
             # Built once per batch: which cart nodes still have a live row
             # in the main tree (main_window._remove_main_tree_row's ancestor
             # rollup/refresh only applies there) vs. only in the scanned

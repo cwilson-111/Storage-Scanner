@@ -28,6 +28,7 @@ from tkinter import (
 
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.cleanup_recommendations import (
+    get_sampled_duplicates_from_groups,
     is_protected_path,
     is_sampled_duplicate,
     keeper_reason,
@@ -35,6 +36,7 @@ from storage_scanner.cleanup_recommendations import (
 )
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
+from storage_scanner.models import FLAG_CLOUD_PLACEHOLDER, FileNode, iter_file_rows, iter_folders
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
     IS_MACOS,
@@ -147,67 +149,56 @@ class DuplicatesMixin:
         }
 
         # ------------------------------------------------------------
-        # Phase 0: collect files from your existing scanned tree
+        # Phase 0: collect files from your existing scanned tree,
+        # straight from each folder's columns
         # ------------------------------------------------------------
         all_files = []
-        stack = [self.root_node]
+        stack = [self.root_node] if self.root_node.is_dir else []
 
         while stack:
             if cancel_event.is_set():
                 return []
 
-            node = stack.pop()
+            folder = stack.pop()
 
-            if node.is_dir:
-                if self._should_skip_duplicate_scan(node.path):
-                    skipped_count = 0
-                    skipped_bytes = 0
+            if self._should_skip_duplicate_scan(folder.path):
+                # Count skipped files under this skipped directory.
+                skipped_count = 0
+                skipped_bytes = 0
+                for skipped_folder, rows in iter_file_rows(folder):
+                    sizes = skipped_folder.file_sizes
+                    for i in rows:
+                        skipped_count += 1
+                        skipped_bytes += sizes[i]
 
-                    # Count skipped files under this skipped directory.
-                    count_stack = [node]
-                    while count_stack:
-                        skipped_node = count_stack.pop()
+                stats["files_skipped"] += skipped_count
+                stats["bytes_skipped"] += skipped_bytes
 
-                        if skipped_node.is_dir:
-                            count_stack.extend(skipped_node.children)
-                        else:
-                            skipped_count += 1
-                            skipped_bytes += skipped_node.size
+                if progress_q:
+                    progress_q.put(("stats", dict(stats)))
 
-                    stats["files_skipped"] += skipped_count
-                    stats["bytes_skipped"] += skipped_bytes
+                continue
+
+            stack.extend(folder.dirs)
+
+            sizes, flags = folder.file_sizes, folder.file_flags
+            for i in folder.file_rows():
+                size = sizes[i]
+                if size <= 0:
+                    continue
+                node = FileNode(folder, i)
+                # Cloud placeholders (OneDrive Files On-Demand, etc.)
+                # report their full logical size but aren't actually on
+                # local disk — hashing one would force Windows to
+                # download it just to compare it. Skip them entirely.
+                if flags[i] & FLAG_CLOUD_PLACEHOLDER or self._should_skip_duplicate_scan(node.path):
+                    stats["files_skipped"] += 1
+                    stats["bytes_skipped"] += size
 
                     if progress_q:
-                        progress_q.put(
-                            (
-                                "stats",
-                                dict(stats),
-                            )
-                        )
-
-                    continue
-
-                stack.extend(node.children)
-
-            else:
-                if node.size > 0:
-                    # Cloud placeholders (OneDrive Files On-Demand, etc.)
-                    # report their full logical size but aren't actually on
-                    # local disk — hashing one would force Windows to
-                    # download it just to compare it. Skip them entirely.
-                    if self._should_skip_duplicate_scan(node.path) or node.is_cloud_placeholder:
-                        stats["files_skipped"] += 1
-                        stats["bytes_skipped"] += node.size
-
-                        if progress_q:
-                            progress_q.put(
-                                (
-                                    "stats",
-                                    dict(stats),
-                                )
-                            )
-                    else:
-                        all_files.append(node)
+                        progress_q.put(("stats", dict(stats)))
+                else:
+                    all_files.append(node)
 
         stats["files_checked"] = len(all_files)
 
@@ -758,14 +749,28 @@ class DuplicatesMixin:
                 if skipped_keepers
                 else ""
             )
+
+            # Check if any target nodes are from sampled groups
+            sampled_count, sampled_nodes = get_sampled_duplicates_from_groups(
+                [iid_to_node.get(iid) for iid in targets], duplicates
+            )
+            sampled_warning = (
+                (
+                    f"\n\n⚠ {sampled_count} file(s) are from sampled matches "
+                    "(only first, middle, and last 1 MB compared — bytes between "
+                    "the compared windows weren't checked)."
+                )
+                if sampled_count
+                else ""
+            )
+
             if not messagebox.askyesno(
                 "Delete selected duplicates",
-                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}",
+                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}{sampled_warning}",
                 icon="warning",
                 parent=win,
             ):
                 return
-
             deleted_count = 0
             failed = []
 
@@ -806,10 +811,28 @@ class DuplicatesMixin:
                     parent=win,
                 )
                 return
+
+            # Check if any target nodes are from sampled groups
+            sampled_count, sampled_nodes = get_sampled_duplicates_from_groups(
+                [iid_to_node.get(iid) for iid in targets], duplicates
+            )
+            if sampled_count and not messagebox.askyesno(
+                "Add sampled duplicates to cart",
+                f"Add {len(targets)} file(s) to the Cleanup Cart?\n\n"
+                f"⚠ {sampled_count} file(s) are from sampled matches "
+                "(only first, middle, and last 1 MB compared — bytes between "
+                "the compared windows weren't checked).",
+                icon="warning",
+                parent=win,
+            ):
+                return
+
             for iid in targets:
                 node = iid_to_node.get(iid)
                 if node:
-                    self.cart.add(node, "Duplicate Files")
+                    # Track whether this node is from a sampled group
+                    is_sampled = node in sampled_nodes
+                    self.cart.add(node, "Duplicate Files", is_sampled=is_sampled)
             self._refresh_cart_indicator()
 
         ttk.Button(
@@ -861,23 +884,21 @@ class DuplicatesMixin:
             return
 
         if target_node.is_dir:
-            stale = set()
-            stack = [target_node]
-            while stack:
-                node = stack.pop()
-                if node.is_dir:
-                    stack.extend(node.children)
-                else:
-                    stale.add(node)
-            if not stale:
-                return
+            # Every file under a deleted folder lives in one of its folders.
+            gone_folders = set(iter_folders(target_node))
+
+            def gone(node):
+                return node.parent in gone_folders
+
         else:
-            stale = {target_node}
+
+            def gone(node):
+                return node == target_node
 
         updated = []
         changed = False
         for size, digest, nodes in duplicates:
-            remaining = [n for n in nodes if n not in stale]
+            remaining = [n for n in nodes if not gone(n)]
             if len(remaining) == len(nodes):
                 updated.append((size, digest, nodes))
                 continue
@@ -887,27 +908,5 @@ class DuplicatesMixin:
 
         if changed:
             self.duplicates = updated
-
-    def _subtract_from_ancestors(self, current, target):
-        """Subtract target's size/count from every ancestor containing it."""
-        if not current.is_dir:
-            return False
-
-        found = False
-
-        for child in current.children:
-            if child is target:
-                found = True
-                break
-
-            if child.is_dir and self._subtract_from_ancestors(child, target):
-                found = True
-                break
-
-        if found:
-            current.size -= target.size
-            current.file_count -= target.file_count
-
-        return found
 
     # -- Shutdown ---------------------------------------------------------- #

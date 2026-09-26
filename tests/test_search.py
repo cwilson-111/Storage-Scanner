@@ -11,22 +11,18 @@ from storage_scanner.search import filter_nodes, parse_size
 
 
 def _file(parent, name, size=0, mtime=0.0):
-    node = Node(f"{parent.path}/{name}", name, is_dir=False)
-    node.size = size
-    node.mtime = mtime
-    parent.children.append(node)
-    return node
+    parent.add_file(name, size, mtime=mtime)
 
 
 def _dir(parent, name):
-    node = Node(f"{parent.path}/{name}", name, is_dir=True)
-    parent.children.append(node)
+    node = Node(f"{parent.path}/{name}", name)
+    parent.dirs.append(node)
     return node
 
 
 @pytest.fixture
 def tree():
-    root = Node("/root", "root", is_dir=True)
+    root = Node("/root", "root")
     sub = _dir(root, "sub")
     _file(root, "report.pdf", size=1000, mtime=100)
     _file(root, "photo.JPG", size=5_000_000, mtime=200)
