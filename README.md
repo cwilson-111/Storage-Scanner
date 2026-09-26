@@ -98,6 +98,17 @@ packages were bundled.
   points are recorded but never traversed (no double-counting, no infinite
   loops); hard links are deduplicated so a file linked into multiple folders
   only counts once.
+- **Live progress, per folder** — while a scan runs, a panel shows an
+  overall progress bar, live counts (files, folders, size, files/s,
+  elapsed time), the folder being read right now (and how long it's taken,
+  once it's slow), and a bar for every top-level folder: queued, scanning
+  with its size and file count so far, or done. The bars measure against
+  the last scan of the same folder, or a drive's used space when you scan
+  a whole drive for the first time; with neither, the overall bar animates
+  and the counts carry the progress. Even a single huge folder keeps the
+  counts moving, and Turbo Scan shows each of its steps (MFT records read
+  out of the total, journal changes applied, saving its cache) instead of
+  going quiet.
 - **Logical vs. actual disk usage** — tracks allocated size separately from
   logical size, so sparse files, NTFS-compressed files, and OneDrive-style
   online-only placeholders don't inflate what's actually on disk.
@@ -138,13 +149,20 @@ packages were bundled.
 - **Largest Files** and **File Types Breakdown** views.
 
 ### Cleaning up safely
-- **Duplicate file finder** — a staged pipeline (group by size → partial
-  hash → full hash) finds exact-content duplicates with zero false
-  positives. Each group gets an automatic **keeper recommendation** (prefers
-  a copy outside Downloads/Desktop/Temp, then the oldest) with the reasoning
-  shown — and the keeper is genuinely protected: it can never be deleted
-  from that window, even via select-all, though you can manually override
-  which copy is the keeper.
+- **Duplicate file finder** — a staged pipeline (group by size → hash the
+  first and last 1 MB → hash the middle 1 MB) that never reads a whole large
+  file. Files up to 3 MB are fully covered by those windows, so matches are
+  byte-exact. Above 3 MB a match is *sampled*: two files with the same size
+  and identical first, middle and last 1 MB are grouped even if they differ
+  somewhere in between. The Duplicate Files window says how many groups
+  that applies to and explains it on each such row, and Cleanup
+  Recommendations rates those copies medium rather than low risk, so review
+  before deleting. A file that changed size since the scan is left out
+  rather than compared. Each group gets an automatic **keeper
+  recommendation** (prefers a copy outside Downloads/Desktop/Temp, then the
+  oldest) with the reasoning shown — and the keeper is genuinely protected:
+  it can never be deleted from that window, even via select-all, though you
+  can manually override which copy is the keeper.
 - **Cleanup Recommendations** — a review-first view across the whole scan:
   **Protected** paths (OS/app-managed locations, cloud placeholders — never
   suggested for deletion), **Review candidates** (large files untouched for
@@ -160,6 +178,10 @@ packages were bundled.
   shrink much, and the UI tells you that before you commit.
 - **Everything goes through the Recycle Bin/Trash.** Nothing in this app
   permanently deletes a file.
+- **Getting Started guide** — shown once on first launch, and reopenable
+  from Tools ▸ Help ▸ Getting Started…: what Delete actually does on your OS,
+  which folders a scan can't read (and what Run as Admin changes), how
+  cloud placeholders are handled, and which locations are protected.
 
 ### History and trust
 - **Growth History** — compare any two saved snapshots of a path (not just
@@ -171,7 +193,20 @@ packages were bundled.
   ("low"/"medium"/"high"), instead of a single number presented as certain.
 - **Anomaly detection** — flags scan-to-scan size changes that are
   statistical outliers for that specific path (a sudden spike or a
-  mass-deletion-shaped drop), based on that path's own history.
+  mass-deletion-shaped drop), based on that path's own history. Changes are
+  judged as growth per day, so scans a week or a month apart compare fairly
+  with scans a day apart.
+- **History that doesn't grow forever** — every scan from the last 30 days
+  is kept; older ones thin out to the newest scan of each day (up to 90
+  days old), week (up to a year), month (up to two years), then year, and a
+  folder's first scan is always kept. A daily scheduled scan settles at
+  about 145 saved scans per folder instead of adding one every day forever.
+  Change the 30 days, or turn thinning off, under Tools ▸ Settings ▸ Keep
+  Every Saved Scan For; it applies from the next save. Each folder path is
+  stored once, so a 20,000-folder scan adds about 0.37 MB (it was 2.5 MB)
+  and comparing two of them takes hundredths of a second (it took over a
+  minute). Histories saved by earlier versions are converted automatically
+  on first launch.
 - **Audit Log** — every delete/recycle action the app has ever performed,
   from any window, with date, source, path, size, and result — a durable
   record of what to go look for in the Recycle Bin/Trash if you need it back.
@@ -272,12 +307,62 @@ mypy storage_scanner/  # type checking
 ```
 
 All four read their settings from `pyproject.toml`, and CI runs the same
-four commands as the `test` job every release build depends on.
+four commands as the `test` job every release build depends on, plus
+`python benchmarks/scale.py --check`, which fails the build if memory per
+file, history size per scan, the scans and bytes two years of daily scans
+leave behind, the SQLite work to save and compare a 20,000-folder scan,
+Turbo cache size per record, or the records a folder rescan loads get more
+than 15% worse than `benchmarks/baseline.json`.
+
+### Benchmarking the scanner
+
+`benchmarks/scale.py` (above) gates how memory and database sizes grow on
+synthetic volumes; `benchmarks/scan.py` is the on-disk counterpart, checking
+scan correctness on edge cases and timing real scans across versions:
+
+```bash
+python benchmarks/scan.py --profile medium --output bench-before.json
+# ...change the scanner...
+python benchmarks/scan.py --profile medium --baseline bench-before.json
+```
+
+Generates a folder tree from a fixed seed (`small` ≈ 2k files, `medium` ≈
+20k, `large` ≈ 100k and about 1 GB), scans it, checks the result against
+what was generated (totals, per-folder rollups, hard links counted once,
+symlinks/junctions not followed), then times several scans and measures
+peak memory. It exits 2 if the scan doesn't match the tree, and 3 if the
+median is more than `--max-slowdown` (default 25%) slower than the baseline;
+a baseline from another profile or seed is refused (exit 1) before anything
+is generated. Compare only runs from the same machine; `--dir` picks the
+drive to test. The same correctness checks run on a small generated tree in
+the test suite (`tests/test_benchmark_scan.py`), so CI gates them too.
 
 ## Privacy & trust
 
 - [PRIVACY.md](PRIVACY.md) — what the app reads, stores, and (doesn't) send anywhere.
 - [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md) — exactly how a release binary is built, and what that does/doesn't guarantee.
+
+## Roadmap
+
+The full plan, with what's done and what's next, is in
+[NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
+
+**Next: scale for very large drives.** Scan history now stays bounded and
+compact; next is a smaller in-memory tree, measured by
+`benchmarks/scale.py`.
+
+**Then: enterprise monitoring for computers and databases** (Phase 5 in the
+roadmap). The desktop app stays free and local-first; the fleet pieces are
+separate and reuse the same scan engine.
+
+| Step | What it adds |
+|---|---|
+| **Agent** | Runs as a Windows service, macOS launchd daemon or Linux systemd service. Takes a central policy, scans incrementally, and sends only small summaries: folder totals, top files, and changes since last time. Works offline and deploys through Intune, GPO, SCCM or Jamf. |
+| **Central store** | An HTTPS ingest API with per-device certificates, backed by PostgreSQL + TimescaleDB. Keeps full detail for 30 days, then daily and weekly summaries, so 10,000 machines stay affordable. |
+| **Database monitoring** | Read-only connectors for SQL Server, PostgreSQL, MySQL/MariaDB, Oracle and MongoDB. Track data, index, log and free space per database and table, bloat, and log or WAL growth. Uses monitoring roles only, never table data. |
+| **Console and alerts** | A fleet dashboard, fill-date forecasts with confidence levels, and alert rules that extend today's budgets. Sends to email, Teams/Slack, PagerDuty or ServiceNow/Jira, with scheduled reports. |
+| **Security** | SSO (Entra ID, Okta), role-based access, an exportable audit trail, and an option to hash user folder names. Signed builds are required. |
+| **Remote cleanup** (opt-in) | Cleanup plans built from the existing recommendations. Each is dry-run first, approved by a second person, sent to the Recycle Bin or quarantine only (never deleted outright), and fully audited. Databases stay alert-only. |
 
 ## License
 

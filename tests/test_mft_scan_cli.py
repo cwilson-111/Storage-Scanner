@@ -7,6 +7,7 @@ Windows session, like the rest of Turbo Scan's raw-volume path.
 """
 
 import json
+import queue
 import sys
 from pathlib import Path
 
@@ -16,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner import mft_scan_cli
+from storage_scanner.file_ops import _relay_progress_file
 from storage_scanner.models import Node
+from storage_scanner.scan_progress import Phase
 from storage_scanner.turbo_read import MftRead
 
 _FULL_READ = MftRead(incremental=False, full_read_reason="first scan of this drive")
@@ -116,25 +119,33 @@ def test_missing_required_arguments_exit_with_usage_error():
 # actual ShellExecuteExW/UAC GUI flow that's the common case).
 
 
-def test_progress_file_writer_writes_the_latest_progress_count(tmp_path):
+def test_a_phase_written_by_the_helper_reaches_the_gui_queue_unchanged_and_once(tmp_path):
     progress_path = tmp_path / "progress.txt"
     writer = mft_scan_cli._ProgressFileWriter(str(progress_path))
+    progress_q = queue.Queue()
 
-    writer.put(("progress", 100))
-    assert progress_path.read_text(encoding="utf-8") == "100"
+    reading = Phase("Reading the MFT", 4096, 250_000, "records")
+    writer.put(("phase", reading))
+    last = _relay_progress_file(str(progress_path), progress_q, None)
+    last = _relay_progress_file(str(progress_path), progress_q, last)  # nothing new
+    saving = Phase("Saving the Turbo Scan cache")
+    writer.put(("phase", saving))  # replaces, not appends
+    _relay_progress_file(str(progress_path), progress_q, last)
 
-    writer.put(("progress", 5000))
-    assert progress_path.read_text(encoding="utf-8") == "5000"  # overwritten, not appended
+    posted = []
+    while not progress_q.empty():
+        posted.append(progress_q.get_nowait())
+    assert posted == [("phase", reading), ("phase", saving)]
 
 
-def test_progress_file_writer_ignores_non_progress_message_kinds(tmp_path):
+def test_progress_file_writer_ignores_other_message_kinds(tmp_path):
     progress_path = tmp_path / "progress.txt"
     writer = mft_scan_cli._ProgressFileWriter(str(progress_path))
 
     writer.put(("root", object()))
-    writer.put(("progress_bytes", 12345))
+    writer.put(("walk", object()))
 
-    assert not progress_path.exists()  # never touched -- only "progress" is relayed
+    assert not progress_path.exists()  # never touched -- only "phase" is relayed
 
 
 def test_run_mft_scan_relays_progress_through_the_progress_file(monkeypatch, tmp_path):

@@ -41,19 +41,17 @@ EXIT_SCAN_ERROR = 1
 
 class _ProgressFileWriter:
     """Duck-types just enough of queue.Queue's `.put()` interface for
-    turbo_read.scan_subtree_using_cache() to use unmodified --
-    they already call `progress_q.put(("progress", count))` periodically
-    during a cold full scan, previously discarded outright by passing
-    `progress_q=None`. Every write replaces the file's entire contents
-    with just the latest count (there's no reader here that needs a
-    history of every value, only the most recent one) via a temp-file-plus-
-    os.replace swap, so a concurrent reader (run_elevated_scan_windows,
-    polling from a completely separate process) can never observe a
-    half-written value.
+    turbo_read.scan_subtree_using_cache() to use unmodified: each
+    ("phase", Phase) it posts replaces the file's entire contents with that
+    phase as JSON (there's no reader here that needs a history of every
+    value, only the most recent one) via a temp-file-plus-os.replace swap,
+    so a concurrent reader (run_elevated_scan_windows, polling from a
+    completely separate process) can never observe a half-written value.
+    turbo_read already limits how often it posts (see its Throttle use),
+    so this doesn't need to.
 
-    Only "progress" messages are relayed -- "root"/"progress_bytes" are
-    scanner.py's own directory-walk-engine message kinds, never posted by
-    Turbo Scan's record-parsing loop, so there's nothing else to handle.
+    Only "phase" messages are relayed -- that's all Turbo Scan's reading
+    steps post; "root"/"walk" are the Compatible engine's.
     """
 
     def __init__(self, path):
@@ -61,11 +59,11 @@ class _ProgressFileWriter:
 
     def put(self, item):
         kind, payload = item
-        if kind != "progress":
+        if kind != "phase":
             return
         tmp_path = self.path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(str(payload))
+            json.dump(payload.to_dict(), f)
         os.replace(tmp_path, self.path)
 
 
@@ -87,7 +85,7 @@ def build_arg_parser():
         "--progress-file",
         default=None,
         metavar="FILE",
-        help="Continuously overwrite FILE with the latest record count read "
+        help="Continuously overwrite FILE with the current scan step and its count "
         "so far, for run_elevated_scan_windows to relay back to the "
         "GUI's progress_q -- optional, omitted entirely when this is "
         "invoked outside that path (e.g. directly from a terminal).",

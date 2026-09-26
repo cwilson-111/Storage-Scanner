@@ -3,6 +3,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -21,6 +23,7 @@ from storage_scanner.cleanup_recommendations import (
     pick_keeper,
 )
 from storage_scanner.models import Node
+from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
 
 NOW = time.time()
 DAY = 86400
@@ -208,6 +211,25 @@ def test_build_duplicate_recommendations_flags_everyone_but_the_keeper():
     assert flagged_names == {"copy1.jpg", "copy2.jpg"}
     assert all(r.category == CATEGORY_DUPLICATE for r in recs)
     assert all(keeper.path in r.reason for r in recs)
+
+
+@pytest.mark.parametrize(
+    ("size", "risk_level"),
+    [
+        # Head, middle and tail windows together cover every byte up to here.
+        (3 * DUPLICATE_HASH_CHUNK_BYTES, "Low"),
+        # One byte more and a byte between the windows goes uncompared.
+        (3 * DUPLICATE_HASH_CHUNK_BYTES + 1, "Medium"),
+    ],
+)
+def test_duplicate_risk_is_low_only_while_every_byte_was_compared(size, risk_level):
+    keeper = Node("/Users/me/Pictures/keeper.bin", "keeper.bin", is_dir=False)
+    copy = Node("/Users/me/Downloads/copy.bin", "copy.bin", is_dir=False)
+
+    (rec,) = build_duplicate_recommendations([(size, ("edges", "middle"), [keeper, copy])])
+
+    assert rec.node is copy
+    assert rec.risk.split(" — ")[0] == risk_level
 
 
 def _normalized(path):

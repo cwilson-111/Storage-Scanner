@@ -1,10 +1,11 @@
 """The Storage Scanner Tkinter application.
 
-StorageScannerApp itself is composed from ten mixins, each living in its
-own file under storage_scanner/ui/ — split out so the toolbar/tree, history
-saving, duplicate detection, search/filter, the treemap, cleanup
-recommendations, the audit log, budgets, export and scheduled scans, and the
-largest-files/file-types windows can each be read, changed, and tested
+StorageScannerApp itself is composed from thirteen mixins, each living in its
+own file under storage_scanner/ui/ — split out so the toolbar/tree, the scan
+progress panel, history saving, duplicate detection, search/filter, the
+treemap, cleanup recommendations, the audit log, budgets, export and
+scheduled scans, the largest-files/file-types windows, the Cleanup Cart, and
+the first-run Getting Started guide can each be read, changed, and tested
 without wading through the others.
 """
 
@@ -29,6 +30,8 @@ from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
 from storage_scanner.ui.history_window import HistoryMixin
 from storage_scanner.ui.main_window import MainWindowMixin
+from storage_scanner.ui.onboarding_window import OnboardingMixin
+from storage_scanner.ui.scan_progress_panel import ScanProgressMixin
 from storage_scanner.ui.search_window import SearchMixin
 from storage_scanner.ui.treemap_window import TreemapMixin
 from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
@@ -36,6 +39,7 @@ from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
 
 class StorageScannerApp(
     MainWindowMixin,
+    ScanProgressMixin,
     HistoryMixin,
     DuplicatesMixin,
     FileWindowsMixin,
@@ -46,6 +50,7 @@ class StorageScannerApp(
     BudgetMixin,
     AutomationMixin,
     CartMixin,
+    OnboardingMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root
@@ -114,17 +119,21 @@ class StorageScannerApp(
             "files_skipped": 0,
             "bytes_skipped": 0,
             "partial_hashed": 0,
-            "full_hashed": 0,
+            "middle_hashed": 0,
         }
 
         self._build_toolbar()
         self._build_tree()
         self._build_statusbar()
+        self._build_scan_progress_panel()
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         threading.Thread(target=self._check_for_update_worker, daemon=True).start()
         self.root.after(500, self._check_budgets_on_launch)
+        # First-run guide (see storage_scanner/onboarding.py). Only the GUI
+        # ever builds this class — main()'s headless modes return before it.
+        self.root.after(500, self._show_onboarding_on_launch)
 
     @staticmethod
     def _log_tk_callback_exception(exc, val, tb):

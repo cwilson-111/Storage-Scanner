@@ -29,6 +29,7 @@ from tkinter import (
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.cleanup_recommendations import (
     is_protected_path,
+    is_sampled_duplicate,
     keeper_reason,
     pick_keeper,
 )
@@ -40,7 +41,7 @@ from storage_scanner.platform_support import (
     TRASH_NAME,
     resource_path,
 )
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, DUPLICATE_HASH_CHUNK_BYTES
 
 
 class DuplicatesMixin:
@@ -48,86 +49,76 @@ class DuplicatesMixin:
         """Return True if this path should be ignored during duplicate scans."""
         return is_protected_path(path)
 
-    # -- Delete to Recycle Bin --------------------------------------------- #
-    def _partial_hash_file(self, path, cancel_event=None, chunk_size=1024 * 1024):
-        """
-        Hash the first and last chunk of a file.
+    # -- Content sampling --------------------------------------------------- #
+    # Both digests read at offsets derived from `size`: the size the scan
+    # recorded, which candidates are grouped on and is_sampled_duplicate()
+    # judges. A file that's no longer that size changed since the scan; its
+    # windows would no longer be the ones `size` implies, and a match could
+    # claim a byte-exact coverage it never had, so it hashes to None instead.
+    def _partial_hash_file(
+        self, path, size, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES
+    ):
+        """BLAKE2b of the first and last `chunk_size` bytes of a file the
+        scan recorded as `size` bytes.
 
-        This is much faster than full hashing large files.
-        Used only as a filtering stage before full hashing.
-
-        Returns (partial_digest, full_digest). For any file no larger than
-        `chunk_size`, the "first chunk" read above already covers the whole
-        file -- read() past EOF just returns what's there, so the trailing
-        `if file_size > chunk_size` branch never runs. Rather than let a
-        second pass (_full_hash_file) reopen and re-read those same bytes
-        just to get a stronger digest, compute that strong digest right here
-        from the bytes already in memory and hand it back as `full_digest`,
-        so the caller can skip re-reading the file entirely. `full_digest`
-        is None for anything larger than `chunk_size`, where this function
-        only ever samples the head and tail, not the whole file.
+        For a file no larger than 2 * chunk_size those two windows overlap
+        or touch, so this digest already covers every byte. None if the
+        file can't be read, is no longer `size` bytes, or the scan was
+        cancelled.
         """
+        if cancel_event and cancel_event.is_set():
+            return None
         try:
-
-            if cancel_event and cancel_event.is_set():
-                return None, None
-
-            file_size = os.path.getsize(path)
-
-            h = hashlib.blake2b(digest_size=16)
-            full_digest = None
-
             with open(path, "rb") as f:
-                first_chunk = f.read(chunk_size)
-                h.update(first_chunk)
+                if os.fstat(f.fileno()).st_size != size:
+                    return None
+                h = hashlib.blake2b(f.read(chunk_size), digest_size=32)
+                if size > chunk_size:
+                    f.seek(size - chunk_size)
+                    h.update(f.read(chunk_size))
+                return h.hexdigest()
+        except OSError:
+            return None
 
-                if file_size > chunk_size:
-                    seek_pos = max(0, file_size - chunk_size)
-                    f.seek(seek_pos)
-                    last_chunk = f.read(chunk_size)
-                    h.update(last_chunk)
-                else:
-                    full_digest = hashlib.blake2b(first_chunk, digest_size=32).hexdigest()
+    def _middle_hash_file(
+        self, path, size, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES
+    ):
+        """BLAKE2b of the `chunk_size` bytes centered on the midpoint of a
+        file the scan recorded as `size` bytes.
 
-            return h.hexdigest(), full_digest
-
-        except (OSError, PermissionError):
-            return None, None
-
-    def _full_hash_file(self, path, cancel_event=None, chunk_size=1024 * 1024):
+        The window starts at (size - chunk_size) // 2. For any file of
+        2 * chunk_size < size <= 3 * chunk_size that start is <= chunk_size
+        and its end is >= size - chunk_size, so together with the head and
+        tail windows every byte is covered and a match is byte-exact.
+        Above 3 * chunk_size the bytes between the windows are never read:
+        a match there is sampled, not verified. None if the file can't be
+        read, is no longer `size` bytes, or the scan was cancelled.
         """
-        Full-file hash used only after size and partial hash match.
-
-        This confirms the duplicate safely.
-        """
+        if cancel_event and cancel_event.is_set():
+            return None
         try:
-            h = hashlib.blake2b(digest_size=32)
-
             with open(path, "rb") as f:
-                while True:
-
-                    if cancel_event and cancel_event.is_set():
-                        return None
-
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    h.update(chunk)
-
-            return h.hexdigest()
-
-        except (OSError, PermissionError):
+                if os.fstat(f.fileno()).st_size != size:
+                    return None
+                f.seek(max(0, (size - chunk_size) // 2))
+                return hashlib.blake2b(f.read(chunk_size), digest_size=32).hexdigest()
+        except OSError:
             return None
 
     def _find_duplicate_files(self, progress_q=None, cancel_event=None):
         """
         Find duplicate files under the scanned root.
 
-        Optimized for very large scans:
         1. Collect files.
         2. Group by size.
-        3. Partial-hash files with matching sizes.
-        4. Full-hash only files with matching size + partial hash.
+        3. Hash the first and last chunk of files with matching sizes.
+        4. Hash the middle chunk of files still matching, when they're
+           larger than two chunks (smaller ones are already fully covered).
+
+        Returns [(size, (edge_digest, middle_digest), nodes), ...], largest
+        recoverable space first. Groups of files up to three chunks are
+        byte-exact matches; larger ones only matched on the sampled windows
+        (see cleanup_recommendations.is_sampled_duplicate).
         """
 
         if not self.root_node:
@@ -152,7 +143,7 @@ class DuplicatesMixin:
             "files_skipped": 0,
             "bytes_skipped": 0,
             "partial_hashed": 0,
-            "full_hashed": 0,
+            "middle_hashed": 0,
         }
 
         # ------------------------------------------------------------
@@ -277,15 +268,10 @@ class DuplicatesMixin:
             )
 
         # ------------------------------------------------------------
-        # Phase 2: partial hash
+        # Phase 2: hash first + last chunk
         # ------------------------------------------------------------
+        chunk_size = DUPLICATE_HASH_CHUNK_BYTES
         by_partial_hash = defaultdict(list)
-
-        # Files no larger than one chunk get their strong confirmation
-        # digest computed for free in the partial-hash pass below (see
-        # _partial_hash_file's docstring) -- cached here so phase 3 can
-        # reuse it instead of reopening and re-reading the same file.
-        full_digest_cache = {}
 
         max_workers = min(
             8, (os.cpu_count() or 4) * 2
@@ -293,10 +279,9 @@ class DuplicatesMixin:
 
         def partial_job(node):
             if cancel_event.is_set():
-                return node, None, None
+                return node, None
 
-            digest, full_digest = self._partial_hash_file(node.path, cancel_event)
-            return node, digest, full_digest
+            return node, self._partial_hash_file(node.path, node.size, cancel_event, chunk_size)
 
         completed = 0
 
@@ -307,15 +292,13 @@ class DuplicatesMixin:
                 if cancel_event.is_set():
                     return []
 
-                node, digest, full_digest = future.result()
+                node, digest = future.result()
                 completed += 1
 
                 stats["partial_hashed"] = completed
 
                 if digest:
                     by_partial_hash[(node.size, digest)].append(node)
-                    if full_digest:
-                        full_digest_cache[node] = full_digest
 
                 if progress_q and (completed % 50 == 0 or completed == total_partial_files):
                     progress_q.put(
@@ -329,76 +312,84 @@ class DuplicatesMixin:
                     )
 
         # ------------------------------------------------------------
-        # Phase 3: full hash only files that matched partial hash
+        # Phase 3: hash the middle chunk of surviving candidates
         # ------------------------------------------------------------
-        files_to_full_hash = []
+        # Head + tail already cover every byte of a file no larger than two
+        # chunks, so those keep their phase-2 key as-is; only larger files
+        # need the middle window read.
+        by_final_key = defaultdict(list)
+        files_to_middle_hash = []
 
-        for nodes in by_partial_hash.values():
-            if len(nodes) > 1:
-                files_to_full_hash.extend(nodes)
+        for (size, digest), nodes in by_partial_hash.items():
+            if len(nodes) < 2:
+                continue
+            if size <= 2 * chunk_size:
+                by_final_key[(size, (digest, None))].extend(nodes)
+            else:
+                files_to_middle_hash.extend((node, digest) for node in nodes)
 
-        total_full_files = max(1, len(files_to_full_hash))
+        total_middle_files = max(1, len(files_to_middle_hash))
 
-        if not files_to_full_hash:
-            return []
-
-        if progress_q:
+        if files_to_middle_hash and progress_q:
             progress_q.put(
                 (
                     "progress",
                     0,
-                    total_full_files,
-                    f"Full hashing confirmed candidates … 0/{total_full_files:,}",
+                    total_middle_files,
+                    f"Hashing middle of matching candidates … 0/{total_middle_files:,}",
                 )
             )
 
-        by_full_hash = defaultdict(list)
-
-        def full_job(node):
+        def middle_job(node, partial_digest):
             if cancel_event.is_set():
-                return node, None
+                return node, partial_digest, None
 
-            cached_digest = full_digest_cache.get(node)
-            if cached_digest is not None:
-                return node, cached_digest
-
-            digest = self._full_hash_file(node.path, cancel_event)
-            return node, digest
+            return (
+                node,
+                partial_digest,
+                self._middle_hash_file(node.path, node.size, cancel_event, chunk_size),
+            )
 
         completed = 0
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(full_job, node) for node in files_to_full_hash]
+            futures = [
+                executor.submit(middle_job, node, partial_digest)
+                for node, partial_digest in files_to_middle_hash
+            ]
 
             for future in as_completed(futures):
                 if cancel_event.is_set():
                     return []
 
-                node, digest = future.result()
+                node, partial_digest, middle_digest = future.result()
                 completed += 1
 
-                stats["full_hashed"] = completed
+                stats["middle_hashed"] = completed
 
-                if digest:
-                    by_full_hash[(node.size, digest)].append(node)
+                if middle_digest:
+                    by_final_key[(node.size, (partial_digest, middle_digest))].append(node)
 
-                if progress_q and (completed % 10 == 0 or completed == total_full_files):
+                if progress_q and (completed % 10 == 0 or completed == total_middle_files):
                     progress_q.put(
                         (
                             "progress",
                             completed,
-                            total_full_files,
-                            "Full hashing confirmed candidates … "
-                            f"{completed:,}/{total_full_files:,}",
+                            total_middle_files,
+                            "Hashing middle of matching candidates … "
+                            f"{completed:,}/{total_middle_files:,}",
                         )
                     )
+
+        if progress_q:
+            progress_q.put(("stats", dict(stats)))
 
         # ------------------------------------------------------------
         # Phase 4: build final duplicate list
         # ------------------------------------------------------------
         duplicates = []
 
-        for (size, digest), nodes in by_full_hash.items():
+        for (size, digest), nodes in by_final_key.items():
             if len(nodes) > 1:
                 duplicates.append((size, digest, nodes))
 
@@ -428,7 +419,7 @@ class DuplicatesMixin:
             "files_skipped": 0,
             "bytes_skipped": 0,
             "partial_hashed": 0,
-            "full_hashed": 0,
+            "middle_hashed": 0,
         }
 
         total_files = max(1, self.root_node.file_count)
@@ -541,7 +532,17 @@ class DuplicatesMixin:
         files_skipped = stats.get("files_skipped", 0)
         bytes_skipped = stats.get("bytes_skipped", 0)
         partial_hashed = stats.get("partial_hashed", 0)
-        full_hashed = stats.get("full_hashed", 0)
+        middle_hashed = stats.get("middle_hashed", 0)
+        sampled_groups = sum(
+            1 for size, _digest, _nodes in duplicates if is_sampled_duplicate(size)
+        )
+        window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
+        sampled_note = (
+            f"  ({sampled_groups:,} over {human_size(3 * DUPLICATE_HASH_CHUNK_BYTES)} matched "
+            f"on first/middle/last {window} only)"
+            if sampled_groups
+            else ""
+        )
 
         ttk.Label(
             win,
@@ -549,6 +550,7 @@ class DuplicatesMixin:
             text=(
                 f"Duplicate files under {self.root_node.path}  —  "
                 f"{len(duplicates):,} groups, potential cleanup: {human_size(total_wasted)}"
+                f"{sampled_note}"
             ),
         ).pack(side=TOP, fill=X)
 
@@ -559,8 +561,8 @@ class DuplicatesMixin:
                 f"Checked: {files_checked:,} files  |  "
                 f"Skipped system files: {files_skipped:,}  |  "
                 f"Skipped size: {human_size(bytes_skipped)}  |  "
-                f"Partial hashed: {partial_hashed:,}  |  "
-                f"Full hashed: {full_hashed:,}"
+                f"Head/tail hashed: {partial_hashed:,}  |  "
+                f"Middle hashed: {middle_hashed:,}"
             ),
             style="Accent.TLabel",
         ).pack(side=TOP, fill=X)
@@ -678,6 +680,11 @@ class DuplicatesMixin:
             keeper = iid_to_node.get(keeper_iid, node)
             if iid == keeper_iid:
                 details_var.set(f"Kept: {keeper_reason(keeper, nodes)}")
+            elif is_sampled_duplicate(node.size):
+                details_var.set(
+                    f"Likely duplicate of the keeper ({keeper.path}): same size and same "
+                    f"first, middle and last {window}; the bytes between weren't compared."
+                )
             else:
                 details_var.set(f"Duplicate of the keeper ({keeper.path}).")
 

@@ -32,7 +32,7 @@ from tkinter import (
 )
 
 from history import get_app_metadata, set_app_metadata, set_budget
-from storage_scanner import turbo_scan
+from storage_scanner import history_retention, turbo_scan
 from storage_scanner.audit import recycle_and_log
 from storage_scanner.csv_to_parquet import compress_csv_to_parquet
 from storage_scanner.csv_to_parquet import default_output_path as default_parquet_path
@@ -56,6 +56,7 @@ from storage_scanner.platform_support import (
     resource_path,
 )
 from storage_scanner.scan_history import drive_capacity_bytes
+from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
@@ -64,6 +65,15 @@ from storage_scanner.settings import COLORS, FONT_MONO_BOLD, heat_color
 # The scan-details strip's second row: what the scan found, as opposed to
 # how it ran. One row of everything outgrew the default window width.
 _SCAN_OUTCOME_FIELDS = ("Unreadable paths", "Result")
+
+# Settings ▸ Keep Every Saved Scan For: (label, stored value).
+_HISTORY_KEEP_ALL_CHOICES = (
+    ("7 days", "7"),
+    ("30 days", "30"),
+    ("90 days", "90"),
+    ("1 year", "365"),
+    ("Forever (never thin out history)", history_retention.KEEP_FOREVER),
+)
 
 
 class MainWindowMixin:
@@ -168,21 +178,45 @@ class MainWindowMixin:
         add_scan_only(self.tools_menu, "Export Results…", self.export_results)
         self._refresh_tools_state()  # no tree yet: scan-only items start greyed out
 
-        # Turbo Scan (NTFS MFT fast path) is Windows-only and off by
-        # default — persisted the same way as the schema_version key, via
-        # history.py's app_metadata table (there's no other settings
-        # storage in this app to reuse).
+        # Settings persist the same way as the schema_version key, via
+        # history.py's app_metadata table (there's no other settings storage
+        # in this app to reuse). Turbo Scan (NTFS MFT fast path) is
+        # Windows-only and off by default.
+        settings_menu = Menu(self.tools_menu, tearoff=0)
         if IS_WINDOWS:
             self.turbo_scan_var = BooleanVar(
                 value=get_app_metadata("turbo_scan_enabled", "0") == "1"
             )
-            settings_menu = Menu(self.tools_menu, tearoff=0)
             settings_menu.add_checkbutton(
                 label="Turbo Scan (Experimental) — NTFS MFT fast path",
                 variable=self.turbo_scan_var,
                 command=self._on_toggle_turbo_scan,
             )
-            self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
+        # How long every saved scan is kept before older history thins out
+        # (storage_scanner.history_retention); applied at the next save.
+        self.history_keep_all_var = StringVar(
+            value=get_app_metadata(
+                history_retention.KEEP_ALL_DAYS_KEY,
+                str(history_retention.DEFAULT_KEEP_ALL_DAYS),
+            )
+        )
+        keep_all_menu = Menu(settings_menu, tearoff=0)
+        for label, value in _HISTORY_KEEP_ALL_CHOICES:
+            keep_all_menu.add_radiobutton(
+                label=label,
+                value=value,
+                variable=self.history_keep_all_var,
+                command=self._on_change_history_keep_all,
+            )
+        settings_menu.add_cascade(label="Keep Every Saved Scan For", menu=keep_all_menu)
+        self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
+
+        # Last, where a Help menu conventionally sits: the first-run guide
+        # (storage_scanner/ui/onboarding_window.py) opens itself once and
+        # tells the user it can be reopened from here.
+        help_menu = Menu(self.tools_menu, tearoff=0)
+        help_menu.add_command(label="Getting Started…", command=self.show_onboarding)
+        self.tools_menu.add_cascade(label="Help", menu=help_menu)
 
         self.top_count_var = StringVar(value="25")
         self.top_count_combo = ttk.Combobox(
@@ -270,7 +304,9 @@ class MainWindowMixin:
 
     def _build_statusbar(self):
         status = ttk.Frame(self.root, padding=(8, 2))
-        status.pack(side=BOTTOM, fill=X)
+        # Packed ahead of the tree, so it and the strips packed after it keep
+        # their height and a small window shrinks the tree instead.
+        status.pack(side=BOTTOM, fill=X, before=self.tree.master)
         self._statusbar_frame = status
         self.status_var = StringVar(value="Pick a drive or folder, then click Scan.")
         ttk.Label(status, textvariable=self.status_var, anchor=W).pack(
@@ -519,6 +555,9 @@ class MainWindowMixin:
     def _on_toggle_turbo_scan(self):
         set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
 
+    def _on_change_history_keep_all(self):
+        set_app_metadata(history_retention.KEEP_ALL_DAYS_KEY, self.history_keep_all_var.get())
+
     # What _ask_turbo_scan_mode returns.
     TURBO_RESTART_AS_ADMIN = "restart"
     TURBO_THIS_SCAN_ONLY = "once"
@@ -671,8 +710,8 @@ class MainWindowMixin:
         self.cancel_btn.config(state="normal")
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
-        self._start_indeterminate_progress()
         self.status_var.set(f"Scanning {target} …")
+        self._scan_progress_start(target)
 
         self.scan_thread = threading.Thread(
             target=self._scan_worker, args=(target, turbo_enabled), daemon=True
@@ -723,8 +762,9 @@ class MainWindowMixin:
         self.elevate_btn.config(state="disabled")
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
-        self._start_indeterminate_progress()
         self.status_var.set(f"Requesting elevated access for {target} … {waiting_suffix}")
+        self._scan_progress_start(target)
+        self._scan_progress_phase(self.PHASE_WAITING_FOR_ELEVATED_SCAN)
 
         self.scan_thread = threading.Thread(
             target=self._elevated_scan_worker_headless, args=(target, run_scan_fn), daemon=True
@@ -749,14 +789,8 @@ class MainWindowMixin:
         try:
             while True:
                 kind, payload = self.progress_q.get_nowait()
-                if kind == "progress":
-                    self.status_var.set(f"Scanning … {payload:,} files counted")
-                elif kind == "status":
-                    self.status_var.set(payload)
-                elif kind == "root":
+                if kind == "root":
                     self._start_live_tree(payload)
-                elif kind == "progress_bytes":
-                    self._live_total_bytes = payload
                 elif kind == "done":
                     node, report = payload
                     self._finish_scan(node, report)
@@ -764,20 +798,25 @@ class MainWindowMixin:
                 elif kind == "error":
                     self._finish_error(payload)
                     return
+                else:
+                    if kind == "walk":
+                        self._live_total_bytes = payload.bytes
+                    self._scan_progress_message(kind, payload)
         except queue.Empty:
             pass
         self._maybe_refresh_live_tree()
+        self._scan_progress_refresh()
         self.root.after(100, self._poll_progress)
 
     # -- History helper functions ------------------------------------------ #
     def _finish_scan(self, node, report=None):
-        self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
             self.elevate_btn.config(state="normal")
 
         if self.cancel_event.is_set():
+            self._scan_progress_end(CANCELLED)
             self.status_var.set("Scan cancelled.")
             self._refresh_tools_state()
             return
@@ -828,14 +867,15 @@ class MainWindowMixin:
             f"{node.file_count:,} files | Saving history..."
         )
 
+        progress_token = self._scan_progress_phase(self.PHASE_SAVING_HISTORY)
         threading.Thread(
             target=self._save_history_worker,
-            args=(node,),
+            args=(node, progress_token),
             daemon=True,
         ).start()
 
     def _finish_error(self, msg):
-        self._stop_progress()
+        self._scan_progress_end(FAILED)
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
@@ -1089,14 +1129,9 @@ class MainWindowMixin:
         self.cancel_event.set()
         self.dup_cancel_event.set()
         self.status_var.set("Cancelling …")
+        self._scan_progress_cancel_requested()
 
-    # -- Helper Methods for Progress Bar ------------------------------------- #
-    def _start_indeterminate_progress(self):
-        """Show an animated progress bar when total work is unknown."""
-        self.progress.config(mode="indeterminate", maximum=100, value=0)
-        self.progress.pack(side=RIGHT, padx=6)
-        self.progress.start(12)
-
+    # -- Status-bar progress bar (duplicate scan; scans use ScanProgressMixin) #
     def _start_determinate_progress(self, maximum):
         """Show a percentage progress bar when total work is known."""
         self.progress.stop()

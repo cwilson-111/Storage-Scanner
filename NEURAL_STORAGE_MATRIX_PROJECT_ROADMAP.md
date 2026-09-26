@@ -77,7 +77,7 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 - Lazy population of child rows so large result trees are not rendered all at once.
 - Percentage bars and heat coloring to make large consumers stand out.
 - Alternating row colors and distinct directory, file, warning, and placeholder treatments.
-- Status messages and indeterminate/determinate progress modes.
+- Status messages, and a live scan progress panel: an overall bar measured against the last scan (or the drive's used space), live counters, the folder being read, and a bar per top-level folder (see "Live scan progress" below).
 - Keyboard shortcuts including F5 to rescan and Delete to recycle a selected item.
 
 ### File operations
@@ -94,12 +94,13 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 - File-type aggregation by extension with total size, percentage, and file count.
 - Duplicate detection using a staged pipeline:
   1. Group candidates by exact file size.
-  2. Hash the first and last portions with BLAKE2b.
-  3. Fully hash only candidates that survive the first two filters.
-  4. Group confirmed matches and rank groups by potential recoverable space.
-- Parallel partial and full hashing.
+  2. Hash the first and last 1 MB with BLAKE2b.
+  3. For survivors larger than 2 MB, hash the middle 1 MB (centered on the file's midpoint). A file over 3 MB is never read in full.
+  4. Group matches on (size, first+last digest, middle digest) and rank groups by potential recoverable space.
+- Tradeoff: files up to 3 MB are fully covered by the three windows, so those matches are byte-exact. Above 3 MB a match is sampled: files identical in size and in those three windows are grouped even if they differ elsewhere. The Duplicate Files window counts such groups and explains each such row; Cleanup Recommendations rates them medium rather than low risk. Window offsets come from the size the scan recorded, so a file whose size has changed since is left out rather than compared on the wrong windows.
+- Parallel head/tail and middle hashing.
 - Default exclusions for sensitive or low-value Windows/system paths.
-- Duplicate-scan statistics for checked, skipped, partially hashed, and fully hashed files.
+- Duplicate-scan statistics for checked, skipped, head/tail-hashed, and middle-hashed files.
 - Multi-selection deletion from duplicate results.
 
 ### Historical intelligence
@@ -265,7 +266,7 @@ Do not market automatic deletion as intelligence. Build explainable recommendati
 
 - Safe candidate: old installer already represented by a newer version.
 - Review candidate: large, old media file with no recent access.
-- Duplicate candidate: exact content match with a clearly identified keeper.
+- Duplicate candidate: content match (byte-exact up to 3 MB, sampled above) with a clearly identified keeper.
 - Protected: operating-system, application, cloud-placeholder, or policy-sensitive content.
 
 Every recommendation should show **why it was flagged**, estimated recoverable space, risk level, dependencies, and proposed action. Default to review queues, Recycle Bin, quarantine, or archive. Never silently delete user content.
@@ -317,12 +318,17 @@ A clear IT-focused edition could support:
 - Audit logs, role separation, and exportable remediation evidence.
 
 This direction aligns especially well with real help-desk and endpoint-management workflows.
+Scheduled headless scans, JSON output and exit codes are already built. The full plan to take
+the rest to thousands of machines, and to add database storage monitoring, is **Phase 5:
+Enterprise scale** under "Recommended delivery sequence" below.
 
 ### 7. Improve the everyday experience
 
 Add saved scan profiles, recent locations, global result search, advanced filters, bookmarks, pinned folders, column presets, and session restoration. Support filtering by size, age, extension, owner, path, attributes, and modified/accessed date. Let users save and combine filters.
 
 Add a first-run explanation of safe deletion, permission limitations, cloud placeholders, and Windows-protected locations. The interface should communicate what is happening instead of merely displaying activity.
+
+**✅ Done: first-run guide.** `storage_scanner/onboarding.py` (the text and the show-once decision, no Tk) and `ui/onboarding_window.py` (the dialog). It opens by itself shortly after the first launch and can be reopened from Tools ▸ Help ▸ Getting Started…. Closing it by any route records `onboarding_seen` in `history.py`'s `app_metadata` table. If that table can't be read, the guide shows again rather than staying hidden. It has four sections, worded for the running OS (and for whether the app is already elevated), each describing what the code actually does: safe deletion (Recycle Bin/Trash, Audit Log, the protected duplicate keeper), permission limits (⚠ folders, Run as Admin), cloud placeholders (recognized only on Windows, where Find Duplicate Files skips them), and protected locations (skipped by Find Duplicate Files and listed as Protected in Cleanup Recommendations, but not checked by Delete in the main tree or in Search & Filter).
 
 ### 8. Add cloud-awareness without causing hydration
 
@@ -392,8 +398,8 @@ To actually fix it:
   `build.yml` on purpose: a CodeQL queue backlog must never hold up
   shipping a binary. Verified locally: `pip-audit --strict -r
   requirements-dev.txt` → "No known vulnerabilities found"; `gitleaks git`
-  → "34 commits scanned … no leaks found". CodeQL itself only runs on
-  GitHub, so it is unverified until the next push.
+  → "34 commits scanned … no leaks found". CodeQL ran green on GitHub on
+  the next push (`80220b7`), along with the rest of the security workflow.
 - ✅ Add reproducible build notes — `BUILD_PROVENANCE.md`, including an
   explicit "this is *not* a reproducible build" section.
 - ✅ Publish a privacy statement stating that scanning is local unless the user opts into remote features.
@@ -438,14 +444,57 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
   typed `Optional[str]` instead of `str = None`, and loose `tuple`
   annotations for the per-platform font specs and duplicate-exclude lists,
   whose branches have different shapes.
-- **Coverage** is enforced by `--cov-fail-under` in `pyproject.toml`. A full
-  macOS run measures 49% *with* those 36 Windows tests failing; the floor is
-  deliberately set below that at 45% and should be raised to just under
-  whatever the first green Windows CI run reports.
+- **Coverage** is enforced by `--cov-fail-under` in `pyproject.toml`. The
+  floor started at 45% (a macOS run measured 49% with the 36 Windows-only
+  tests failing), then went up to 49% (2026-09-24) after a full Windows run
+  — 430 passed, 2 platform skips — measured 49.7%. The UI modules
+  (`ui/main_window.py`, `ui/history_window.py` and the other Tk windows) are
+  most of the uncovered code.
+- **mypy with matplotlib installed.** `history.py`'s optional-import
+  fallback (`plt = None`) failed mypy whenever matplotlib was actually
+  installed; CI only passed because its runner doesn't install it. Fixed
+  with a scoped `type: ignore[assignment]`.
 
-Generated test trees for cross-version benchmarking are done too (2026-09-24):
-`benchmarks/scale.py`, gated in CI. See "Scale benchmarks and folder rescans
-from the cache" at the end.
+Generated test trees for cross-version benchmarking are done (2026-09-24),
+as two complementary tools:
+
+- `benchmarks/scale.py`, gated in CI, builds synthetic volumes to measure
+  how memory, the history database, the Turbo cache and folder rescans grow
+  with file count. See "Scale benchmarks and folder rescans from the cache"
+  at the end.
+- `benchmarks/scan.py` (with the tree generator and checker in
+  `benchmarks/generated_tree.py`) checks on-disk correctness on edge cases
+  and times real scans, as described below.
+
+**`benchmarks/scan.py`: on-disk edge-case correctness and timing.**
+`benchmarks/scan.py` builds a folder tree from a seed (`small`/`medium`/`large`
+profiles, about 2k/20k/100k files), so the same seed always produces the same
+files, names and sizes. The tree includes a random nested tree, empty folders, a
+deep chain, hard links, a symlink and a junction pointing at a folder with files
+in it, and Unicode, space, leading-dot and 100-character names. The script
+scans the tree with the Compatible engine and checks the scan against what it
+generated: totals, folder count, hard-link duplicates, per-top-level-folder
+rollups, and that each link stayed a leaf. It then times several warm-cache
+scans and measures peak memory in a separate tracemalloc run. `--output`
+writes a JSON result stamped with the app version and git revision.
+`--baseline` compares against an earlier result. It refuses a file that isn't
+a usable result, or one from a different profile/seed, before generating
+anything, and one from a different tree after the run. It warns when the
+machine or Python differs, and exits 3 when the median is more than
+`--max-slowdown` (default 25%) slower.
+
+- `tests/test_benchmark_scan.py` runs the real scanner against a small
+  generated tree on every CI run, so the same checks gate releases.
+  Recreating the old Windows hard-link dedup bug (fixed in `0b955bc`) in a
+  throwaway run was caught: `hardlinks/ size: scanned 199922, expected
+  99961`.
+- First measurements on this dev machine (Windows, Python 3.13, not
+  elevated, so the symlinks were skipped and only the junction was created):
+  `medium`, 20,213 files and 2,069 folders, median 0.82 s (about 24.5k
+  files/s), 12.3 MiB peak traced memory. `small`, 0.08 s and 1.2 MiB.
+- Turbo Scan isn't covered: it reads the whole volume rather than the
+  generated folder and needs elevation. `compare_scan_engines.py` remains
+  its correctness check.
 
 **Packaging smoke tests are done (2026-09-23).** `smoke_test_build.py` launches
 the real frozen binary in headless `--cli --save-history` mode against a small
@@ -459,7 +508,7 @@ the binary from the CI shell because PowerShell doesn't wait for a windowed
 `.exe`, so a direct call would always pass. Verified locally against a real
 PyInstaller build of the `.exe` (passes in about 15 s), and against a
 non-app binary and a missing one (both fail, exit 1). The macOS and Linux
-steps haven't run yet; they run on the next push to `main`.
+steps have since run green too (`build-macos`/`build-linux` on `80220b7`).
 
 ## Recommended delivery sequence
 
@@ -469,7 +518,7 @@ steps haven't run yet; they run on the next push to `main`.
 2. ✅ Move the database and logs to `%LOCALAPPDATA%` (and macOS's `~/Library/Application Support`).
 3. ✅ Fix growth-report bugs and missing-data handling.
 4. ✅ Refactor the code into modules (`storage_scanner/` package, 8 mixins under `ui/`).
-5. ✅ Add unit tests (432 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release.
+5. ✅ Add unit tests (544 and counting), and `build.yml` runs them — plus `ruff`, `black --check` and `mypy`, with a coverage floor — in a `test` job the release build depends on; see Status update above and item 10. Every build job also smoke-tests the packaged binary before release, and `benchmarks/scan.py` checks the scanner against generated trees across versions.
 6. ✅ Add structured logging and crash diagnostics (`logging_setup.py`).
 
 ### Phase 2: Competitive core — ✅ done
@@ -493,9 +542,232 @@ steps haven't run yet; they run on the next push to `main`.
 1. ❌ Sign the executable and installer — needs a purchased code-signing certificate; not something that can be built without one.
 2. 🚧 Produce an installer plus portable ZIP — portable ZIP done; no MSI/installer built.
 3. ✅ Publish SHA-256 checksums and an SBOM.
-4. ❌ Create polished onboarding, documentation, screenshots, and benchmark results — not started.
+4. 🚧 Create polished onboarding, documentation, screenshots, and benchmark results — onboarding done (the first-run guide; see item 7 above) and benchmark tooling done (`benchmarks/scan.py`, see item 10); no published benchmark results or screenshots yet.
 5. 🚧 Add an update checker that verifies signatures before installation — the update checker exists (version check + dismissible notice, no auto-download/auto-run), but there's nothing signed yet for it to verify.
 6. ✅ Ship packaged macOS (`.dmg`) and Linux builds — see item 9a above; v1.5.0 ships all three platforms.
+
+### Phase 5: Enterprise scale — fleet and database storage monitoring — 📋 planned
+
+**Goal:** one console that shows storage across thousands of computers
+*and* the databases running on them: what's filling up, how fast, when it
+will run out, and why. It alerts before an outage and turns cleanup into
+an approved, audited action. The desktop app stays free and local-first;
+the fleet parts are separate components that reuse its engine.
+
+**Ground rules**, carried over from the desktop app:
+
+- **Read-only by default.** Agents and database connectors observe; nothing
+  is deleted or changed without an explicit, approved, audited remediation
+  (E6).
+- **Least privilege.** Agents run as a service account that can read
+  metadata, not file contents. Database connectors use monitoring roles
+  that can't read table data.
+- **Summaries, not trees.** A machine sends folder roll-ups, top files and
+  file-type totals, never its full file list. That keeps payloads small and
+  limits what a central server knows.
+- **Uncertainty shown, never hidden.** Forecasts keep their ranges and
+  confidence levels at fleet scale too.
+
+**Already built** (the reason this is realistic): headless `--cli` with
+JSON/CSV output and exit codes; `--save-history`, scheduling, budgets and
+`--notify`; Turbo Scan with USN-journal incremental refresh and
+folder-only rescans; forecasting with confidence levels; anomaly detection;
+an audit log; and `benchmarks/scale.py` gated in CI.
+
+```mermaid
+flowchart LR
+    subgraph Endpoints
+        A1[Agent<br/>Windows service]
+        A2[Agent<br/>macOS / Linux daemon]
+        DB[(SQL Server / Postgres /<br/>MySQL / Oracle / Mongo)]
+        A1 -- read-only monitor role --> DB
+    end
+    A1 -- "HTTPS + device cert<br/>compressed summaries" --> I[Ingest API]
+    A2 --> I
+    I --> Q[[Queue]]
+    Q --> W[Workers:<br/>rollups, forecasts,<br/>anomalies, alert rules]
+    W --> S[(Time-series store<br/>Postgres + TimescaleDB)]
+    S --> C[Web console + API]
+    W --> N[Alerts: email, Teams/Slack,<br/>PagerDuty, ServiceNow/Jira]
+    C -- approved remediation plans --> A1
+```
+
+#### E1 — Agent (headless, managed)
+
+- A service/daemon wrapping today's scan engine: a Windows Service,
+  launchd on macOS, systemd on Linux. It replaces per-user Task Scheduler
+  and cron entries.
+- **Central policy file:** which volumes and paths to scan and how often,
+  exclusions, how much history to keep locally, and the CPU/IO limits
+  below. Pushed from the console, with a local file as fallback.
+- **Incremental by default:** on NTFS, Turbo Scan's USN refresh plus
+  folder-only rescans, so a daily scan of a mostly unchanged drive costs
+  seconds. Compatible scan elsewhere.
+- **Small, low-impact scans:** low IO priority, a CPU cap, allowed time
+  windows, and pausing on battery or when the user is active.
+- **Payload:** folder roll-ups at or above a threshold, top-N files,
+  file-type totals and volume capacity, and only folders that changed
+  since the last upload. Measured: about 1,100 folder rows per scan on a
+  real machine, about 100 bytes per row. That's about 110 KB raw per full
+  scan and much less as a delta.
+- **Offline queue** for laptops: store and forward, with idempotent upload
+  IDs so retries never double-count.
+- **Heartbeat and self-health:** version, last scan, errors, unreadable
+  path count (the scan details strip, fleet-wide).
+- **Deployment:** MSI for Intune, GPO and SCCM; a signed `.pkg` for Jamf;
+  `.deb`/`.rpm` for Linux. Auto-update that verifies the signature before
+  installing. Blocked on the code-signing certificate (Phase 4), which
+  becomes mandatory at this stage.
+
+#### E2 — Central ingest and storage
+
+- **Ingest API:** HTTPS with mutual TLS or per-device certificates issued
+  at enrollment. Schema-versioned payloads, rate limits, and backpressure
+  through a queue so a Monday-morning burst doesn't drop data.
+- **Store:** PostgreSQL with TimescaleDB. Hypertables partitioned by time,
+  native compression for old chunks, and continuous aggregates (daily,
+  weekly, monthly) so dashboards never scan raw rows. ClickHouse is the
+  alternative if query volume outgrows it.
+- **Data model:** tenant → site/group → machine → volume → scan →
+  folder_snapshot. Folder paths are stored once in a path dictionary and
+  referenced by id (the same fix planned for local history). Databases fit
+  the same model (E3): instance → database → schema/table.
+- **Sizing math, and why retention matters:** 10,000 machines × 1 scan a day
+  × ~1,100 rows ≈ 11 million rows a day, or about 4 billion a year raw. Two
+  things keep that manageable:
+  1. **Delta storage:** only changed folders get a row; unchanged ones carry
+     forward.
+  2. **Downsampling:** raw rows for 30 days, daily for a year, weekly
+     after that.
+
+  Both must be in place before the first large pilot.
+- **Multi-tenancy** for managed service providers: tenant isolation at
+  the schema or row level, and per-tenant retention and encryption keys.
+
+#### E3 — Database storage monitoring
+
+A connector framework in the agent (or on a central poller, for managed
+or cloud databases). Each connector reads **catalog and statistics views
+only**, never table data.
+
+| Engine | Reads (read-only) | Minimum role |
+|---|---|---|
+| SQL Server | `sys.master_files`, `sys.dm_db_file_space_usage`, `sys.dm_db_log_space_usage`, `sys.dm_db_partition_stats` | `VIEW SERVER STATE` + `VIEW ANY DEFINITION` |
+| PostgreSQL | `pg_database_size`, `pg_total_relation_size`, `pg_stat_user_tables` (dead tuples → bloat), `pg_ls_waldir()` | `pg_monitor` |
+| MySQL / MariaDB | `information_schema.TABLES` (data, index, `DATA_FREE`), `SHOW BINARY LOGS`; or, from a local agent, the `.ibd` file sizes in the data directory | `REPLICATION CLIENT` for binary logs. `TABLES` only lists tables the account holds a privilege on, so the least-privilege route is the local file sizes |
+| Oracle | `DBA_DATA_FILES`, `DBA_SEGMENTS`, `DBA_FREE_SPACE`, `V$RECOVERY_FILE_DEST` | `SELECT_CATALOG_ROLE` |
+| MongoDB | `dbStats`, `collStats` | `clusterMonitor` |
+| SQLite / file-based | file size plus page/freelist counts | file read |
+
+- **What it tracks:** data vs. index vs. log vs. free/reclaimable space;
+  per-database and per-table growth; data files approaching their
+  autogrowth limit or the disk they sit on; top tables by growth; and
+  bloat or reclaimable space (Postgres dead tuples, MySQL `DATA_FREE`).
+- **Database-specific alerts:**
+  - A transaction log that keeps growing because it never truncates,
+    usually a failing log backup.
+  - WAL piling up behind a stalled replication slot.
+  - A table that grew 10× overnight.
+  - A data file that hits its maximum size before the disk fills.
+- **Correlation:** show a database's files next to the disk they live on,
+  so "D: fills in 12 days" and "the Sales DB log grows 8 GB a day" appear
+  as one finding, not two.
+- **Secrets:** credentials live in the OS vault (Windows Credential
+  Manager, macOS Keychain, libsecret) or a central store (Azure Key Vault,
+  HashiCorp Vault). They are never kept in the policy file or logs.
+
+#### E4 — Console, alerting and reporting
+
+- **Fleet dashboard:** fullest volumes, fastest growers, soonest to fill
+  (forecast range plus confidence), unhealthy agents, and database hot
+  spots. Drill down from fleet to site to machine to folder, or to
+  instance, database and table.
+- **Alert rules** generalize today's budgets:
+  - % full;
+  - bytes free;
+  - days until full below N, only above a minimum confidence;
+  - growth anomaly;
+  - database-specific rules (E3).
+
+  With deduplication, quiet hours and escalation.
+- **Integrations:** email, Teams/Slack webhooks, PagerDuty/Opsgenie,
+  ServiceNow/Jira ticket creation, and a REST API plus a PowerShell module
+  for scripting.
+- **Reports:** scheduled CSV, JSON, HTML and PDF (capacity planning,
+  top growers, reclaimable space), and machine-to-machine comparisons.
+
+#### E5 — Security and compliance
+
+- **Identity:** SSO through OIDC/SAML (Entra ID, Okta, Google). RBAC
+  roles (viewer, operator, approver, admin) scoped by site or group.
+- **Audit trail** for every login, policy change, alert acknowledgement
+  and remediation. Exportable as evidence (extends today's local audit
+  log).
+- **Data minimization:** an option to hash or truncate user-profile paths,
+  and to exclude paths entirely. Per-tenant retention; encryption in
+  transit (TLS 1.2+) and at rest.
+- **Trust:** signed binaries (Phase 4), the SBOM and checksums already
+  published, dependency and secret scanning already in CI, an external
+  penetration test before general availability, and SOC 2 readiness if
+  sold as a hosted service.
+
+#### E6 — Approved remote remediation (opt-in)
+
+- The console builds a **cleanup plan** from the review-first
+  recommendations the desktop app already makes: duplicates with a
+  protected keeper, old installers, orphaned install folders, and
+  cache/temp folders.
+- **Checks before anything runs:**
+  - a dry run on the agent;
+  - approval by a second person for anything above a size or risk
+    threshold;
+  - execution only to the Recycle Bin/Trash or a quarantine, never a
+    permanent delete;
+  - `audit.check_stale` refusing any file that changed since the plan was
+    built;
+  - a full audit record of every item.
+- **Databases stay alert-only.** No automatic shrink, purge or truncate.
+  At most a suggested, reviewed runbook step.
+
+#### How scale gets proven (extends `benchmarks/scale.py`)
+
+- **Agent:** payload bytes per scan, incremental scan time and peak memory
+  on a 1M-file volume; gated in CI like today's metrics.
+- **Ingest:** a load test replaying synthetic agents at 1k, 10k and 50k
+  machines. Target: at least 10,000 uploads a minute sustained with p95
+  ingest under 1 s.
+- **Queries:** dashboard p95 under 2 s over a year of downsampled data for
+  10,000 machines.
+- **Before the first pilot, the in-memory tree must get smaller** (394
+  bytes per file today, measured). That's the compact-tree step of the
+  scale plan, so a 10M-file server volume fits in an agent's memory
+  budget.
+
+#### Suggested order and exit criteria
+
+| Step | Delivers | Done when |
+|---|---|---|
+| E0 | Local history retention and compact schema (✅ 2026-09-25); compact in-memory tree; code signing | Benchmarks show bounded history growth (✅ 145 scans kept of 800 daily) and < 150 bytes per file; signed builds ship |
+| E1 | Agent service, policy file, delta payloads, offline queue, MSI/pkg | 100-machine internal pilot runs 30 days with no data loss |
+| E2 | Ingest API, Timescale store, retention and downsampling | Load test passes at 10k synthetic machines |
+| E3 | SQL Server + PostgreSQL connectors first, then MySQL, Oracle, Mongo | Log-growth and bloat alerts fire correctly against test instances |
+| E4 | Console, alert rules, integrations, reports | A pilot customer's on-call team runs on it for a quarter |
+| E5 | SSO, RBAC, audit export, pen test | Findings closed; audit export accepted by a compliance reviewer |
+| E6 | Approved remote remediation | 0 irreversible actions; every action traceable end to end |
+
+**Risks to decide early:**
+
+1. **Path privacy:** user folder names can be sensitive, so decide the
+   default hashing policy before the first pilot.
+2. **Agent impact on laptops:** it must be invisible, or it gets
+   uninstalled.
+3. **Cloud placeholders:** OneDrive "online-only" files must never be
+   downloaded by a scan (already handled locally; must stay true in the
+   agent).
+4. **Database permissions:** some DBAs won't grant server-level views, so
+   each connector must degrade gracefully to what it can see.
+5. **Hosted vs. self-hosted:** self-hosted first fits the local-first
+   promise and avoids running customers' data.
 
 ## Product positioning
 
@@ -778,6 +1050,20 @@ rescan: in this checkout before the change, and against a checkout of the
 previous commit. Timings are local and indicative only; the sizes and
 record counts are exact.
 
+**At 1,000,000 files / 20,000 folders** (same benchmark, `--files 1000000`):
+
+| | Before | After |
+|---|---|---|
+| Cache bytes per record | 405.3 | **130.3** |
+| Records loaded to rescan one 50-file folder | 1,020,001 | **51** |
+| One-folder rescan time | 11.5 s | **0.004 s** |
+| Whole-volume rescan time | 11.4 s | **10.6 s** |
+| Peak memory (turbo scenario) | 1.78 GB | **1.19 GB** |
+
+The same 1M run exposed the next bottleneck: saving one scan to history
+took 38 s at 20,001 folder rows, and each of the 30 scheduled scans stored
+2.5 MB. Fixed in the next section.
+
 Verified: `test_turbo_cache.py` covers the round trip of every field,
 subtree-only loading, reparse-point expansion, case-insensitive path lookup
 that stops at files and links, rename and delete, old-cache migration and
@@ -788,6 +1074,187 @@ incremental, with the on-disk spelling and the same contents as a full read.
 **Not verified:** a Turbo Scan on real hardware with the new cache (needs
 admin rights and a UAC prompt).
 
-Next in the plan: history retention and a compact schema, then a compact
-in-memory tree (the benchmark's `tree_bytes_per_file` is the number to
-move).
+## History retention and a compact schema — ✅ done (2026-09-25)
+
+Second step of the scale plan, and E0's "bounded history growth".
+
+**What was slow.** Not the save itself: one transaction, 0.17 s for 20,001
+folder rows. The time went into the comparison `record_scan` runs right
+after it, against the previous scan. That joined the two scans' rows on
+folder path text with only single-column indexes, and SQLite compared
+every folder of one scan with every folder of the other: about 120,000
+VM steps per folder row, 69–77 s on this machine (the 38 s above was an
+earlier run). And nothing was ever deleted: each row repeated the full
+path and the scan's `created_at`, so a 20k-folder scan added 2.45 MB,
+forever.
+
+**Compact schema** (version 2, `storage_scanner/history_schema.py`):
+
+- `folder_paths(id, path UNIQUE)` stores each folder path once.
+- `folder_snapshots(scan_id, path_id, size_bytes, file_count)` is a
+  `WITHOUT ROWID` table keyed `(scan_id, path_id)`. One scan's rows are one
+  primary-key range, and "the same folder in the previous scan" is a
+  primary-key lookup on two integers. `created_at` lives on `scans` only.
+- Growth joins on those integers. Equal growth is now ordered by path; it
+  used to be arbitrary.
+- A save stages its folders in a temp table, adds new paths, then inserts
+  its rows with one join, in path-id order.
+- **Migration:** `init_history_db()` does it once, automatically, in one
+  `BEGIN IMMEDIATE` transaction, from `app_metadata`'s `schema_version`
+  (1 → 2). A database from before `app_metadata` is recognised by its
+  `folder_path` column. A failure rolls back to the untouched version 1
+  tables. Rows of scans that no longer exist are dropped. A one-off
+  `VACUUM` afterwards gives back the old layout's pages.
+
+**Retention** (`storage_scanner/history_retention.py`), per scan path, in
+the same transaction as each save:
+
+- every scan from the last 30 days is kept;
+- older ones keep the newest scan of each day until 90 days old, of each
+  ISO week until a year, of each month until two years, then of each year;
+- a path's first scan is always kept.
+
+Keeping the newest of each bucket means the scan a new save is compared
+with is never the one pruned. Folder paths that no kept scan uses any more
+are deleted too: only the pruned scans' paths that the new scan doesn't
+have are checked, with one primary-key probe per kept scan. The window is
+`app_metadata` key `history_keep_all_days` (days, or `forever` to never
+thin), set from Tools ▸ Settings ▸ Keep Every Saved Scan For. The Settings
+menu now shows on every OS, not just Windows. There's no routine `VACUUM`:
+in steady state each prune frees about what the next save needs, and
+SQLite reuses free pages.
+
+**What forecasting and anomaly detection needed.** The forecast fits
+every kept point. Thinning leaves its line where it was, and keeping the
+first scan keeps the time span its confidence depends on. Anomaly
+detection compared raw scan-to-scan changes, so on a thinned history a
+month-long gap looked like a spike: a test reproduces the old detector
+flagging five week- and month-long gaps in a thinned 500-day history. It
+now judges growth per day, a k-day gap counting as k days of growth with
+k days of variance. With evenly spaced scans that's exactly the old
+z-score, and gaps under a day still count as one day.
+
+**Benchmarks.** Two new `benchmarks/scale.py` scenarios, every new metric
+gated. `history_20k` saves a 20,001-folder scan twice and compares them,
+whatever `--files` is. It's gated on SQLite VM steps per folder row
+(counted with a progress handler), because the regression to catch is a
+slow query and step counts repeat where timings don't: identical on SQLite
+3.45.1, 3.45.3 and 3.50.4. `history_retention` saves daily for 800 days on
+a simulated clock. The history scenarios moved to `scale_history.py` and
+the synthetic volume to `scale_volume.py`, keeping each file under 500
+lines.
+
+| | Before | After |
+|---|---|---|
+| Comparing two 20,001-folder scans | 68.8–77.0 s | **0.02–0.03 s** |
+| VM steps per folder row for that comparison | 120,025 | **21.8** |
+| Saving a 20,001-folder scan | 0.17–0.24 s | **0.08–0.13 s** |
+| Bytes added by each further 20k-folder scan | 2,451,456 | **~368,000** (plus 1.66 MB once for the paths) |
+| History bytes per scan (CI volume: 401 rows, 30 scans) | 40,960 | **10,103** |
+| After 800 daily scans (401 rows each): scans kept | 800 | **145** |
+| ...database size | 32,964,608 | **1,335,296** |
+| Migrating 60 scans × 20,001 folders (1.2M rows) | — | **4.9 s**, 149.2 MB → 20.9 MB |
+
+"Before" is the previous commit running the same scenarios; timings are
+local and indicative, sizes and counts exact.
+
+**On a copy of this machine's real history** (23 scans, 25,846 folder
+rows, 6.2 MB; read-only copy, the original untouched): migration took
+0.16 s including the `VACUUM`. Scans, folder rows (25,846) and distinct
+paths (2,846) are the same before and after; the file went from 6,180,864
+to 1,011,712 bytes. `get_scan_history`, `list_scans_for_path`,
+`get_scan_ids_by_created_at`, `get_latest_scan_snapshot` and the forecast
+return the same as the old code on the unmigrated copy, and the complete
+growth of all 17 consecutive scan pairs (23,197 rows) is identical. The
+top-50 lists differ only in which unchanged folders fill the last places,
+which used to be arbitrary. The same two anomalies are flagged on `C:\`,
+at z = ±3.47 instead of ±3.62. Nothing would be pruned yet; after 30 days
+the twelve test scans taken within 40 minutes on 2026-09-17 thin to the
+last one.
+
+Verified: `test_history_migration.py` migrates version 1 databases built
+from the literal old DDL (with and without `app_metadata`), reproducing the
+old growth query's results; a second start changes nothing; a failed
+migration leaves version 1 as it was; the file shrinks.
+`test_history_retention.py` checks every tier boundary to the second, the
+first-scan rule, the setting, path cleanup, other paths untouched, growth
+after a pruning save, and anomalies and forecast on thinned vs. full
+history. `test_history.py` covers growth for new, grown, unchanged, shrunk
+and deleted folders and the tie order under a limit. The CLI
+(`--cli <folder> --save-history`) run twice against a temporary app-data
+folder reported the new folder and the growth, and the real main window
+wrote and restored the setting from its menu. **Not verified:** macOS or
+Linux (CI tests Windows only).
+
+Next in the plan: a compact in-memory tree (the benchmark's
+`tree_bytes_per_file` is the number to move).
+
+## Live scan progress — ✅ done (2026-09-25)
+
+Reported: a scan "feels stuck". Measured first, by running the real app on
+`C:\Windows` (175,932 files, 27.2 GB) and on a user profile (818,460 files,
+827 GB) and sampling what the window showed every 50 ms:
+
+- The only progress was a "N files counted" status line and an animated
+  bar with no total: no percentage, no current folder, nothing per folder.
+- **One big folder froze the count for seconds at a time.** A directory was
+  counted only after it was fully listed and stat-ed, so
+  `C:\Windows\WinSxS\Manifests` (35,822 files: 8.4 s just to enumerate,
+  then ~0.28 ms per `os.stat`) left the count stuck for up to 6.7 s, crawled
+  from 129k to 140k over 30 s, then jumped by 35,822 at the very end.
+- **The window itself stalled** for 0.25–1.3 s at a time during scans
+  (12 stalls over 250 ms on `C:\Windows`, up to 1.3 s on the profile): every
+  directory posted two queue messages and each one set the status text.
+- Silent steps: the final roll-up, "Saving history..." with the bar already
+  stopped (38 s at 20k folder rows in the scale benchmark), and in Turbo
+  Scan everything after the MFT read — building the tree, writing the cache
+  (the elevated helper also relayed only a bare number, so its cache and
+  journal steps never reached the window), reading its result back.
+
+**What changed:**
+
+- `storage_scanner/scan_progress.py`: the Compatible engine keeps running
+  totals per top-level folder (queued → scanning → done, done only once its
+  whole subtree is read) in a thread-safe `WalkTracker`, and a reporter
+  thread posts a snapshot ten times a second instead of two messages per
+  directory. A directory reports every 1,000 entries while it's still being
+  read, and is iterated as the listing arrives instead of `list()`-ed
+  first, so a huge folder keeps the counts moving. The snapshot also names
+  the folder that has been read the longest, with its time and item count.
+- Turbo Scan posts named steps with counts: MFT records read out of the
+  total (known up front), journal changes applied out of the total, and
+  the cache save, tree build, journal read and result load as their own
+  steps. The elevated helper's progress file now carries the whole step as
+  JSON, so the helper path shows exactly what the in-process path does.
+- `storage_scanner/scan_progress_model.py` (no Tk, fully tested) turns
+  those into what's shown. The overall bar is measured against the last
+  scan of the same path (files, from scan history), else the drive's used
+  space for a volume root, else it animates with live counters; it never
+  fills on an estimate alone (capped at 99%). Folder bars fill against each
+  folder's file count in the last scan, or against the busiest folder so
+  far. The estimate is read from history on a background thread through
+  `get_folder_growth(scan, None)`, so it doesn't depend on the table layout.
+- `storage_scanner/ui/scan_progress_panel.py` (`ScanProgressMixin`): the
+  panel above the status bar, refreshed on the existing 100 ms poll, only
+  redrawing what changed. It stays up, animated, through "Saving history",
+  and cancel freezes it where it was. The status bar is now packed ahead of
+  the tree so a small window shrinks the tree, not the panel.
+
+**Result**, same machine: on `C:\Windows` with an estimate, the bar went
+15% → 97% steadily and the file count, size or percentage never stood
+still longer than 0.6 s (the WinSxS\Manifests stretch now shows e.g.
+"43 s in this folder, 34,000 items so far"); UI stalls over 250 ms dropped
+from 12 to 2 (0.25 s each). Scan time, engine only, interleaved runs on
+the same folder: `C:\Program Files` (49,342 files, 7 runs each) median
+6.42 s before, 5.52 s after (the queue now carries ~55 messages per scan
+instead of ~7,900); `benchmarks/scan.py --profile medium` 2.345 s before,
+2.383 s after (+1.6%, inside its own 2.19–2.91 s run-to-run spread).
+
+Verified: `tests/test_scan_progress.py` (per-folder accounting, a subfolder
+found mid-listing can't finish its folder early, the aggregate past 200
+folders, the final snapshot equals the rolled-up tree, cancel) and
+`tests/test_scan_progress_model.py` (estimate choice, bar clamping, folder
+bars, cancelled/failed/finished states), plus the Turbo step tests in
+`test_turbo_read.py` and the helper relay tests. **Not verified:** a real
+Turbo Scan (needs admin rights and a UAC prompt); its panel was exercised
+in the real window against a simulated 400,000-record MFT.

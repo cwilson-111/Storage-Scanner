@@ -1,18 +1,20 @@
 """Size-based anomaly detection over a path's scan history.
 
-Flags a scan-to-scan change in total size that's a statistical outlier
-relative to that path's own typical growth/shrink pattern — a sudden spike
-(much faster growth than usual) or a sudden drop (much larger shrink than
-usual, shaped like a mass deletion). This works on data already stored by
-every scan (history.get_scan_history); no new tables needed.
+Flags a scan-to-scan change in total size (judged as growth per day, see
+_z_score) that's a statistical outlier relative to that path's own typical
+growth/shrink pattern — a sudden spike (much faster growth than usual) or a
+sudden drop (much larger shrink than usual, shaped like a mass deletion).
+This works on data already stored by every scan (history.get_scan_history);
+no new tables needed.
 
 This is a lead worth checking, the same way Review-candidate recommendations
 are — not a verified diagnosis. A z-score outlier is exactly that: unusual
 *for this folder*, not proof of anything in particular.
 """
 
-import statistics
+import math
 from collections import namedtuple
+from datetime import datetime, timedelta
 
 from storage_scanner.formatting import human_size
 
@@ -26,8 +28,40 @@ Anomaly = namedtuple(
 
 
 def _deltas(history):
-    """[(created_at, delta_bytes), ...] between consecutive scans."""
-    return [(history[i][0], history[i][1] - history[i - 1][1]) for i in range(1, len(history))]
+    """[(created_at, delta_bytes, days), ...] between consecutive scans,
+    `days` being the gap between them -- at least 1, so scans taken hours
+    apart count as one day's change, as they always have."""
+    deltas = []
+    for previous, current in zip(history, history[1:]):
+        elapsed = datetime.fromisoformat(current[0]) - datetime.fromisoformat(previous[0])
+        deltas.append((current[0], current[1] - previous[1], max(elapsed / timedelta(days=1), 1.0)))
+    return deltas
+
+
+def _z_score(delta, days, others):
+    """How unusual `delta` over `days` is next to the (delta, days) pairs in
+    `others`, which can span different gaps.
+
+    Scans kept by history retention (storage_scanner.history_retention) are
+    further apart the older they are -- days, then weeks, then months -- so
+    a change is judged as growth per day, and a k-day change counts as k
+    days of it: its expected size is k times the usual daily rate, and its
+    spread k times a day's variance. A month of ordinary growth is then no
+    spike next to a day of it, and a week's averaged-out growth doesn't
+    make one day's ordinary noise look like an outlier either. When every
+    gap is the same length this is exactly the plain z-score of the deltas.
+
+    None for a perfectly steady baseline that `delta` matches; +/-inf for
+    one it doesn't (no variance to divide by: any deviation is the signal).
+    """
+    rate = sum(d for d, _k in others) / sum(k for _d, k in others)
+    day_variance = sum((d / k - rate) ** 2 * k for d, k in others) / (len(others) - 1)
+    residual = delta / days - rate
+    if day_variance == 0:
+        if residual == 0:
+            return None
+        return math.copysign(math.inf, residual)
+    return residual * math.sqrt(days / day_variance)
 
 
 def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
@@ -52,27 +86,12 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
     if len(deltas) < MIN_DELTAS_FOR_BASELINE:
         return []
 
-    values = [d for _created_at, d in deltas]
-
     anomalies = []
-    for index, (created_at, delta) in enumerate(deltas):
-        others = values[:index] + values[index + 1 :]
-        baseline_mean = statistics.mean(others)
-        try:
-            baseline_stdev = statistics.stdev(others)
-        except statistics.StatisticsError:
-            baseline_stdev = 0.0
-
-        if baseline_stdev == 0:
-            # A perfectly steady baseline with no variance to divide by —
-            # any deviation at all from it is the anomaly signal here.
-            if delta == baseline_mean:
-                continue
-            z = float("inf") if delta > baseline_mean else float("-inf")
-        else:
-            z = (delta - baseline_mean) / baseline_stdev
-            if abs(z) < z_threshold:
-                continue
+    for index, (created_at, delta, days) in enumerate(deltas):
+        others = [(d, k) for _c, d, k in deltas[:index] + deltas[index + 1 :]]
+        z = _z_score(delta, days, others)
+        if z is None or abs(z) < z_threshold:
+            continue
 
         score_text = (
             "far outside its usual pattern"

@@ -122,6 +122,47 @@ def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path,
     assert mapping == {"2024-01-01T00:00:00": 1, "2024-02-01T00:00:00": 2}
 
 
+def test_a_limited_scan_history_is_the_newest_scans_oldest_first(tmp_path, monkeypatch):
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+    conn = sqlite3.connect(db_path)
+    for total_size, created_at in [
+        (100, "2024-01-01T00:00:00"),
+        (200, "2024-02-01T00:00:00"),
+        (300, "2024-03-01T00:00:00"),
+        (350, "2024-03-01T00:00:00"),  # saved in the same second as the one before
+        (400, "2024-04-01T00:00:00"),
+    ]:
+        conn.execute(
+            "INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, "
+            "folder_count, created_at) VALUES ('C:/Example', ?, 1000, 10, 3, ?)",
+            (total_size, created_at),
+        )
+    conn.execute(
+        "INSERT INTO scans (scan_path, total_size, drive_capacity, file_count, "
+        "folder_count, created_at) VALUES ('C:/Other', 999, 1000, 10, 3, '2024-05-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    rows = history.get_scan_history("C:/Example", limit=2)
+    ids = history.get_scan_ids_by_created_at("C:/Example", limit=2)
+
+    assert [(created_at, size) for created_at, size, _files, _folders in rows] == [
+        ("2024-03-01T00:00:00", 350),
+        ("2024-04-01T00:00:00", 400),
+    ]
+    assert ids == {"2024-03-01T00:00:00": 4, "2024-04-01T00:00:00": 5}
+    assert [row[1] for row in history.get_scan_history("C:/Example", limit=10)] == [
+        100,
+        200,
+        300,
+        350,
+        400,
+    ]
+
+
 def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
     monkeypatch.setattr(history, "DB_NAME", str(db_path))
@@ -295,3 +336,61 @@ def test_snapshot_upsert_updates_display_name_and_last_seen(tmp_path, monkeypatc
     conn.close()
     assert display_name == "New App"
     assert currently_installed == 1
+
+
+def _save(folders):
+    return history.save_scan_snapshot(
+        "C:/Example",
+        sum(folders.values()),
+        1000,
+        len(folders),
+        len(folders),
+        {path: {"size": size, "file_count": 7} for path, size in folders.items()},
+    )
+
+
+def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history.init_history_db()
+    older = _save(
+        {
+            "C:/Example/grew": 100,
+            "C:/Example/same": 200,
+            "C:/Example/shrank": 400,
+            "C:/Example/gone": 999,
+        }
+    )
+    newer = _save(
+        {
+            "C:/Example/grew": 150,
+            "C:/Example/same": 200,
+            "C:/Example/shrank": 300,
+            "C:/Example/new": 500,
+        }
+    )
+
+    rows = history.get_folder_growth(newer, older)
+
+    # Largest growth first; a folder only the older scan had isn't listed.
+    assert rows == [
+        ("C:/Example/new", 0, 500, 500, None, "Growing", 7),
+        ("C:/Example/grew", 100, 150, 50, 50.0, "Growing", 7),
+        ("C:/Example/same", 200, 200, 0, 0.0, "Unchanged", 7),
+        ("C:/Example/shrank", 400, 300, -100, -25.0, "Shrinking", 7),
+    ]
+    summary = history.get_growth_summary(newer, older)
+    assert (summary["tracked_folders"], summary["new_folders"]) == (4, 1)
+    assert summary["largest_growth_folder"][0] == "C:/Example/new"
+    assert summary["largest_shrink_folder"][0] == "C:/Example/shrank"
+
+
+def test_folder_growth_limit_breaks_ties_by_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history.init_history_db()
+    folders = {f"C:/Example/{name}": 10 for name in ("d", "b", "a", "c")}
+    older = _save(folders)
+    newer = _save({**folders, "C:/Example/c": 11})
+
+    rows = history.get_folder_growth(newer, older, limit=3)
+
+    assert [row[0] for row in rows] == ["C:/Example/c", "C:/Example/a", "C:/Example/b"]
