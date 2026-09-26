@@ -98,6 +98,17 @@ packages were bundled.
   points are recorded but never traversed (no double-counting, no infinite
   loops); hard links are deduplicated so a file linked into multiple folders
   only counts once.
+- **Live progress, per folder** — while a scan runs, a panel shows an
+  overall progress bar, live counts (files, folders, size, files/s,
+  elapsed time), the folder being read right now (and how long it's taken,
+  once it's slow), and a bar for every top-level folder: queued, scanning
+  with its size and file count so far, or done. The bars measure against
+  the last scan of the same folder, or a drive's used space when you scan
+  a whole drive for the first time; with neither, the overall bar animates
+  and the counts carry the progress. Even a single huge folder keeps the
+  counts moving, and Turbo Scan shows each of its steps (MFT records read
+  out of the total, journal changes applied, saving its cache) instead of
+  going quiet.
 - **Logical vs. actual disk usage** — tracks allocated size separately from
   logical size, so sparse files, NTFS-compressed files, and OneDrive-style
   online-only placeholders don't inflate what's actually on disk.

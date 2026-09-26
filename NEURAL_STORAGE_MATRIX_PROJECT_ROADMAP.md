@@ -77,7 +77,7 @@ The uncomfortable truth is that feature count alone will not beat mature tools. 
 - Lazy population of child rows so large result trees are not rendered all at once.
 - Percentage bars and heat coloring to make large consumers stand out.
 - Alternating row colors and distinct directory, file, warning, and placeholder treatments.
-- Status messages and indeterminate/determinate progress modes.
+- Status messages, and a live scan progress panel: an overall bar measured against the last scan (or the drive's used space), live counters, the folder being read, and a bar per top-level folder (see "Live scan progress" below).
 - Keyboard shortcuts including F5 to rescan and Delete to recycle a selected item.
 
 ### File operations
@@ -1077,3 +1077,73 @@ admin rights and a UAC prompt).
 Next in the plan: history retention and a compact schema, then a compact
 in-memory tree (the benchmark's `tree_bytes_per_file` is the number to
 move).
+
+## Live scan progress — ✅ done (2026-09-25)
+
+Reported: a scan "feels stuck". Measured first, by running the real app on
+`C:\Windows` (175,932 files, 27.2 GB) and on a user profile (818,460 files,
+827 GB) and sampling what the window showed every 50 ms:
+
+- The only progress was a "N files counted" status line and an animated
+  bar with no total: no percentage, no current folder, nothing per folder.
+- **One big folder froze the count for seconds at a time.** A directory was
+  counted only after it was fully listed and stat-ed, so
+  `C:\Windows\WinSxS\Manifests` (35,822 files: 8.4 s just to enumerate,
+  then ~0.28 ms per `os.stat`) left the count stuck for up to 6.7 s, crawled
+  from 129k to 140k over 30 s, then jumped by 35,822 at the very end.
+- **The window itself stalled** for 0.25–1.3 s at a time during scans
+  (12 stalls over 250 ms on `C:\Windows`, up to 1.3 s on the profile): every
+  directory posted two queue messages and each one set the status text.
+- Silent steps: the final roll-up, "Saving history..." with the bar already
+  stopped (38 s at 20k folder rows in the scale benchmark), and in Turbo
+  Scan everything after the MFT read — building the tree, writing the cache
+  (the elevated helper also relayed only a bare number, so its cache and
+  journal steps never reached the window), reading its result back.
+
+**What changed:**
+
+- `storage_scanner/scan_progress.py`: the Compatible engine keeps running
+  totals per top-level folder (queued → scanning → done, done only once its
+  whole subtree is read) in a thread-safe `WalkTracker`, and a reporter
+  thread posts a snapshot ten times a second instead of two messages per
+  directory. A directory reports every 1,000 entries while it's still being
+  read, and is iterated as the listing arrives instead of `list()`-ed
+  first, so a huge folder keeps the counts moving. The snapshot also names
+  the folder that has been read the longest, with its time and item count.
+- Turbo Scan posts named steps with counts: MFT records read out of the
+  total (known up front), journal changes applied out of the total, and
+  the cache save, tree build, journal read and result load as their own
+  steps. The elevated helper's progress file now carries the whole step as
+  JSON, so the helper path shows exactly what the in-process path does.
+- `storage_scanner/scan_progress_model.py` (no Tk, fully tested) turns
+  those into what's shown. The overall bar is measured against the last
+  scan of the same path (files, from scan history), else the drive's used
+  space for a volume root, else it animates with live counters; it never
+  fills on an estimate alone (capped at 99%). Folder bars fill against each
+  folder's file count in the last scan, or against the busiest folder so
+  far. The estimate is read from history on a background thread through
+  `get_folder_growth(scan, None)`, so it doesn't depend on the table layout.
+- `storage_scanner/ui/scan_progress_panel.py` (`ScanProgressMixin`): the
+  panel above the status bar, refreshed on the existing 100 ms poll, only
+  redrawing what changed. It stays up, animated, through "Saving history",
+  and cancel freezes it where it was. The status bar is now packed ahead of
+  the tree so a small window shrinks the tree, not the panel.
+
+**Result**, same machine: on `C:\Windows` with an estimate, the bar went
+15% → 97% steadily and the file count, size or percentage never stood
+still longer than 0.6 s (the WinSxS\Manifests stretch now shows e.g.
+"43 s in this folder, 34,000 items so far"); UI stalls over 250 ms dropped
+from 12 to 2 (0.25 s each). Scan time, engine only, interleaved runs on
+the same folder: `C:\Program Files` (49,342 files, 7 runs each) median
+6.42 s before, 5.52 s after (the queue now carries ~55 messages per scan
+instead of ~7,900); `benchmarks/scan.py --profile medium` 2.345 s before,
+2.383 s after (+1.6%, inside its own 2.19–2.91 s run-to-run spread).
+
+Verified: `tests/test_scan_progress.py` (per-folder accounting, a subfolder
+found mid-listing can't finish its folder early, the aggregate past 200
+folders, the final snapshot equals the rolled-up tree, cancel) and
+`tests/test_scan_progress_model.py` (estimate choice, bar clamping, folder
+bars, cancelled/failed/finished states), plus the Turbo step tests in
+`test_turbo_read.py` and the helper relay tests. **Not verified:** a real
+Turbo Scan (needs admin rights and a UAC prompt); its panel was exercised
+in the real window against a simulated 400,000-record MFT.

@@ -52,6 +52,7 @@ from storage_scanner.platform_support import (
     resource_path,
 )
 from storage_scanner.scan_history import drive_capacity_bytes
+from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
 from storage_scanner.serialization import dict_to_node
@@ -263,7 +264,9 @@ class MainWindowMixin:
 
     def _build_statusbar(self):
         status = ttk.Frame(self.root, padding=(8, 2))
-        status.pack(side=BOTTOM, fill=X)
+        # Packed ahead of the tree, so it and the strips packed after it keep
+        # their height and a small window shrinks the tree instead.
+        status.pack(side=BOTTOM, fill=X, before=self.tree.master)
         self._statusbar_frame = status
         self.status_var = StringVar(value="Pick a drive or folder, then click Scan.")
         ttk.Label(status, textvariable=self.status_var, anchor=W).pack(
@@ -603,8 +606,8 @@ class MainWindowMixin:
         self.cancel_btn.config(state="normal")
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
-        self._start_indeterminate_progress()
         self.status_var.set(f"Scanning {target} …")
+        self._scan_progress_start(target)
 
         self.scan_thread = threading.Thread(
             target=self._scan_worker, args=(target, turbo_enabled), daemon=True
@@ -655,8 +658,9 @@ class MainWindowMixin:
         self.elevate_btn.config(state="disabled")
         self.tools_btn.config(state="disabled")
         self.top_count_combo.config(state="disabled")
-        self._start_indeterminate_progress()
         self.status_var.set(f"Requesting elevated access for {target} … {waiting_suffix}")
+        self._scan_progress_start(target)
+        self._scan_progress_phase(self.PHASE_WAITING_FOR_ELEVATED_SCAN)
 
         self.scan_thread = threading.Thread(
             target=self._elevated_scan_worker_headless, args=(target, run_scan_fn), daemon=True
@@ -681,14 +685,8 @@ class MainWindowMixin:
         try:
             while True:
                 kind, payload = self.progress_q.get_nowait()
-                if kind == "progress":
-                    self.status_var.set(f"Scanning … {payload:,} files counted")
-                elif kind == "status":
-                    self.status_var.set(payload)
-                elif kind == "root":
+                if kind == "root":
                     self._start_live_tree(payload)
-                elif kind == "progress_bytes":
-                    self._live_total_bytes = payload
                 elif kind == "done":
                     node, report = payload
                     self._finish_scan(node, report)
@@ -696,20 +694,25 @@ class MainWindowMixin:
                 elif kind == "error":
                     self._finish_error(payload)
                     return
+                else:
+                    if kind == "walk":
+                        self._live_total_bytes = payload.bytes
+                    self._scan_progress_message(kind, payload)
         except queue.Empty:
             pass
         self._maybe_refresh_live_tree()
+        self._scan_progress_refresh()
         self.root.after(100, self._poll_progress)
 
     # -- History helper functions ------------------------------------------ #
     def _finish_scan(self, node, report=None):
-        self._stop_progress()
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
             self.elevate_btn.config(state="normal")
 
         if self.cancel_event.is_set():
+            self._scan_progress_end(CANCELLED)
             self.status_var.set("Scan cancelled.")
             self._refresh_tools_state()
             return
@@ -760,14 +763,15 @@ class MainWindowMixin:
             f"{node.file_count:,} files | Saving history..."
         )
 
+        progress_token = self._scan_progress_phase(self.PHASE_SAVING_HISTORY)
         threading.Thread(
             target=self._save_history_worker,
-            args=(node,),
+            args=(node, progress_token),
             daemon=True,
         ).start()
 
     def _finish_error(self, msg):
-        self._stop_progress()
+        self._scan_progress_end(FAILED)
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
@@ -1021,14 +1025,9 @@ class MainWindowMixin:
         self.cancel_event.set()
         self.dup_cancel_event.set()
         self.status_var.set("Cancelling …")
+        self._scan_progress_cancel_requested()
 
-    # -- Helper Methods for Progress Bar ------------------------------------- #
-    def _start_indeterminate_progress(self):
-        """Show an animated progress bar when total work is unknown."""
-        self.progress.config(mode="indeterminate", maximum=100, value=0)
-        self.progress.pack(side=RIGHT, padx=6)
-        self.progress.start(12)
-
+    # -- Status-bar progress bar (duplicate scan; scans use ScanProgressMixin) #
     def _start_determinate_progress(self, maximum):
         """Show a percentage progress bar when total work is known."""
         self.progress.stop()

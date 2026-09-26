@@ -15,6 +15,10 @@ from urllib.parse import quote
 
 from storage_scanner.drive_info import get_volume_root
 from storage_scanner.platform_support import IS_LINUX, IS_MACOS
+from storage_scanner.scan_progress import Phase
+
+PHASE_WAITING_FOR_ELEVATION = "Waiting for administrator approval"
+PHASE_LOADING_RESULTS = "Loading the Turbo Scan results"
 
 _FO_DELETE = 3
 _FOF_SILENT = 0x0004
@@ -352,35 +356,32 @@ def relaunch_elevated_windows(initial_path=None):
     return int(result) > 32
 
 
-def _relay_progress_file(progress_path, progress_q, last_value):
+def _relay_progress_file(progress_path, progress_q, last_phase):
     """Read the elevated helper's --progress-file (see mft_scan_cli.
-    _ProgressFileWriter) and, if its value changed since `last_value`,
-    post it to `progress_q` the same way scanner.py's own directory-walk
-    engine does -- main_window._poll_progress already handles a
-    ("progress", count) message generically, so no UI-side change is
-    needed for this to show up as a live, updating status-bar count
-    instead of the static text a Turbo Scan run showed for its entire
-    duration before this existed.
+    _ProgressFileWriter: the current Phase as JSON) and, if it changed
+    since `last_phase`, post it to `progress_q` as a ("phase", Phase) --
+    exactly what the in-process Turbo Scan path posts itself, so the
+    progress panel can't tell the two apart.
 
-    Returns the (possibly unchanged) last_value to pass into the next
+    Returns the (possibly unchanged) last phase to pass into the next
     call. Never raises: a missing file (helper hasn't started/written
     yet), an empty file (mid-write on the other end, despite the writer
     side's own atomic swap -- cheap extra safety), or unparseable
     content are all just "nothing new yet," not errors.
     """
     if progress_q is None:
-        return last_value
+        return last_phase
     try:
         with open(progress_path, encoding="utf-8") as f:
             text = f.read().strip()
         if not text:
-            return last_value
-        value = int(text)
-    except (OSError, ValueError):
-        return last_value
-    if value != last_value:
-        progress_q.put(("progress", value))
-    return value
+            return last_phase
+        phase = Phase.from_dict(json.loads(text))
+    except (OSError, ValueError, KeyError, TypeError):
+        return last_phase
+    if phase != last_phase:
+        progress_q.put(("phase", phase))
+    return phase
 
 
 def run_elevated_scan_windows(path, progress_q, cancel_event):
@@ -399,7 +400,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     process handle to wait on.
 
     A second temp file (--progress-file) is polled on the same cadence,
-    relaying live record counts into `progress_q` via
+    relaying the helper's current step and its count into `progress_q` via
     _relay_progress_file -- without this, a scan running through this
     elevated-helper path (the common case: anyone who hasn't already
     launched the whole GUI as admin) posted zero progress of any kind for
@@ -468,6 +469,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
         info.hProcess = None
 
         shell32 = ctypes.windll.shell32
+        _post_phase(progress_q, PHASE_WAITING_FOR_ELEVATION)
         succeeded = shell32.ShellExecuteExW(ctypes.byref(info))
         if not succeeded or not info.hProcess:
             return False, "Authorization was cancelled or failed."
@@ -475,7 +477,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
         h_process = info.hProcess
         kernel32 = ctypes.windll.kernel32
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
-        last_progress = None
+        last_phase = None
         try:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
@@ -487,7 +489,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
                     break
                 if wait_result == _WAIT_FAILED:
                     return False, "Waiting for the Turbo Scan helper process failed."
-                last_progress = _relay_progress_file(progress_path, progress_q, last_progress)
+                last_phase = _relay_progress_file(progress_path, progress_q, last_phase)
 
             exit_code = wintypes.DWORD(0)
             kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
@@ -497,6 +499,9 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
         if exit_code.value != 0:
             return False, f"Turbo Scan helper exited with code {exit_code.value}."
 
+        # Reading a whole volume's result back (and turbo_scan's
+        # dict_to_node after it) takes seconds on a big tree.
+        _post_phase(progress_q, PHASE_LOADING_RESULTS)
         try:
             with open(output_path, encoding="utf-8") as f:
                 return True, json.load(f)
@@ -507,3 +512,8 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
             os.remove(output_path)
         with contextlib.suppress(OSError):
             os.remove(progress_path)
+
+
+def _post_phase(progress_q, label):
+    if progress_q is not None:
+        progress_q.put(("phase", Phase(label)))

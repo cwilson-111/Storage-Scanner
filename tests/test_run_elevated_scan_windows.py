@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 import storage_scanner.file_ops as file_ops
 from storage_scanner.file_ops import run_elevated_scan_windows
+from storage_scanner.scan_progress import Phase
 
 _FAKE_PROCESS_HANDLE = 777
 
@@ -187,18 +188,21 @@ def test_progress_file_updates_are_relayed_to_progress_q(monkeypatch, tmp_path):
     _patch_mkstemp(monkeypatch, output_path, progress_path)
     output_path.write_text(json.dumps({"size": 1}), encoding="utf-8")
 
-    # Simulate the elevated child writing progressively larger counts
+    # Simulate the elevated child writing progressively further phases
     # between poll ticks -- exactly what _ProgressFileWriter.put() does,
     # just inlined here since this test never runs the real subprocess.
-    progress_values = [100, 100, 5000, 5000, 12000]  # duplicates should be deduped
+    reading_a = Phase("Reading the MFT", 100, 12000, "records")
+    reading_b = Phase("Reading the MFT", 5000, 12000, "records")
+    saving = Phase("Saving the Turbo Scan cache")
+    written = [reading_a, reading_a, reading_b, reading_b, saving]  # duplicates are deduped
 
     def on_wait(call_index):
-        if call_index < len(progress_values):
-            progress_path.write_text(str(progress_values[call_index]), encoding="utf-8")
+        if call_index < len(written):
+            progress_path.write_text(json.dumps(written[call_index].to_dict()), encoding="utf-8")
 
     shell_exec = _FakeShellExecuteExW(succeed=True)
     # One WAIT_TIMEOUT-equivalent poll per progress value, then WAIT_OBJECT_0.
-    wait_results = [258] * len(progress_values) + [0]  # 258 == WAIT_TIMEOUT
+    wait_results = [258] * len(written) + [0]  # 258 == WAIT_TIMEOUT
     kernel32 = _FakeKernel32(exit_code=0, wait_results=wait_results, on_wait=on_wait)
     _patch(monkeypatch, shell_exec, kernel32)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
@@ -210,9 +214,15 @@ def test_progress_file_updates_are_relayed_to_progress_q(monkeypatch, tmp_path):
     posted = []
     while not progress_q.empty():
         posted.append(progress_q.get_nowait())
-    # Deduped: 100 posted once (not twice), same for 5000 -- only genuinely
-    # new values ever get relayed.
-    assert posted == [("progress", 100), ("progress", 5000), ("progress", 12000)]
+    # The wait for the UAC prompt, each distinct phase the helper wrote
+    # once, then reading its result back.
+    assert posted == [
+        ("phase", Phase(file_ops.PHASE_WAITING_FOR_ELEVATION)),
+        ("phase", reading_a),
+        ("phase", reading_b),
+        ("phase", saving),
+        ("phase", Phase(file_ops.PHASE_LOADING_RESULTS)),
+    ]
 
 
 def test_progress_q_of_none_does_not_crash_even_with_a_progress_file_present(monkeypatch, tmp_path):

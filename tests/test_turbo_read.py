@@ -253,7 +253,36 @@ def test_a_folder_missing_from_the_cache_is_an_error_not_a_full_read(monkeypatch
 # -- incremental refresh details ---------------------------------------------- #
 
 
-def test_incremental_refresh_posts_status_and_progress_messages(monkeypatch):
+def _phases(progress_q):
+    phases = []
+    while not progress_q.empty():
+        kind, payload = progress_q.get_nowait()
+        assert kind == "phase"
+        phases.append(payload)
+    return phases
+
+
+def test_a_full_read_counts_records_read_against_the_whole_mft(monkeypatch):
+    # record_count is known before the first record is read, so the bar
+    # can fill for real instead of counting up to an unknown total.
+    monkeypatch.setattr(turbo_read.turbo_cache, "get_cached_volume", lambda serial: None)
+    _full_scan_parses_everything(monkeypatch)
+    progress_q = queue.Queue()
+
+    _scan(_FakeRecordSource(record_count=5000), progress_q=progress_q)
+
+    phases = _phases(progress_q)
+    reading = [p for p in phases if p.label == turbo_read.PHASE_READING_MFT]
+    assert {p.total for p in reading} == {5000}
+    assert reading[0].done == 0
+    assert reading[-1].done == 5000
+    assert [p.done for p in reading] == sorted(p.done for p in reading)
+    # The slow steps after the read are named too, in the order they run.
+    after = [p.label for p in phases[phases.index(reading[-1]) + 1 :]]
+    assert after == [turbo_read.PHASE_SAVING_CACHE, turbo_read.PHASE_BUILDING_TREE]
+
+
+def test_incremental_refresh_counts_the_journal_changes_it_applies(monkeypatch):
     # The core fix for "elevated Turbo Scan shows no progress at all" when
     # the scan turns out to be a cached incremental refresh, found via a
     # real user report.
@@ -271,30 +300,24 @@ def test_incremental_refresh_posts_status_and_progress_messages(monkeypatch):
     node, _mft_read = _scan(_FakeRecordSource(), progress_q=progress_q)
 
     assert node == "cached"
-    messages = []
-    while not progress_q.empty():
-        messages.append(progress_q.get_nowait())
-    statuses = [payload for kind, payload in messages if kind == "status"]
-    assert any("250" in s and "applying" in s.lower() for s in statuses)
-    assert any("loading" in s.lower() for s in statuses)
-    progress_counts = [payload for kind, payload in messages if kind == "progress"]
-    assert progress_counts == [200]  # only one multiple of 200 within 250 dirty records
+    phases = _phases(progress_q)
+    applying = [p for p in phases if p.label == turbo_read.PHASE_APPLYING_CHANGES]
+    assert {p.total for p in applying} == {250}
+    assert applying[-1].done == 250
+    labels = [p.label for p in phases]
+    assert labels[0] == turbo_read.PHASE_READING_JOURNAL
+    assert labels[-1] == turbo_read.PHASE_LOADING_CACHE
 
 
-def test_incremental_refresh_with_no_dirty_records_skips_the_applying_status(monkeypatch):
+def test_incremental_refresh_with_no_changes_goes_straight_to_loading(monkeypatch):
     _valid_cache(monkeypatch)
     monkeypatch.setattr(turbo_read.turbo_cache, "apply_incremental_changes", lambda *a: None)
 
     progress_q = queue.Queue()
     _scan(_FakeRecordSource(), progress_q=progress_q)
 
-    statuses = []
-    while not progress_q.empty():
-        kind, payload = progress_q.get_nowait()
-        if kind == "status":
-            statuses.append(payload.lower())
-    assert not any("applying" in s for s in statuses)  # nothing to apply
-    assert any("loading" in s for s in statuses)  # the folder is still loaded
+    labels = [p.label for p in _phases(progress_q)]
+    assert labels == [turbo_read.PHASE_READING_JOURNAL, turbo_read.PHASE_LOADING_CACHE]
 
 
 def test_dirty_record_that_no_longer_parses_is_deleted_not_upserted(monkeypatch):

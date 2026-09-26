@@ -37,14 +37,18 @@ from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
 from storage_scanner.scan_history import collect_folder_sizes, normalize_scan_path, record_scan
+from storage_scanner.scan_progress_model import FINISHED
 from storage_scanner.settings import COLORS, FONT_BOLD
 
 
 class HistoryMixin:
-    def _finish_history_save(self, current_scan_id, previous_scan_id, growth_rows, budget_breach):
+    def _finish_history_save(
+        self, current_scan_id, previous_scan_id, growth_rows, budget_breach, progress_token
+    ):
         """
         Runs on the Tkinter UI thread after the background history save finishes.
         """
+        self._scan_progress_end(FINISHED, progress_token)
         self.last_scan_id = current_scan_id
         self.last_previous_scan_id = previous_scan_id
         self.last_growth_rows = growth_rows
@@ -59,16 +63,19 @@ class HistoryMixin:
         if budget_breach:
             self._show_budget_banner([budget_breach])
 
-    def _history_save_failed(self, exc):
+    def _history_save_failed(self, exc, progress_token):
         """
         Runs on the Tkinter UI thread if history saving fails.
         """
+        self._scan_progress_end(FINISHED, progress_token)
         self.last_growth_rows = []
         self.status_var.set(f"Scan complete, but history failed: {exc}")
 
-    def _save_history_worker(self, node):
+    def _save_history_worker(self, node, progress_token):
         """
         Saves scan history in a background thread so the Tkinter UI does not freeze.
+        `progress_token` is handed back to _scan_progress_end, so only the
+        scan this save belongs to has its progress panel closed.
         """
         try:
             recorded = record_scan(node)
@@ -80,6 +87,7 @@ class HistoryMixin:
                     recorded.previous_scan_id,
                     recorded.growth_rows,
                     recorded.budget_breach,
+                    progress_token,
                 ),
             )
 
@@ -89,7 +97,7 @@ class HistoryMixin:
             # so capture its message now — the lambda runs later, after exc
             # no longer exists.
             error_message = str(exc)
-            self.root.after(0, lambda: self._history_save_failed(error_message))
+            self.root.after(0, lambda: self._history_save_failed(error_message, progress_token))
 
     def _format_change(self, value, is_bytes=True):
         if value is None:
