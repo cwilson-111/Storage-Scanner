@@ -395,18 +395,36 @@ real history — ✅ done (2026-09-26)**
 - Verified: real log and DB mtimes unchanged by pytest + `scale.py --check`.
 - Not done: "Remove this scan" in Growth History.
 
-**P1-13. Re-check files before deleting from lists that can be stale.**
-- Why: `check_stale` (`audit.py:23-61`) compares size only and never checks
-  folders; a same-size replacement passes (reproduced). Cold-start Cleanup
-  rows come from `cleanup_cache.db` and can be days old. Search, Duplicates
-  and Cleanup windows stay open and deletable across a rescan, while
-  `_refuse_delete_during_scan` (`ui/live_tree.py:127-135`) is only called by
-  the main tree and the Cart [code-traced, not reproduced].
+**P1-13. Re-check files before deleting from lists that can be stale — ✅
+done (2026-09-29)**
+- Why: `check_stale` (`storage_scanner/delete_service.py`; this item first
+  cited `audit.py:23-61`, where it used to live) compares size only and
+  never checks folders; a same-size replacement passes (reproduced).
+  Cold-start Cleanup rows come from `cleanup_cache.db` and can be days old.
+  Search, Duplicates and Cleanup windows stay open and deletable across a
+  rescan, while `_refuse_delete_during_scan` (`ui/live_tree.py`) is only
+  called by the main tree and the Cart [code-traced, not reproduced].
 - Do: compare size and mtime (and file ID where available); ask for a
   rescan before deleting folders from cached rows; close or disable those
   windows when a scan starts.
 - Size: S. Verify: tests for the same-size replacement and for a Delete in a
   pre-rescan Search window.
+- Done: `check_stale` compares size and modified time (read like the scan
+  reads it, the link itself); `cleanup_cache.db` keeps each row's modified
+  time (new `node_mtime` column, old caches read as unknown). A folder from
+  a cached Cleanup row is refused, and that window offers to rescan instead.
+  Starting a scan closes Search, Find Duplicate Files and Cleanup and stops
+  a running duplicate search. The delete service refuses everything while a
+  scan runs, and rows tied to a replaced tree (`DeleteRequest.tree`); the
+  three windows also call `_refuse_delete_during_scan`.
+- Verified: tests for the same-size replacement, a replaced cached file, a
+  cached folder, and a pre-rescan Search delete (during and after the
+  rescan). Driving the real app: all three windows closed when a rescan
+  started; a Search window kept open through it deleted nothing, during or
+  after; the cached folder asked to rescan and started one.
+- Not done: file ID — nodes don't store one, so a replacement with the same
+  size and modified time still passes. Turbo Scan's mtimes weren't compared
+  on a real MFT read (needs admin).
 
 ### P2 — soon
 

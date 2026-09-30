@@ -4,9 +4,10 @@ Every window -- the main tree, Search & Filter, Cleanup Recommendations
 (delete and archive), Find Duplicate Files and the Cleanup Cart -- hands
 DeleteService.delete() a list of DeleteRequests. For each one it:
 
-1. refuses protected paths, trimmed Windows names and the scan's own root
-   (delete_guard), and a file whose size changed since the scan
-   (check_stale);
+1. refuses everything while a scan is running, and anything listed from a
+   scan that has since been replaced; then protected paths, trimmed
+   Windows names and the scan's own root (delete_guard), and a file whose
+   size or modified time changed since the scan (check_stale);
 2. for a copy deleted *as a duplicate*, re-checks on disk that another
    copy of its group is still there (duplicate_finder), so the last copy
    can't go as "a duplicate";
@@ -29,10 +30,12 @@ says what to look for there, and when.
 """
 
 import os
+from datetime import datetime
 from typing import Callable, NamedTuple, Optional, Protocol
 
 from history import record_audit_entry
 from storage_scanner import delete_guard, duplicate_finder, file_ops, recycle_windows
+from storage_scanner.cleanup_cache import CachedNode
 from storage_scanner.delete_outcome import (
     DELETED_PERMANENTLY,
     FAILED,
@@ -47,6 +50,19 @@ from storage_scanner.platform_support import IS_WINDOWS
 # Messages say why, not what happened: the outcome says that (the Audit Log
 # shows "Refused: <message>", a dialog lists them under "Not deleted:").
 COULD_NOT_DELETE = "It may be in use, protected, or require admin rights."
+SCAN_RUNNING = "A scan is running; deleting has to wait until it finishes or is cancelled."
+FROM_REPLACED_SCAN = (
+    "It was listed from an earlier scan that has since been replaced; find it again in "
+    "the current scan's results."
+)
+CACHED_FOLDER = (
+    "It's a folder from Cleanup Recommendations saved in an earlier session, and what's "
+    "in it now hasn't been scanned; rescan, then delete it from the fresh results."
+)
+# How far a file's modified time may differ from the scan's and still count
+# as unchanged: enough for the float rounding between the scan engines'
+# timestamp conversions and os.stat's, far below any real save.
+_MTIME_SLACK_SECONDS = 0.001
 _TRASH_MESSAGES = {
     RECYCLED: None,
     UNVERIFIED: (
@@ -72,6 +88,7 @@ class DeleteRequest(NamedTuple):
     action: str = "recycle"  # what the ledger calls it ("archive" after archiving)
     scan_root: Optional[str] = None  # the root of the scan it came from, if not the current
     error_context: Optional[str] = None  # added to the ledger's message when not removed
+    tree: object = None  # the root of the scanned tree it was listed from, if it's from one
 
 
 class DeleteResult(NamedTuple):
@@ -114,28 +131,47 @@ class DeletedSet:
         return key in self._paths or (bool(self._folders) and key.startswith(self._folders))
 
 
+def _when(timestamp):
+    return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def check_stale(node):
     """None if `node` still looks like what was reviewed, else why not.
 
     A node can sit reviewed-but-undeleted in a window for as long as the
     user likes; if something else (an installer, a sync client, a save)
     replaces the file at its path meanwhile, deleting by path would remove
-    a file nobody reviewed. A size mismatch against a still-existing file is
-    a cheap signal of that. Folders are never checked (their own getsize
-    isn't their contents' total, and contents drift legitimately), nor is a
-    missing path (reported as missing instead).
+    a file nobody reviewed. A size or modified-time mismatch against a
+    still-existing file is a cheap signal of that; the file is read the
+    way the scan read it (the link itself, not what it points to). A
+    modified time of 0 means the scan didn't know it, and a Cleanup row
+    cached before those were saved has none. The nodes carry no file ID,
+    so a replacement copied in with the same size and modified time still
+    passes.
+
+    Folders are only refused when they come from a previous session's
+    Cleanup Recommendations (nobody has seen what's in them now). A
+    scanned folder isn't checked: its own size isn't its contents' total,
+    and contents drift legitimately. A missing path isn't checked either
+    (it's reported as missing instead).
     """
     if node.is_dir:
-        return None
+        return CACHED_FOLDER if isinstance(node, CachedNode) else None
     try:
-        current_size = os.path.getsize(node.path)
+        current = os.stat(node.path, follow_symlinks=False)
     except OSError:
         return None
-    if current_size != node.size:
+    if current.st_size != node.size:
         return (
             f"Its size changed since it was reviewed (was {node.size:,} bytes, now "
-            f"{current_size:,}), so it may have been modified by something else; rescan "
+            f"{current.st_size:,}), so it may have been modified by something else; rescan "
             "and try again."
+        )
+    if node.mtime and abs(current.st_mtime - node.mtime) > _MTIME_SLACK_SECONDS:
+        return (
+            f"It was modified since it was reviewed (last modified {_when(node.mtime)}, "
+            f"now {_when(current.st_mtime)}), so it may have been replaced by something "
+            "else; rescan and try again."
         )
     return None
 
@@ -160,14 +196,17 @@ def _exists(path):
 
 
 class DeleteService:
-    """See the module docstring. `scan_root` and `duplicate_groups` are read
-    at delete time (the current scan's root path, and the app's cached Find
-    Duplicate Files groups); the other arguments exist for tests."""
+    """See the module docstring. `scan_root`, `tree`, `scanning` and
+    `duplicate_groups` are read at delete time (the current scan's root
+    path and root node, whether a scan is running, and the app's cached
+    Find Duplicate Files groups); the other arguments exist for tests."""
 
     def __init__(
         self,
         scan_root: Callable[[], Optional[str]] = lambda: None,
         duplicate_groups: Callable[[], Optional[list]] = lambda: None,
+        tree: Callable[[], object] = lambda: None,
+        scanning: Callable[[], bool] = lambda: False,
         record=record_audit_entry,
         trash=_send_to_trash,
         blockers=_bin_blockers,
@@ -176,6 +215,8 @@ class DeleteService:
     ):
         self._scan_root = scan_root
         self._duplicate_groups = duplicate_groups
+        self._tree = tree
+        self._scanning = scanning
         self._record = record
         self._trash = trash
         self._blockers = blockers
@@ -201,6 +242,10 @@ class DeleteService:
         Lets a window skip its "are you sure?" for a delete that can't
         happen; delete() checks again regardless."""
         node = request.node
+        if self._scanning():
+            return SCAN_RUNNING
+        if request.tree is not None and request.tree is not self._tree():
+            return FROM_REPLACED_SCAN
         roots = [root for root in (self._scan_root(), request.scan_root) if root]
         return delete_guard.refusal_reason(node.path, roots) or check_stale(node)
 

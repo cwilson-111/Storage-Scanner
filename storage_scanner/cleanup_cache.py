@@ -56,6 +56,7 @@ def init_cleanup_cache_db():
             node_name          TEXT NOT NULL,
             node_is_dir        INTEGER NOT NULL,
             node_size          INTEGER NOT NULL,
+            node_mtime         REAL NOT NULL DEFAULT 0,
             reason             TEXT NOT NULL,
             risk               TEXT NOT NULL,
             recoverable_bytes  INTEGER NOT NULL,
@@ -64,7 +65,14 @@ def init_cleanup_cache_db():
             FOREIGN KEY (scan_path) REFERENCES cached_cleanup_runs(scan_path) ON DELETE CASCADE
         )
     """)
-
+    # Caches written before node_mtime existed: their rows read as 0, "not
+    # known", so their files are re-checked by size only (see
+    # delete_service.check_stale).
+    columns = {row[1] for row in cur.execute("PRAGMA table_info(cached_recommendations)")}
+    if "node_mtime" not in columns:
+        cur.execute(
+            "ALTER TABLE cached_recommendations ADD COLUMN node_mtime REAL NOT NULL DEFAULT 0"
+        )
     conn.commit()
     conn.close()
 
@@ -73,18 +81,20 @@ class CachedNode:
     """Enough of a real storage_scanner.models.Node for a cached
     recommendation row to be displayed, revealed in the file manager, and
     deleted -- see cleanup_window.py's use of rec.node.path/name/is_dir/
-    size. Never a stand-in for a real scanned node otherwise: no
-    .children, no .error, no .mtime -- this never participates in (or gets
-    inserted into) a live scan tree.
+    size, and delete_service.check_stale's of size/mtime (0 if unknown).
+    Never a stand-in for a real scanned node otherwise: no .children, no
+    .error -- this never participates in (or gets inserted into) a live
+    scan tree, and its folders can't be deleted until they're rescanned.
     """
 
-    __slots__ = ("path", "name", "is_dir", "size")
+    __slots__ = ("path", "name", "is_dir", "size", "mtime")
 
-    def __init__(self, path, name, is_dir, size):
+    def __init__(self, path, name, is_dir, size, mtime=0.0):
         self.path = path
         self.name = name
         self.is_dir = is_dir
         self.size = size
+        self.mtime = mtime
 
 
 def save_recommendations(scan_path, recommendations):
@@ -109,8 +119,8 @@ def save_recommendations(scan_path, recommendations):
     cur.executemany(
         "INSERT INTO cached_recommendations "
         "(scan_path, row_id, category, node_path, node_name, node_is_dir, "
-        " node_size, reason, risk, recoverable_bytes, action) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " node_size, node_mtime, reason, risk, recoverable_bytes, action) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             (
                 scan_path,
@@ -120,6 +130,7 @@ def save_recommendations(scan_path, recommendations):
                 rec.node.name,
                 int(rec.node.is_dir),
                 rec.node.size,
+                rec.node.mtime,
                 rec.reason,
                 rec.risk,
                 rec.recoverable_bytes,
@@ -144,7 +155,7 @@ def load_recommendations(scan_path):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT category, node_path, node_name, node_is_dir, node_size,
+        SELECT category, node_path, node_name, node_is_dir, node_size, node_mtime,
                reason, risk, recoverable_bytes, action
         FROM cached_recommendations
         WHERE scan_path = ?
@@ -157,7 +168,7 @@ def load_recommendations(scan_path):
 
     return [
         Recommendation(
-            node=CachedNode(node_path, node_name, bool(node_is_dir), node_size),
+            node=CachedNode(node_path, node_name, bool(node_is_dir), node_size, node_mtime),
             category=category,
             reason=reason,
             risk=risk,
@@ -170,6 +181,7 @@ def load_recommendations(scan_path):
             node_name,
             node_is_dir,
             node_size,
+            node_mtime,
             reason,
             risk,
             recoverable_bytes,

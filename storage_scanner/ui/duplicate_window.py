@@ -90,6 +90,7 @@ class DuplicatesMixin:
         self.root.after(100, self._poll_duplicate_progress)
 
     def _duplicate_worker(self):
+        root = self.root_node  # what's hashed, even if a rescan replaces it meanwhile
         try:
             duplicates = self._find_duplicate_files(
                 progress_q=self.dup_progress_q,
@@ -104,7 +105,7 @@ class DuplicatesMixin:
             # rescan of a different path (which sets root_node to a new
             # object) can never be mistaken for still having a valid
             # cached duplicate set -- see start_scan's matching reset.
-            self._duplicates_scan_root = self.root_node
+            self._duplicates_scan_root = root
             self.dup_progress_q.put(("done", duplicates))
 
         except Exception as exc:
@@ -138,6 +139,10 @@ class DuplicatesMixin:
                 elif kind == "done":
                     _kind, duplicates = msg
                     self._stop_progress()
+                    # A scan started since (and cancelled this search, too
+                    # late): the groups are from the tree it replaced.
+                    if self._scan_running() or self._duplicates_scan_root is not self.root_node:
+                        return
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
                     self._show_duplicates_window(duplicates)
@@ -145,6 +150,8 @@ class DuplicatesMixin:
 
                 elif kind == "cancelled":
                     self._stop_progress()
+                    if self._scan_running():  # the scan that cancelled it owns these now
+                        return
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
                     self.status_var.set("Duplicate scan cancelled.")
@@ -184,6 +191,7 @@ class DuplicatesMixin:
         window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
         header_var = StringVar()
         scan_path = self.root_node.path
+        scan_tree = self._duplicates_scan_root  # what every row here is from
 
         ttk.Label(win, padding=(10, 8), textvariable=header_var).pack(side=TOP, fill=X)
 
@@ -429,6 +437,8 @@ class DuplicatesMixin:
                     parent=win,
                 )
                 return
+            if self._refuse_delete_during_scan(parent=win):
+                return
 
             note = (
                 f" ({skipped_keepers} selected keeper file(s) were skipped — "
@@ -449,7 +459,10 @@ class DuplicatesMixin:
                 return
             # Deleted rows leave this window through forget_deleted.
             self._delete_nodes(
-                [DeleteRequest(node, "Duplicate Files", as_duplicate=True) for node in targets],
+                [
+                    DeleteRequest(node, "Duplicate Files", as_duplicate=True, tree=scan_tree)
+                    for node in targets
+                ],
                 win,
             )
 

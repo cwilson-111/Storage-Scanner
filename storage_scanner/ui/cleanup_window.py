@@ -58,6 +58,7 @@ class CleanupMixin:
         # for why this persists the *computed* recommendation rows, not
         # the raw scanned tree.
         live = self.root_node is not None
+        scan_tree = self.root_node  # what live rows are from; cached rows are from no tree
         display_scan_path = (
             self.root_node.path if live else cleanup_cache.get_most_recently_cached_scan_path()
         )
@@ -304,6 +305,22 @@ class CleanupMixin:
             win.destroy()
             self.start_scan()
 
+        def cached_folders_need_rescan(recs):
+            """True if `recs` holds a folder from a cached (earlier-session)
+            run, after offering to rescan: nobody has seen what's in it now,
+            so the delete service won't delete it (delete_service.check_stale)."""
+            if live or not any(rec.node.is_dir for rec in recs):
+                return False
+            if messagebox.askyesno(
+                "Cleanup Recommendations",
+                "Folders in these saved results can't be deleted until they've been "
+                "scanned again: what's in them may have changed.\n\nRescan "
+                f"{display_scan_path} now?",
+                parent=win,
+            ):
+                do_rescan()
+            return True
+
         def forget_deleted(deleted):
             # With a live scan, a duplicate row also goes once its file is no
             # longer a spare copy of a group that still exists (its group's
@@ -339,6 +356,7 @@ class CleanupMixin:
                     "Cleanup Recommendations",
                     as_duplicate=rec.category == CATEGORY_DUPLICATE,
                     scan_root=display_scan_path,
+                    tree=scan_tree,
                 )
                 for _iid, rec in targets
             ]
@@ -359,6 +377,10 @@ class CleanupMixin:
                     parent=win,
                 )
                 return
+            if self._refuse_delete_during_scan(parent=win) or cached_folders_need_rescan(
+                [rec for _iid, rec in targets]
+            ):
+                return
 
             kind = "item" if len(targets) == 1 else "items"
             if not messagebox.askyesno(
@@ -373,6 +395,8 @@ class CleanupMixin:
             self._delete_nodes(requests_for(targets), win)
 
         def archive_selected():
+            if self._refuse_delete_during_scan(parent=win):
+                return
             selected = list(tv.selection())
             # Archive only applies to Review candidates — duplicates already
             # have a clearer "delete the copy, keep the keeper" story, and
@@ -416,7 +440,9 @@ class CleanupMixin:
 
             def remove_original(request):
                 return self._delete_nodes(
-                    [request._replace(scan_root=display_scan_path)], win, report=False
+                    [request._replace(scan_root=display_scan_path, tree=scan_tree)],
+                    win,
+                    report=False,
                 )[0]
 
             archived = 0
@@ -466,6 +492,8 @@ class CleanupMixin:
                     "Select at least one non-protected recommendation first.",
                     parent=win,
                 )
+                return
+            if cached_folders_need_rescan(targets):
                 return
             for rec in targets:
                 self.cart.add(

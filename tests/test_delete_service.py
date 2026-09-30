@@ -52,7 +52,9 @@ class _App(DeletionMixin):
     tree -- without any window. Recycling moves things into `bin_dir`."""
 
     def __init__(self, tmp_path, blockers=(), record=None):
-        self.root_node = scan(str(tmp_path / "scan"), queue.Queue(), threading.Event())
+        self.scan_dir = str(tmp_path / "scan")
+        self.root_node = scan(self.scan_dir, queue.Queue(), threading.Event())
+        self.scanning = False
         self.bin_dir = tmp_path / "bin"
         self.bin_dir.mkdir()
         self.cart = CartManager()
@@ -65,6 +67,8 @@ class _App(DeletionMixin):
         self.delete_service = DeleteService(
             scan_root=lambda: self.root_node.path,
             duplicate_groups=lambda: self.duplicates,
+            tree=lambda: self.root_node,
+            scanning=lambda: self.scanning,
             record=record or (lambda **row: self.records.append(row)),
             trash=self._to_bin,
             blockers=lambda _path, _is_dir: list(blockers),
@@ -92,8 +96,15 @@ class _App(DeletionMixin):
             node = next(child for child in node.children if child.name == name)
         return node
 
-    def delete(self, nodes, source="Search & Filter", as_duplicate=False, confirmer=None):
-        requests = [DeleteRequest(n, source, as_duplicate=as_duplicate) for n in nodes]
+    def rescan(self):
+        """What finishing a new scan does to what the service sees."""
+        self.root_node = scan(self.scan_dir, queue.Queue(), threading.Event())
+        self.duplicates = None
+
+    def delete(
+        self, nodes, source="Search & Filter", as_duplicate=False, confirmer=None, tree=None
+    ):
+        requests = [DeleteRequest(n, source, as_duplicate=as_duplicate, tree=tree) for n in nodes]
         return self.delete_service.delete(requests, confirmer or _Confirmer())
 
     def execute_cart(self):
@@ -263,6 +274,75 @@ def test_a_file_changed_since_it_was_reviewed_is_refused(tmp_path):
     assert result.outcome == REFUSED
     assert "size changed since it was reviewed" in result.message
     assert app.trashed == []
+
+
+def test_a_same_size_replacement_is_refused(tmp_path):
+    """P1-13: something else writes a different file of the same size at the
+    reviewed path; only its modified time gives it away."""
+    _files(tmp_path, {"reviewed.bin": b"x" * 100})
+    app = _App(tmp_path)
+    node = app.node("reviewed.bin")
+    Path(node.path).write_bytes(b"y" * 100)
+    os.utime(node.path, (node.mtime + 60, node.mtime + 60))
+
+    [result] = app.delete([node])
+
+    assert result.outcome == REFUSED
+    assert "modified since it was reviewed" in result.message
+    assert Path(node.path).read_bytes() == b"y" * 100
+    assert app.trashed == []
+
+
+def test_a_cached_cleanup_file_replaced_since_that_session_is_refused(tmp_path):
+    """A cold-start Cleanup row keeps the modified time its run saw."""
+    _files(tmp_path, {"old.log": b"l" * 10})
+    app = _App(tmp_path)
+    scanned = app.node("old.log")
+    row = CachedNode(scanned.path, scanned.name, False, 10, scanned.mtime)
+    os.utime(row.path, (row.mtime - 3600, row.mtime - 3600))
+
+    [result] = app.delete([row], "Cleanup Recommendations")
+
+    assert result.outcome == REFUSED
+    assert os.path.exists(row.path)
+
+
+def test_a_folder_from_a_cached_cleanup_row_needs_a_rescan(tmp_path):
+    """Nobody has seen what's in it since that earlier session."""
+    _files(tmp_path, {"cache/a.bin": b"a"})
+    app = _App(tmp_path)
+    row = _cached(app.node("cache").path, is_dir=True, size=1)
+
+    [result] = app.delete([row], "Cleanup Recommendations")
+
+    assert result.outcome == REFUSED
+    assert "rescan" in result.message
+    assert os.path.isdir(row.path)
+    assert app.trashed == []
+
+
+def test_a_delete_from_a_search_opened_before_a_rescan_leaves_the_disk_alone(tmp_path):
+    """Its rows are from the tree the rescan replaced, even though the file
+    itself is unchanged; while the rescan runs, nothing is deleted at all."""
+    _files(tmp_path, {"found.bin": b"f" * 10})
+    app = _App(tmp_path)
+    search_tree = app.root_node
+    found = app.node("found.bin")
+
+    app.scanning = True
+    [during] = app.delete([found], tree=search_tree)
+    app.scanning = False
+    app.rescan()
+    [after] = app.delete([found], tree=search_tree)
+
+    assert (during.outcome, after.outcome) == (REFUSED, REFUSED)
+    assert "scan is running" in during.message
+    assert "earlier scan" in after.message
+    assert os.path.exists(found.path)
+    assert app.trashed == []
+    # The same file listed from the current tree still goes.
+    [current] = app.delete([app.node("found.bin")], tree=app.root_node)
+    assert current.outcome == RECYCLED
 
 
 def test_a_folder_whose_contents_changed_is_still_deleted(tmp_path):
