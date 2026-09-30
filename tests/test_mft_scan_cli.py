@@ -77,9 +77,11 @@ def test_successful_scan_writes_the_envelope_and_closes_the_source(monkeypatch, 
     assert MftRead.from_dict(data["mft_read"]) == _FULL_READ
 
 
-def test_a_failed_scan_exits_with_an_error_writes_nothing_and_closes_the_source(
+def test_a_failed_scan_exits_with_an_error_and_writes_the_error_for_the_gui(
     monkeypatch, tmp_path, capsys
 ):
+    # Under ShellExecuteExW nobody reads the helper's stderr, so the output
+    # file is the only place its error can reach the GUI's log.
     def scan(*_args, **_kwargs):
         raise RuntimeError("Turbo Scan could not locate 'C:\\\\Nope' in the volume tree")
 
@@ -90,7 +92,10 @@ def test_a_failed_scan_exits_with_an_error_writes_nothing_and_closes_the_source(
 
     assert exit_code == mft_scan_cli.EXIT_SCAN_ERROR
     assert source.closed is True
-    assert not output_path.exists()
+    envelope = json.loads(output_path.read_text(encoding="utf-8"))
+    assert "node" not in envelope
+    assert envelope["error"].startswith("RuntimeError: Turbo Scan could not locate")
+    assert "Traceback" in envelope["traceback"]
     assert "could not locate" in capsys.readouterr().err
 
 
@@ -175,3 +180,52 @@ def test_run_mft_scan_without_progress_file_passes_none(monkeypatch, tmp_path):
 
     assert mft_scan_cli.run_mft_scan(_base_argv(tmp_path / "out.json")) == mft_scan_cli.EXIT_OK
     assert captured["progress_q"] is None
+
+
+def _blocked_replace(monkeypatch, failures):
+    """os.replace failing `failures` times with the PermissionError Windows
+    raises while the GUI has the progress file open, then working."""
+    real_replace = mft_scan_cli.os.replace
+    calls = []
+
+    def replace(src, dst):
+        calls.append(dst)
+        if len(calls) <= failures:
+            raise PermissionError(13, "Access is denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(mft_scan_cli.os, "replace", replace)
+    monkeypatch.setattr(mft_scan_cli.time, "sleep", lambda seconds: None)
+    return calls
+
+
+def test_a_progress_update_blocked_by_the_reader_is_retried_and_lands(monkeypatch, tmp_path):
+    progress_path = tmp_path / "progress.txt"
+    writer = mft_scan_cli._ProgressFileWriter(str(progress_path))
+    calls = _blocked_replace(monkeypatch, failures=mft_scan_cli._REPLACE_ATTEMPTS - 1)
+
+    writer.put(("phase", Phase("Reading the MFT", 10, 20, "records")))
+
+    assert len(calls) == mft_scan_cli._REPLACE_ATTEMPTS
+    assert writer.dropped == 0
+    relayed = queue.Queue()
+    _relay_progress_file(str(progress_path), relayed, None)
+    assert relayed.get_nowait() == ("phase", Phase("Reading the MFT", 10, 20, "records"))
+
+
+def test_progress_that_cannot_be_written_never_fails_the_scan(monkeypatch, tmp_path):
+    # The real failure: the replace colliding with the GUI's read raised
+    # PermissionError out of the scan, the helper exited 1, and the scan
+    # fell back to Compatible -- 26 of 556 writes at the real cadence.
+    def scan(record_source, volume_root, target_path, progress_q, cancel_event):
+        progress_q.put(("phase", Phase("Reading the MFT", 0, 20, "records")))
+        progress_q.put(("phase", Phase("Reading the MFT", 20, 20, "records")))
+        return _make_node(), _FULL_READ
+
+    _stub_scan(monkeypatch, scan)
+    _blocked_replace(monkeypatch, failures=10**6)  # the reader never lets go
+    output_path = tmp_path / "out.json"
+    argv = _base_argv(output_path) + ["--progress-file", str(tmp_path / "progress.txt")]
+
+    assert mft_scan_cli.run_mft_scan(argv) == mft_scan_cli.EXIT_OK
+    assert json.loads(output_path.read_text(encoding="utf-8"))["node"]["size"] == 123

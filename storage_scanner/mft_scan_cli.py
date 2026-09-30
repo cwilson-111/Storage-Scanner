@@ -23,6 +23,12 @@ Before this existed, a scan running through this elevated-helper path
 posted zero progress of any kind for its entire duration -- often 15s to
 a minute-plus on a cold scan (real, measured) -- indistinguishable from a
 hang. See _ProgressFileWriter below.
+
+A failed scan still writes the `--output` file: {"error": ..., "traceback":
+...} instead of the result, so the GUI can log why the helper failed. Its
+stderr goes nowhere -- ShellExecuteExW gives the caller no pipe to read it
+from -- and before this, a real helper failure left only "Turbo Scan helper
+exited with code 1" in the log.
 """
 
 import argparse
@@ -30,13 +36,25 @@ import json
 import os
 import sys
 import threading
+import time
+import traceback
 
+from storage_scanner.logging_setup import logger
 from storage_scanner.mft_volume import open_record_source
 from storage_scanner.serialization import node_to_dict
 from storage_scanner.turbo_read import scan_subtree_using_cache
 
 EXIT_OK = 0
 EXIT_SCAN_ERROR = 1
+
+# The GUI (file_ops._relay_progress_file) opens the progress file to read it
+# five times a second, and Windows refuses to replace a file while any
+# handle is open on it -- even one opened with FILE_SHARE_DELETE. Each
+# collision lasts only as long as one small read, so a short retry clears
+# it; one that doesn't clear drops that update, and the next one follows
+# within turbo_read's reporting interval anyway.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_RETRY_SECONDS = 0.01
 
 
 class _ProgressFileWriter:
@@ -52,19 +70,42 @@ class _ProgressFileWriter:
 
     Only "phase" messages are relayed -- that's all Turbo Scan's reading
     steps post; "root"/"walk" are the Compatible engine's.
+
+    `put` never raises: progress is a courtesy, and a write that fails
+    (the GUI's reader holding the file open for longer than the retries
+    allow, a full disk) must not fail the scan it reports on. Once, a
+    replace colliding with the reader did exactly that -- the PermissionError
+    ended the helper with exit code 1 and sent the scan to the Compatible
+    engine, in 26 of 556 writes (4.7%) at the real cadence.
     """
 
     def __init__(self, path):
         self.path = path
+        self.dropped = 0
 
     def put(self, item):
         kind, payload = item
         if kind != "phase":
             return
+        try:
+            self._write(json.dumps(payload.to_dict()))
+        except OSError as exc:
+            if not self.dropped:
+                logger.warning("Turbo Scan helper could not update its progress file: %s", exc)
+            self.dropped += 1
+
+    def _write(self, text):
         tmp_path = self.path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload.to_dict(), f)
-        os.replace(tmp_path, self.path)
+            f.write(text)
+        for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+            try:
+                os.replace(tmp_path, self.path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS:
+                    raise
+                time.sleep(_REPLACE_RETRY_SECONDS)
 
 
 def build_arg_parser():
@@ -93,14 +134,29 @@ def build_arg_parser():
     return parser
 
 
+def _write_error(output_path, exc):
+    """Best effort: the error, and its traceback for the log, where the GUI
+    looks for the result (see file_ops.run_elevated_scan_windows)."""
+    envelope = {
+        "error": f"{exc.__class__.__name__}: {exc}",
+        "traceback": traceback.format_exc(),
+    }
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(envelope, f)
+    except OSError:
+        pass  # stderr (below) is all that's left
+
+
 def run_mft_scan(argv):
     """Parse arguments and run one Turbo Scan. Returns a process exit code.
 
     Every failure -- an unopenable volume, a record with no root, a
-    subtree path that isn't in the tree, a JSON/file-write error -- prints
-    to stderr and returns EXIT_SCAN_ERROR. The elevated process is meant
-    to fail closed: a caller that sees a non-zero exit or a missing output
-    file treats it identically, as one more reason to fall back to the
+    subtree path that isn't in the tree, a JSON/file-write error -- writes
+    its error to the output file (see _write_error), prints it to stderr
+    and returns EXIT_SCAN_ERROR. The elevated process is meant to fail
+    closed: a caller that sees a non-zero exit or a missing output file
+    treats it identically, as one more reason to fall back to the
     Compatible engine, never something that should crash or hang.
     """
     parser = build_arg_parser()
@@ -128,6 +184,7 @@ def run_mft_scan(argv):
             # envelope's shape never has to be negotiated.
             json.dump({"node": node_to_dict(subtree_node), "mft_read": mft_read.to_dict()}, f)
     except Exception as exc:  # noqa: BLE001 - report any failure to the caller
+        _write_error(args.output, exc)
         print(f"Turbo Scan failed: {exc}", file=sys.stderr)
         return EXIT_SCAN_ERROR
 

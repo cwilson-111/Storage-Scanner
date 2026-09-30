@@ -10,6 +10,8 @@ import struct
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -58,14 +60,32 @@ def _build_nonresident_attr(
     compression_unit=0,
     data_runs=b"\x00",
     name_length=0,
+    attr_flags=0,
+    compressed_size=None,
+    name="",
 ):
+    """`compressed_size`, when given, fills the CompressedSize field a
+    compressed or sparse attribute carries (its `attr_flags` say which);
+    `name` is written out for a named stream."""
     common_len = 16
     nrh_len = 48
-    extra = 8 if compression_unit else 0
-    data_runs_offset = common_len + nrh_len + extra
+    has_extra = compression_unit or compressed_size is not None
+    extra = 8 if has_extra else 0
+    name_bytes = name.encode("utf-16-le")
+    name_offset = common_len + nrh_len + extra
+    data_runs_offset = (name_offset + len(name_bytes) + 7) // 8 * 8
     unpadded = data_runs_offset + len(data_runs)
     total_len = (unpadded + 7) // 8 * 8
-    common = struct.pack("<IIBBHHH", attr_type, total_len, 1, name_length, 0, 0, attribute_id)
+    common = struct.pack(
+        "<IIBBHHH",
+        attr_type,
+        total_len,
+        1,
+        len(name) or name_length,
+        name_offset if name else 0,
+        attr_flags,
+        attribute_id,
+    )
     nrh = struct.pack(
         "<QQHHIQQQ",
         0,
@@ -78,8 +98,11 @@ def _build_nonresident_attr(
         initialized_size,
     )
     body = bytearray(common + nrh)
-    if compression_unit:
-        body.extend(struct.pack("<Q", allocated_size))  # placeholder CompressedSize
+    if has_extra:
+        on_disk = allocated_size if compressed_size is None else compressed_size
+        body.extend(struct.pack("<Q", on_disk))
+    body.extend(name_bytes)
+    body.extend(b"\x00" * (data_runs_offset - len(body)))
     body.extend(data_runs)
     body.extend(b"\x00" * (total_len - len(body)))
     return bytes(body)
@@ -183,16 +206,21 @@ def build_record(
     file_names=(),
     data_attr=None,
     attribute_list_value=None,
+    reparse_tag=None,
+    extra_attrs=b"",
     **assemble_kwargs,
 ):
     """Build one on-disk-shaped MFT record in the common
-    $ATTRIBUTE_LIST/$STANDARD_INFORMATION/$FILE_NAME.../$DATA order.
+    $ATTRIBUTE_LIST/$STANDARD_INFORMATION/$FILE_NAME.../$DATA/$REPARSE_POINT
+    order.
 
     `file_names` is a list of (value_bytes, attribute_id) pairs. `data_attr`
     and `attribute_list_value`'s raw $DATA/$ATTRIBUTE_LIST attribute bytes
     are built by the caller via the helpers above (so the attribute_id and
-    resident/non-resident shape are explicit and unambiguous). For a test
-    that needs a non-standard attribute order, call _assemble_record directly.
+    resident/non-resident shape are explicit and unambiguous), as are
+    `extra_attrs` (e.g. a named stream). `reparse_tag` adds a resident
+    $REPARSE_POINT carrying that tag. For a test that needs a non-standard
+    attribute order, call _assemble_record directly.
     """
     attrs = bytearray()
     if attribute_list_value is not None:
@@ -203,6 +231,10 @@ def build_record(
         attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, value, attribute_id)
     if data_attr is not None:
         attrs += data_attr
+    attrs += extra_attrs
+    if reparse_tag is not None:
+        reparse_value = struct.pack("<IHH", reparse_tag, 0, 0)  # tag, data length, reserved
+        attrs += _build_resident_attr(mft_parser._ATTR_REPARSE_POINT, reparse_value, 9)
     return _assemble_record(record_number, attrs, **assemble_kwargs)
 
 
@@ -731,11 +763,12 @@ def test_mtime_atime_and_reparse_and_cloud_placeholder_flags():
             file_attributes=reparse_and_offline,
         ),
         file_names=[(_file_name_value(1, "placeholder.bin"), 1)],
+        reparse_tag=0x9000001A,  # IO_REPARSE_TAG_CLOUD
     )
     parsed = parse_base_record(60, _single_record_source(60, record))
 
     assert parsed is not None
-    assert parsed.is_reparse_point
+    assert not parsed.is_link  # a cloud placeholder, not a link
     assert parsed.is_cloud_placeholder
     assert parsed.mtime > 0
     assert parsed.atime > 0
@@ -759,8 +792,133 @@ def test_recall_on_open_without_reparse_point_is_not_a_cloud_placeholder():
     parsed = parse_base_record(61, _single_record_source(61, record))
 
     assert parsed is not None
-    assert not parsed.is_reparse_point
+    assert not parsed.is_link
     assert not parsed.is_cloud_placeholder
+
+
+# -- reparse tags and on-disk size -------------------------------------------- #
+# Turbo Scan once treated every reparse folder as a link -- OneDrive's
+# included, which then showed as a 0-byte leaf -- and billed compressed
+# and sparse files their AllocatedSize. The attributes below are the ones
+# measured on a real machine.
+
+
+@pytest.mark.parametrize(
+    ("tag", "is_link"),
+    [
+        (0x9000001A, False),  # IO_REPARSE_TAG_CLOUD: OneDrive Files On-Demand
+        (0x9000701A, False),  # IO_REPARSE_TAG_CLOUD_7, another sync engine's variant
+        (0x80000021, False),  # IO_REPARSE_TAG_ONEDRIVE
+        (0xA0000003, True),  # IO_REPARSE_TAG_MOUNT_POINT: a junction or mount point
+        (0xA000000C, True),  # IO_REPARSE_TAG_SYMLINK
+        (None, True),  # the reparse bit with no readable tag: the safe default
+    ],
+)
+def test_only_a_link_tag_makes_a_reparse_folder_a_link(tag, is_link):
+    record = build_record(
+        62,
+        is_directory=True,
+        std_info_value=_std_info_value(file_attributes=0x431),  # as OneDrive's folder
+        file_names=[(_file_name_value(1, "OneDrive"), 1)],
+        reparse_tag=tag,
+    )
+    parsed = parse_base_record(62, _single_record_source(62, record))
+
+    assert parsed.is_link is is_link
+
+
+def _file_with_data(record_number, data_attr, **kwargs):
+    record = build_record(
+        record_number,
+        std_info_value=_std_info_value(file_attributes=kwargs.pop("file_attributes", 0x20)),
+        file_names=[(_file_name_value(1, "file.bin"), 1)],
+        data_attr=data_attr,
+        **kwargs,
+    )
+    return parse_base_record(record_number, _single_record_source(record_number, record))
+
+
+def test_an_ntfs_compressed_file_is_billed_its_compressed_size():
+    # 4,000,000 bytes, NTFS-compressed: AllocatedSize spans whole compression
+    # units (4,063,232, 16x the real figure); GetCompressedFileSizeW -- the
+    # Compatible engine's On Disk -- measured 253,952.
+    data_attr = _build_nonresident_attr(
+        mft_parser._ATTR_DATA,
+        allocated_size=4_063_232,
+        real_size=4_000_000,
+        initialized_size=4_000_000,
+        attribute_id=2,
+        compression_unit=4,
+        attr_flags=0x0001,  # ATTRIBUTE_FLAG_COMPRESSED
+        compressed_size=253_952,
+    )
+    parsed = _file_with_data(63, data_attr, file_attributes=0x820)
+
+    assert (parsed.logical_size, parsed.alloc_size) == (4_000_000, 253_952)
+
+
+def test_a_sparse_file_is_billed_only_the_clusters_it_has():
+    # A 512 GiB sparse disk image with about 3.1 GiB written. Sparse
+    # attributes have CompressionUnit 0 but still carry CompressedSize.
+    size = 512 * 1024**3
+    data_attr = _build_nonresident_attr(
+        mft_parser._ATTR_DATA,
+        allocated_size=size,
+        real_size=size,
+        initialized_size=size,
+        attribute_id=2,
+        attr_flags=0x8000,  # ATTRIBUTE_FLAG_SPARSE
+        compressed_size=3_328_598_016,
+    )
+    parsed = _file_with_data(64, data_attr, file_attributes=0x220)
+
+    assert (parsed.logical_size, parsed.alloc_size) == (size, 3_328_598_016)
+
+
+def test_a_compact_os_file_is_billed_its_compressed_stream():
+    # `compact /c /exe:xpress4k` on 6,600,000 bytes of text: "stored in
+    # 458,752 bytes", which GetCompressedFileSizeW reports too. The unnamed
+    # stream is sparse and holds nothing -- billing only it would show 0;
+    # the compressed bytes live in the WofCompressedData stream.
+    unnamed = _build_nonresident_attr(
+        mft_parser._ATTR_DATA,
+        allocated_size=6_602_752,
+        real_size=6_600_000,
+        initialized_size=6_600_000,
+        attribute_id=2,
+        attr_flags=0x8000,
+        compressed_size=0,
+    )
+    wof_stream = _build_nonresident_attr(
+        mft_parser._ATTR_DATA,
+        allocated_size=458_752,
+        real_size=457_310,
+        initialized_size=457_310,
+        attribute_id=3,
+        name="WofCompressedData",
+    )
+    parsed = _file_with_data(
+        65, unnamed, file_attributes=0x420, extra_attrs=wof_stream, reparse_tag=0x80000017
+    )
+
+    assert (parsed.logical_size, parsed.alloc_size) == (6_600_000, 458_752)
+
+
+def test_a_named_stream_counts_only_on_a_compact_os_file():
+    # Alternate data streams stay out of scope; only Compact OS's own
+    # stream, on a file with its reparse tag, is part of the file's size.
+    data_attr = _build_resident_attr(mft_parser._ATTR_DATA, b"hello", 2)
+    ads = _build_nonresident_attr(
+        mft_parser._ATTR_DATA,
+        allocated_size=65_536,
+        real_size=60_000,
+        initialized_size=60_000,
+        attribute_id=3,
+        name="WofCompressedData",
+    )
+    parsed = _file_with_data(66, data_attr, extra_attrs=ads)
+
+    assert (parsed.logical_size, parsed.alloc_size) == (5, 5)
 
 
 # -- decode_data_runs -------------------------------------------------------- #

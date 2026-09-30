@@ -207,7 +207,7 @@ duplicate group.**
 ### P1 — next release
 
 **P1-1. Turbo Scan's elevated helper fails at random and falls back
-silently.**
+silently — ✅ done (2026-09-29), real helper run pending (P1-3)**
 - Why: the helper replaces its progress file with `os.replace`
   (`mft_scan_cli.py:60-67`) while the GUI has it open for reading
   (`file_ops.py:375`). Windows then raises PermissionError, nothing catches
@@ -221,8 +221,24 @@ silently.**
   the helper write its error into the output file so the GUI can log it.
 - Size: S. Verify: the stress script shows 0 failures; one real helper scan
   (P1-3).
+- Done: `mft_scan_cli._ProgressFileWriter` retries the replace (5 × 10 ms)
+  and its `put` never raises: an update it still can't write is dropped
+  (logged once), since the next follows within the reporting interval. A
+  failed helper writes `{"error", "traceback"}` to its `--output` file and
+  `file_ops._helper_failure` puts that text in the fallback reason and the
+  log; the writer's leftover `.tmp` file is removed with the progress file.
+- Verified: a throwaway stress script (reader process polling like
+  `_relay_progress_file` at 5 Hz, writer at ~20 Hz, 30 s): main 6 of 583
+  writes raised out of `put` (each one would end the helper with exit
+  code 1); this branch 0 raised, 0 dropped of 582. Tests in
+  `tests/test_mft_scan_cli.py` (a blocked replace is retried and lands; a
+  progress write that can't land never fails the scan; a failed scan writes
+  its error) and `tests/test_run_elevated_scan_windows.py` (the helper's
+  error reaches the GUI).
+- Not done: a real elevated helper scan; the shell here isn't elevated.
 
-**P1-2. Turbo Scan shows wrong numbers without saying so.** Reproduced at
+**P1-2. Turbo Scan shows wrong numbers without saying so — ✅ done
+(2026-09-29), real-hardware comparison pending (P1-3).** Reproduced at
 the logic level (synthetic MFT records built with the attributes measured
 on this machine):
 - On Disk for NTFS-compressed and sparse files comes from `allocated_size`
@@ -252,6 +268,28 @@ on this machine):
 - Size: M. Verify: `compare_scan_engines.py` on `C:\Users` (with OneDrive),
   a compressed folder and a junction; an incremental scan after a change
   made mid-scan.
+- Done: `mft_parser` reads the CompressedSize field of compressed and
+  sparse non-resident attributes and bills that as On Disk (plus a Compact
+  OS/WOF file's `WofCompressedData` stream). It reads the reparse tag, and
+  only name surrogates (junctions, symlinks, mount points) are links; the
+  Cloud Files tags (`IO_REPARSE_TAG_CLOUD*`, `IO_REPARSE_TAG_ONEDRIVE`)
+  are walked like any folder. A scan whose path is, or runs through, a
+  junction, symlink or mount point goes to Compatible before Turbo starts
+  (`turbo_scan._linked_path_reason`), and the MFT and cache paths refuse
+  one too (`LinkedFolderError`) instead of rerooting to an empty record.
+  The journal cursor is taken before the full read
+  (`turbo_read._journal_position`), so changes made during it are replayed
+  by the next incremental scan.
+- Verified: regression tests with synthetic records: a 4,000,000-byte
+  compressed file billed its compressed size, a 512 GiB sparse image its
+  written clusters, a Compact OS file its compressed stream
+  (`tests/test_mft_parser.py`); a OneDrive folder scanned with its file
+  while a junction stays a leaf, and a junction asked for directly falls
+  back to Compatible from both the MFT read and the cache; a change made
+  during a full read reaches the next incremental scan
+  (`tests/test_turbo_scan_integration.py`).
+- Not done: `compare_scan_engines.py` on real volumes (needs elevation;
+  folded into P1-3).
 
 **P1-3. Verify Turbo Scan and its cache on real hardware, with a written
 checklist.**

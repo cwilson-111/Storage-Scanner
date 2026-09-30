@@ -91,7 +91,7 @@ def synthetic_records(n_files):
             frn=frn(record_number),
             is_directory=is_dir,
             file_attributes=0x10 if is_dir else 0x20,
-            is_reparse_point=False,
+            is_link=False,
             is_cloud_placeholder=False,
             mtime=_MTIME,
             atime=_MTIME,

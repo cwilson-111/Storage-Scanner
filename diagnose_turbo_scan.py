@@ -42,14 +42,14 @@ def _classify_orphans(records, root_frn):
         frn = stack.pop()
         for child_record, name_attr in children_by_parent.get(frn, []):
             attached.add((child_record.frn, name_attr.parent_frn))
-            is_dir = child_record.is_directory and not child_record.is_reparse_point
+            is_dir = child_record.is_directory and not child_record.is_link
             if is_dir and child_record.frn not in visited_dir_frns:
                 visited_dir_frns.add(child_record.frn)
                 stack.append(child_record.frn)
 
     buckets = {
         "missing_parent": [],
-        "parent_is_reparse_point": [],
+        "parent_is_link": [],
         "parent_not_a_directory": [],
         "cascading_unreachable_parent": [],
     }
@@ -62,8 +62,8 @@ def _classify_orphans(records, root_frn):
             parent_record = frn_to_record.get(name_attr.parent_frn)
             if parent_record is None:
                 bucket = "missing_parent"
-            elif parent_record.is_reparse_point:
-                bucket = "parent_is_reparse_point"
+            elif parent_record.is_link:
+                bucket = "parent_is_link"
             elif not parent_record.is_directory:
                 bucket = "parent_not_a_directory"
             else:
@@ -73,8 +73,8 @@ def _classify_orphans(records, root_frn):
     print("\nOrphan breakdown (why each unattached occurrence wasn't reachable):")
     descriptions = {
         "missing_parent": "parent record missing entirely",
-        "parent_is_reparse_point": (
-            "parent is a reparse point (expected leaf -- matches the "
+        "parent_is_link": (
+            "parent is a junction/symlink (expected leaf -- matches the "
             "Compatible engine's own behavior, not a bug)"
         ),
         "parent_not_a_directory": "parent record exists but isn't a directory (corrupt link?)",
