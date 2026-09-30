@@ -81,6 +81,13 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 - The unused growth-chart code and every mention of matplotlib are gone;
   the macOS install steps cover macOS 15.
 
+### Development
+
+- The tests run on Linux and macOS (Python 3.12 and 3.13) as well as
+  Windows; Windows-only tests are marked and skipped elsewhere. Running
+  from source needs Python 3.11 or later.
+- Build and test tools are pinned to exact versions.
+
 ## v1.12.0 — 2026-09-29
 
 ### Safer deletes

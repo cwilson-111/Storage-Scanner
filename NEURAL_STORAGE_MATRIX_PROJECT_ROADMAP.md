@@ -903,7 +903,8 @@ done (2026-09-29)**
   `logging.FileHandler`, which P3-5 had replaced, so it had stopped
   checking the log; it now checks `logging_setup.log_dir`.
 
-**P2-16. Build provenance and pinned build tools.**
+**P2-16. Build provenance and pinned build tools — pins ✅ (2026-09-29);
+attestation and GUI self-test not yet.**
 - Why: there's no artifact attestation. `requirements-dev.txt` uses `>=`, so
   each release can bundle a different PyInstaller. Pushing a tag and main at
   the same commit builds everything twice. The smoke test never creates a Tk
@@ -912,6 +913,14 @@ done (2026-09-29)**
   tools; a `--selftest-gui` flag that opens and closes a hidden window in
   the smoke test.
 - Size: S.
+- Done: `requirements-dev.txt` pins exact versions: PyInstaller 6.22.3 and
+  Pillow 12.3.0 (what v1.12.0's SBOM says built it), and the gate tools at
+  the versions the gates ran with locally (ruff and black match
+  `.pre-commit-config.yaml`). Dependabot's pip updates propose upgrades.
+- Verified: `pip download --only-binary=:all:` finds wheels for all of
+  them on Windows, macOS and Linux for Python 3.12 and 3.13.
+- Not done: `actions/attest-build-provenance`, a `--selftest-gui` smoke
+  step, and not building twice when a tag and main point at one commit.
 
 **P2-17. The sampled-duplicate warning hard-codes "1 MB" — ✅ done
 (2026-09-29)**
