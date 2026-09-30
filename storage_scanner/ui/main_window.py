@@ -5,6 +5,7 @@ DuplicatesMixin, HistoryMixin, and FileWindowsMixin — split out so each
 window/feature area can be read and tested on its own.
 """
 
+import contextlib
 import json
 import os
 import queue
@@ -22,6 +23,7 @@ from tkinter import (
     E,
     Menu,
     StringVar,
+    TclError,
     Toplevel,
     W,
     X,
@@ -270,7 +272,7 @@ class MainWindowMixin:
         # they track together closely enough to share one sort.
         self.tree.heading("#0", text="Name", command=lambda: self._sort_by("name"))
         self.tree.heading("size", text="Size", command=lambda: self._sort_by("size"))
-        self.tree.heading("alloc", text="On Disk", command=lambda: self._sort_by("size"))
+        self.tree.heading("alloc", text="On Disk", command=lambda: self._sort_by("alloc"))
         self.tree.heading("percent", text="% of Parent", command=lambda: self._sort_by("size"))
         self.tree.heading("items", text="Files", command=lambda: self._sort_by("items"))
         self.tree.heading("change", text="Change", command=lambda: self._sort_by("change"))
@@ -321,11 +323,23 @@ class MainWindowMixin:
         self.menu.add_command(label="Add to Cart", command=self._add_selected_to_cart)
         self.menu.add_separator()
         self.menu.add_command(label=f"Delete (to {TRASH_NAME})", command=self._delete_selected)
-        self.tree.bind("<Button-3>", self._show_menu)
+        self.tree.bind("<Button-2>" if IS_MACOS else "<Button-3>", self._show_menu)
+        for key in ("<Shift-F10>", "<App>", "<Menu>"):  # the context-menu keys
+            # A key this platform's Tk doesn't name ("App" is Windows').
+            with contextlib.suppress(TclError):
+                self.tree.bind(key, lambda e: self._show_menu_at_focus())
 
-        # Keyboard: Delete recycles the selection, F5 re-scans.
+        # Keyboard: Delete recycles the selection, F5 re-scans, Enter opens,
+        # Backspace/Alt+Up goes to the parent, Ctrl+C copies the path,
+        # Ctrl+F opens Search.
         self.tree.bind("<Delete>", lambda e: self._delete_selected())
         self.root.bind("<F5>", lambda e: self.start_scan())
+        self.tree.bind("<Return>", lambda e: self._open_focused())
+        for key in ("<BackSpace>", "<Alt-Up>"):
+            self.tree.bind(key, lambda e: self._focus_parent())
+        modifier = "Command" if IS_MACOS else "Control"
+        self.tree.bind(f"<{modifier}-c>", lambda e: self._copy_path())
+        self.root.bind(f"<{modifier}-f>", lambda e: self._open_search_if_scanned())
 
     def _build_statusbar(self):
         status = ttk.Frame(self.root, padding=(8, 2))
@@ -1136,7 +1150,8 @@ class MainWindowMixin:
         arrow = " ▼" if self._sort_reverse else " ▲"
         # The percent column is driven by the size sort, so it shares the mark.
         active_cols = {
-            "size": ("size", "alloc", "percent"),
+            "size": ("size", "percent"),
+            "alloc": ("alloc",),
             "name": ("#0",),
             "items": ("items",),
             "change": ("change",),
@@ -1341,6 +1356,46 @@ class MainWindowMixin:
             self.tree.selection_set(iid)
             self.tree.focus(iid)
             self.menu.tk_popup(event.x_root, event.y_root)
+
+    def _show_menu_at_focus(self):
+        """Shift+F10 / the Menu key: the context menu under the focused row."""
+        iid = self.tree.focus()
+        box = self.tree.bbox(iid) if iid else None
+        if not box:
+            return "break"
+        x, y, _width, height = box
+        self.tree.selection_set(iid)
+        self.menu.tk_popup(self.tree.winfo_rootx() + x + 24, self.tree.winfo_rooty() + y + height)
+        return "break"
+
+    def _open_focused(self):
+        """Enter: a folder opens or closes, a file is shown in the file manager."""
+        iid = self.tree.focus()
+        node = self.node_by_iid.get(iid)
+        if node is None:
+            return "break"
+        if not node.is_dir:
+            self._open_in_explorer()
+        elif self.tree.item(iid, "open"):
+            self.tree.item(iid, open=False)
+        else:
+            self._on_open(None)  # fills the folder's rows, as clicking its arrow does
+            self.tree.item(iid, open=True)
+        return "break"
+
+    def _focus_parent(self):
+        """Backspace / Alt+Up: move to the row of the folder above."""
+        parent = self.tree.parent(self.tree.focus())
+        if parent:
+            self.tree.focus(parent)
+            self.tree.selection_set(parent)
+            self.tree.see(parent)
+        return "break"
+
+    def _open_search_if_scanned(self):
+        if self.root_node is not None and not self._scan_running():
+            self.show_search_window()
+        return "break"
 
     def _selected_node(self):
         return self.node_by_iid.get(self.tree.focus())

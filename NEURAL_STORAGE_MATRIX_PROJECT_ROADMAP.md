@@ -933,7 +933,9 @@ growth.**
   double-click kept apart, and area from on-disk size.
 - Size: L.
 
-**P2-20. Everyday table stakes in the main window.**
+**P2-20. Everyday table stakes in the main window — keys, macOS menu, On
+Disk sort and CSV ✅ done (2026-09-29); multi-select, new columns, File
+Types and Largest Files not yet.**
 - Why:
   - one selection at a time (`selectmode="browse"`, line 234);
   - the only keys are Delete, F5 and Return in the path box (lines 91,
@@ -951,6 +953,20 @@ growth.**
     formulas.
 - Do: fix in that order; each is small.
 - Size: M overall.
+- Done: keys in the main tree: Enter opens or closes a folder (a file is
+  shown in the file manager), Backspace/Alt+Up go to the parent row,
+  Ctrl+C (Cmd+C on macOS) copies the path, Ctrl+F opens Search,
+  Shift+F10 and the Menu key open the context menu under the focused row;
+  on macOS the context menu is on `<Button-2>`. "On Disk" sorts by on-disk
+  size (`sort_key_function("alloc")`). CSV export keeps `mtime` (epoch, for
+  existing scripts) and adds readable `modified` and `accessed` columns,
+  and prefixes a cell starting with `= + - @`, tab or CR with `'`.
+- Verified: the real window with generated key events (Enter opened and
+  closed a folder, Backspace moved to the parent, Ctrl+C copied its path,
+  Ctrl+F opened Search & Filter, the On Disk heading took the sort arrow);
+  `tests/test_export.py` for the CSV changes.
+- Not done: extended selection, Modified/Accessed/Owner/Folders columns,
+  File Types drill-down, Largest Files context menu.
 
 **P2-21. High DPI and a dark theme.**
 - Why: nothing declares DPI awareness. The v1.11.0 exe's manifest has

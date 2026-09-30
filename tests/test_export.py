@@ -71,3 +71,29 @@ def test_export_to_file_rejects_an_unknown_format(tmp_path):
         export_to_file(_tree(), tmp_path / "out.xml", "xml")
 
     assert not (tmp_path / "out.xml").exists()
+
+
+def test_csv_names_a_spreadsheet_would_run_as_formulas_are_quoted():
+    root = Node("/data", "data")
+    root.add_file("=HYPERLINK(x)", 1)
+    root.add_file("-rf", 1)
+    root.add_file("plain.txt", 1)
+    out = io.StringIO()
+
+    write_csv(root, out)
+
+    names = [r["name"] for r in csv.DictReader(io.StringIO(out.getvalue()))][1:]
+    assert sorted(names) == ["'-rf", "'=HYPERLINK(x)", "plain.txt"]
+
+
+def test_csv_has_readable_modified_and_accessed_times():
+    root = Node("/data", "data")
+    root.add_file("a.txt", 1, mtime=1_700_000_000.0, atime=1_700_000_100.0)
+    out = io.StringIO()
+
+    write_csv(root, out)
+
+    row = list(csv.DictReader(io.StringIO(out.getvalue())))[1]
+    assert row["mtime"] == "1700000000.0"  # unchanged for existing scripts
+    assert row["modified"].startswith("2023-11-1")
+    assert row["accessed"] != "" and row["accessed"] != row["modified"]

@@ -96,7 +96,7 @@ def node_display(node, parent_size):
 
 def sort_key_function(key, change_of=None):
     """The key a level's rows sort by for a heading's sort key ("name",
-    "size", "items" or "change"); sizes and counts read a folder's running
+    "size", "alloc", "items" or "change"); sizes and counts read a folder's running
     totals while a scan is still filling them in. "change" needs
     `change_of(node)`, a folder's growth since the last scan or None (not
     known), which sorts as no change."""
@@ -104,6 +104,8 @@ def sort_key_function(key, change_of=None):
         return lambda node: node.name.lower()
     if key == "items":
         return lambda node: node.file_count
+    if key == "alloc":
+        return lambda node: node.alloc_size
     if key == "change" and change_of is not None:
         return lambda node: change_of(node) or 0
     return lambda node: node.size

@@ -26,6 +26,12 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   deleting waits for it too.
 - When something fails inside the window, a dialog says so and can open
   the log folder (it used to do nothing visible).
+- Keys: Enter opens a folder, Backspace/Alt+Up go up, Ctrl+C copies the
+  path, Ctrl+F opens Search, Shift+F10 / the Menu key open the context
+  menu, which now also opens on macOS. "On Disk" sorts by on-disk size.
+- CSV exports add readable `modified` and `accessed` columns, and names
+  starting with `=`, `+`, `-` or `@` can no longer run as spreadsheet
+  formulas.
 
 ### Growth History
 
@@ -51,6 +57,8 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 - The cache compacts itself, forgets drives not seen for 90 days, starts
   over if the file is damaged, and can be cleared from Settings.
 - The "USN journal wrapped" check reads the right field.
+- The elevated helper never writes its result through a link, and the app
+  checks that the result stays inside the folder it asked for.
 
 ### Scheduled scans
 

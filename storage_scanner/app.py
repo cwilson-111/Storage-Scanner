@@ -94,7 +94,7 @@ class StorageScannerApp(
         self.root_node = None
         self.node_by_iid = {}  # treeview iid -> Node
         self._heat_tags = set()  # quantized heat tags configured so far
-        self._sort_key = "size"  # "name" | "size" | "items" | "change"
+        self._sort_key = "size"  # "name" | "size" | "alloc" | "items" | "change"
         self._sort_reverse = True  # sizes default biggest-first
 
         history_warning = _open_history()
