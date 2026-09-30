@@ -606,7 +606,7 @@ class MainWindowMixin:
         return choice["value"]
 
     def start_scan(self):
-        if self.scan_thread and self.scan_thread.is_alive():
+        if self._scan_running():
             return
         target = self.path_var.get().strip().strip('"')
         if not target or not os.path.exists(target):
@@ -617,6 +617,7 @@ class MainWindowMixin:
         if turbo_enabled is None:  # restarting elevated; this window is gone
             return
 
+        self._scan_active = True
         self._begin_scan_view(target)
         self.scan_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
@@ -651,10 +652,11 @@ class MainWindowMixin:
         contract), never the whole GUI -- this window stays open and
         unprivileged throughout. See _request_elevation's call site for
         why a full relaunch-as-root isn't used on either platform."""
-        if self.scan_thread and self.scan_thread.is_alive():
+        if self._scan_running():
             messagebox.showerror("Storage Scanner", "A scan is already running.")
             return
 
+        self._scan_active = True
         self._begin_scan_view(target)
         self.scan_btn.config(state="disabled")
         self.elevate_btn.config(state="disabled")
@@ -705,6 +707,7 @@ class MainWindowMixin:
 
     # -- History helper functions ------------------------------------------ #
     def _finish_scan(self, node, report=None):
+        self._scan_active = False
         self.scan_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         if hasattr(self, "elevate_btn"):
@@ -766,13 +769,15 @@ class MainWindowMixin:
         )
 
         progress_token = self._scan_progress_phase(self.PHASE_SAVING_HISTORY)
-        threading.Thread(
+        self._history_thread = threading.Thread(
             target=self._save_history_worker,
             args=(node, progress_token),
             daemon=True,
-        ).start()
+        )
+        self._history_thread.start()
 
     def _finish_error(self, msg):
+        self._scan_active = False
         self._scan_progress_end(FAILED)
         self._live_freeze()
         self.scan_btn.config(state="normal")

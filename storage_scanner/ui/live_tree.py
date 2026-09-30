@@ -135,19 +135,34 @@ class LiveTreeMixin:
         )
 
     def _scan_running(self):
-        return self.scan_thread is not None and self.scan_thread.is_alive()
+        """From start_scan until _finish_scan or _finish_error has handled
+        the scan's result -- not just while its worker thread is alive:
+        between the worker's last message and the poll that handles it, F5
+        would otherwise start a second scan while the first one's result is
+        still arriving."""
+        return self._scan_active
+
+    def _saving_history(self):
+        thread = self._history_thread
+        return thread is not None and thread.is_alive()
+
+    def _deleting_blocked(self):
+        """While a scan runs, or its history is being saved from the tree a
+        delete would change."""
+        return self._scan_running() or self._saving_history()
 
     def _refuse_delete_during_scan(self, parent=None):
-        """True, after saying so, while a scan is running: its rows are
-        still filling in from the folders being read, and a folder deleted
-        mid-read would leave the scan's totals for it undefined."""
-        if not self._scan_running():
+        """True, after saying so, while a scan is running or its history is
+        still being saved: the scan's rows are still filling in, and a
+        folder deleted mid-read (or mid-save) would leave its totals
+        undefined."""
+        if self._scan_running():
+            message = "Deleting has to wait until the scan finishes or is cancelled."
+        elif self._saving_history():
+            message = "Deleting has to wait a moment, until this scan's history is saved."
+        else:
             return False
-        messagebox.showinfo(
-            "Storage Scanner",
-            "Deleting has to wait until the scan finishes or is cancelled.",
-            parent=parent or self.root,
-        )
+        messagebox.showinfo("Storage Scanner", message, parent=parent or self.root)
         return True
 
     # -- the scan's tree ------------------------------------------------ #

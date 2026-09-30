@@ -113,7 +113,7 @@ class DeletionMixin:
             scan_root=lambda: self.root_node.path if self.root_node is not None else None,
             duplicate_groups=lambda: self.duplicates,
             tree=lambda: self.root_node,
-            scanning=self._scan_running,
+            scanning=self._deleting_blocked,
         )
         # First, so every window's own listener sees the pruned cart and
         # duplicate cache.

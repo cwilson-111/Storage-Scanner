@@ -14,6 +14,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import webbrowser
 from tkinter import TOP, Tk, X, messagebox, ttk
 
@@ -39,6 +40,11 @@ from storage_scanner.ui.scan_progress_panel import ScanProgressMixin
 from storage_scanner.ui.search_window import SearchMixin
 from storage_scanner.ui.treemap_window import TreemapMixin
 from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
+
+# How long closing waits for a history save that's still running. A save
+# of a 20,000-folder scan takes about 0.05 s (benchmarks/scale.py); this is
+# only a ceiling so a stuck save can't keep the window from ever closing.
+CLOSE_WAIT_SECONDS = 120
 
 
 class StorageScannerApp(
@@ -76,6 +82,10 @@ class StorageScannerApp(
         self.progress_q = queue.Queue()
         self.cancel_event = threading.Event()
         self.scan_thread = None
+        # True from start_scan until _finish_scan/_finish_error has handled
+        # the scan's result (see LiveTreeMixin._scan_running).
+        self._scan_active = False
+        self._history_thread = None  # the running history save, if any
         self.root_node = None
         self.node_by_iid = {}  # treeview iid -> Node
         self._heat_tags = set()  # quantized heat tags configured so far
@@ -178,6 +188,21 @@ class StorageScannerApp(
     def _on_close(self):
         self.cancel_event.set()
         self.dup_cancel_event.set()
+        if self._saving_history():
+            # The save runs on a daemon thread; destroying the window now
+            # would end the process mid-save and lose this scan's history.
+            self.status_var.set("Finishing saving this scan's history…")
+            self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+            self._close_when_saved(time.monotonic() + CLOSE_WAIT_SECONDS)
+            return
+        self.root.destroy()
+
+    def _close_when_saved(self, deadline):
+        if self._saving_history() and time.monotonic() < deadline:
+            self.root.after(100, lambda: self._close_when_saved(deadline))
+            return
+        if self._saving_history():
+            logger.warning("Closed before the scan history finished saving")
         self.root.destroy()
 
 

@@ -663,7 +663,8 @@ databases:
   an Open Log Folder button.
 - Size: S. Verify: force an exception in a callback.
 
-**P2-7. Closing during "Saving history" loses the scan.**
+**P2-7. Closing during "Saving history" loses the scan — ✅ done
+(2026-09-29)**
 - Why: the save runs on a daemon thread (`ui/main_window.py:770-773`) and
   `_on_close` (`app.py:165-168`) destroys the window without waiting.
   During the save, deletes are allowed (`ui/live_tree.py:130` checks only
@@ -672,8 +673,18 @@ databases:
 - Do: wait for the save on close with a "Finishing…" note, and block
   deletes until it's done.
 - Size: S.
+- Done: the save thread is kept (`_history_thread`); `_on_close` shows
+  "Finishing saving this scan's history…" and closes when it ends (at most
+  `CLOSE_WAIT_SECONDS`, 120). Deletes are refused while it runs, in every
+  window (`_refuse_delete_during_scan`) and in the delete service
+  (`scanning=self._deleting_blocked`).
+- Verified: the real app with `record_scan` slowed by 2 s: a main-tree
+  Delete during the save said "Deleting has to wait a moment, until this
+  scan's history is saved" and left the file; closing kept the window open
+  until the save ended, and the scan was in the history afterwards.
 
-**P2-8. F5 can start a second scan before the first one finishes.**
+**P2-8. F5 can start a second scan before the first one finishes — ✅ done
+(2026-09-29)**
 - Why: F5 calls `start_scan` directly (`ui/main_window.py:292`), whose only
   guard is `scan_thread.is_alive()` (line 610). Between the worker exiting
   and `_poll_progress` handling "done", a second scan starts while the first
@@ -681,6 +692,14 @@ databases:
 - Do: tag queue messages with a scan generation and ignore F5 until
   `_finish_scan` has run.
 - Size: S.
+- Done: `_scan_active` is set by `start_scan` (and the macOS/Linux
+  elevated start) and cleared only in `_finish_scan`/`_finish_error`;
+  `_scan_running()` and both start guards use it instead of the worker
+  thread being alive. No generation tag was needed: a new scan can't start
+  until the old one's "done" or "error" has been handled, so the queue
+  never holds another scan's messages.
+- Verified: the real app: after the worker thread had ended but before its
+  result was handled, `start_scan()` (what F5 calls) started nothing.
 
 **P2-9. Scheduled scans break quietly when the exe moves, runs from a ZIP,
 or the path has a `%`.**

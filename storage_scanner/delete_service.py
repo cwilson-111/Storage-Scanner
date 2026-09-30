@@ -50,7 +50,9 @@ from storage_scanner.platform_support import IS_WINDOWS
 # Messages say why, not what happened: the outcome says that (the Audit Log
 # shows "Refused: <message>", a dialog lists them under "Not deleted:").
 COULD_NOT_DELETE = "It may be in use, protected, or require admin rights."
-SCAN_RUNNING = "A scan is running; deleting has to wait until it finishes or is cancelled."
+SCAN_RUNNING = (
+    "A scan is running or its history is being saved; deleting has to wait until that's done."
+)
 FROM_REPLACED_SCAN = (
     "It was listed from an earlier scan that has since been replaced; find it again in "
     "the current scan's results."
