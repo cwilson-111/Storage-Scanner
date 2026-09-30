@@ -36,6 +36,7 @@ from tkinter import (
 from history import get_app_metadata, get_folder_sizes, set_app_metadata, set_budget
 from storage_scanner import (
     diagnostics,
+    explorer_menu,
     history_retention,
     turbo_cache,
     turbo_scan,
@@ -200,6 +201,12 @@ class MainWindowMixin:
             )
             settings_menu.add_command(
                 label="Clear Turbo Scan Cache…", command=self._clear_turbo_cache
+            )
+            self.explorer_menu_var = BooleanVar(value=explorer_menu.is_installed())
+            settings_menu.add_checkbutton(
+                label=f"Add “{explorer_menu.MENU_TEXT}” to Folder Right-Click Menu",
+                variable=self.explorer_menu_var,
+                command=self._on_toggle_explorer_menu,
             )
         self.update_check_var = BooleanVar(
             value=get_app_metadata(update_check.ENABLED_KEY, "1") != "0"
@@ -529,6 +536,21 @@ class MainWindowMixin:
     # -- Scan lifecycle ---------------------------------------------------- #
     def _on_toggle_turbo_scan(self):
         set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
+
+    def _on_toggle_explorer_menu(self):
+        """Settings ▸ Add "Scan with Storage Scanner" to Folder Right-Click Menu."""
+        try:
+            if self.explorer_menu_var.get():
+                explorer_menu.install()
+                done = "Folders' right-click menus now have “Scan with Storage Scanner”"
+            else:
+                explorer_menu.uninstall()
+                done = "Removed “Scan with Storage Scanner” from folders' right-click menus"
+        except (ValueError, OSError) as exc:
+            self.explorer_menu_var.set(explorer_menu.is_installed())
+            messagebox.showerror("Storage Scanner", str(exc))
+            return
+        self.status_var.set(done + " (on Windows 11, under “Show more options”).")
 
     def _copy_diagnostic_info(self):
         """Help ▸ Copy Diagnostic Info (storage_scanner/diagnostics.py)."""

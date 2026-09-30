@@ -138,9 +138,10 @@ def launch_location_problem(launch_args):
             return (
                 f"This copy of Storage Scanner is running from {arg}, a temporary "
                 "location (a ZIP opened without extracting it, or a download "
-                "folder that gets cleaned up). A scheduled scan would stop working "
-                "when it's gone: copy the app somewhere permanent, open it from "
-                "there, and schedule the scan again."
+                "folder that gets cleaned up). Anything that starts it later -- a "
+                "scheduled scan, the folder menu entry -- would stop working when "
+                "it's gone: copy the app somewhere permanent, open it from there, "
+                "and try again."
             )
     return None
 

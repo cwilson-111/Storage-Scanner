@@ -155,6 +155,10 @@ class StorageScannerApp(
         # First-run guide (see storage_scanner/onboarding.py). Only the GUI
         # ever builds this class — main()'s headless modes return before it.
         self.root.after(500, self._show_onboarding_on_launch)
+        # `StorageScanner.exe <folder>` (and the folder menu entry,
+        # storage_scanner/explorer_menu.py) scans that folder straight away.
+        if initial_path:
+            self.root.after(200, self.start_scan)
 
     def _check_for_update_worker(self):
         newer_tag = check_for_update()
@@ -255,10 +259,21 @@ def main():
 
         sys.exit(run_mft_scan(sys.argv[2:]))
 
-    # A Windows elevated relaunch passes the folder that was on screen so
-    # the new, privileged instance reopens in the same place instead of
-    # resetting.
-    initial_path = sys.argv[1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else None
+    # A folder to scan straight away: the Windows elevated relaunch passes
+    # the folder that was on screen, and the Explorer menu entry the folder
+    # clicked (storage_scanner/explorer_menu.py).
+    initial_path = folder_argument(sys.argv[1]) if len(sys.argv) > 1 else None
     root = Tk()
     StorageScannerApp(root, initial_path=initial_path)  # applies the Structural Light theme
     root.mainloop()
+
+
+def folder_argument(arg):
+    """The folder a command-line argument names, or None. Explorer's quoted
+    "%1" turns a drive root into `C:"` -- the backslash escapes the closing
+    quote -- so a trailing quote is dropped and a bare drive gets its root
+    back."""
+    path = arg.strip().rstrip('"')
+    if len(path) == 2 and path[1] == ":" and path[0].isalpha():
+        path += "\\"
+    return path if os.path.isdir(path) else None

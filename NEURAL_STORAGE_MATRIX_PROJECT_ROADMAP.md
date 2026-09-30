@@ -1019,7 +1019,8 @@ Types and Largest Files not yet.**
   palette that follows the OS.
 - Size: M. Verify: screenshots at 150%.
 
-**P2-22. Explorer integration and package managers.**
+**P2-22. Explorer integration and package managers — folder menu and
+`StorageScanner.exe <folder>` ✅ (2026-09-29); winget/Scoop not yet.**
 - Why: no "Scan with Storage Scanner" folder menu, no winget or Scoop
   manifest, no installer. A path passed on the command line only fills the
   path box (`app.py:203`); it doesn't start a scan.
@@ -1027,6 +1028,21 @@ Types and Largest Files not yet.**
   `StorageScanner.exe <folder>` scans right away; winget and Scoop manifests
   (easier once signed).
 - Size: M.
+- Done: `StorageScanner.exe <folder>` starts scanning that folder
+  (`app.folder_argument`; also repairs the `C:"` a quoted drive root
+  arrives as). Tools ▸ Settings ▸ "Add “Scan with Storage Scanner” to
+  Folder Right-Click Menu" (Windows) writes per-user entries for folders,
+  drives and a folder's background under `HKCU\Software\Classes`
+  (`storage_scanner/explorer_menu.py`), and refuses when this copy runs
+  from a temporary location. Windows 11 shows it under "Show more options".
+- Verified: `tests/test_explorer_menu.py` (install and remove under a test
+  key; the commands; a temporary copy refused; drive-root repair). The
+  real app: a folder argument started a scan; ticking the setting wrote
+  the real key, unticking removed it (checked with `reg query`). A real
+  launch with Explorer's command shape kept a spaced folder as one
+  argument and turned `C:"` back into `C:\`.
+- Not done: winget and Scoop manifests (easier once signed, P1-9); the
+  entry itself wasn't clicked in Explorer.
 
 ### P3 — later or strategic
 
