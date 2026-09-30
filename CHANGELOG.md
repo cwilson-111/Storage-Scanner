@@ -13,6 +13,64 @@ message, copied as written. Where the tag is a lightweight one (no message
 of its own), the text is the message of the commit it points at. Tags
 before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
+## Unreleased
+
+### Main tree
+
+- A **Change** column shows how much each folder grew or shrank since the
+  previous saved scan of the same path (history keeps folders of 50 MB or
+  more), and sorts by it.
+- F5 no longer starts a second scan while the last one's result is still
+  arriving.
+- Closing while a scan's history is being saved waits for the save, and
+  deleting waits for it too.
+- When something fails inside the window, a dialog says so and can open
+  the log folder (it used to do nothing visible).
+
+### Growth History
+
+- The summary counts every tracked folder (not just the top 50), and
+  folders that are gone show up, with their shrink.
+- A folder only one scan has is labelled "New / was <50 MB" or
+  "Gone / now <50 MB" rather than just "New".
+- One save made with the clock years ahead no longer thins the whole
+  history.
+- A few kilobytes' change to a folder that never changes is no longer an
+  "anomaly"; a forecast beyond a century says "more than 100 years".
+
+### Cleanup
+
+- Archiving runs in the background with progress and Cancel instead of
+  freezing the window.
+- Orphaned-install detection ignores a registry read that comes back
+  incomplete, and never flags a folder that holds an installed app.
+- Sampled-duplicate warnings show the real sample size.
+
+### Turbo Scan
+
+- The cache compacts itself, forgets drives not seen for 90 days, starts
+  over if the file is damaged, and can be cleared from Settings.
+- The "USN journal wrapped" check reads the right field.
+
+### Scheduled scans
+
+- Refuses to schedule a copy of the app running from a temporary folder or
+  a ZIP, flags tasks that run another copy of the app, escapes `%` for
+  cron, and refuses Windows paths Task Scheduler would expand (`%NAME%`).
+
+### Privacy and support
+
+- The update check can be turned off (Settings, or the
+  `STORAGE_SCANNER_NO_UPDATE_CHECK` environment variable), never runs from
+  a build that isn't a release, and Data builds hear about Data builds.
+- Help ▸ Copy Diagnostic Info (no file or folder names) and Report a
+  Problem; issue forms and SECURITY.md.
+- The log no longer loses lines when the app and a scheduled scan write at
+  once, and records INFO and above by default
+  (`STORAGE_SCANNER_LOG_LEVEL=DEBUG` for more).
+- The unused growth-chart code and every mention of matplotlib are gone;
+  the macOS install steps cover macOS 15.
+
 ## v1.12.0 — 2026-09-29
 
 ### Safer deletes
