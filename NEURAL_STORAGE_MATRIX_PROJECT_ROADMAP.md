@@ -788,12 +788,25 @@ or the path has a `%`.**
   notifications on and verify once.
 - Size: S to verify, M for the app ID.
 
-**P2-12. Archiving blocks the window.**
+**P2-12. Archiving blocks the window — ✅ done (2026-09-29)**
 - Why: `archive_file` compresses at the highest level and verifies on the
   Tk thread: a 100 MB log took 6.2 s; [inference] a 2 GB file would freeze
   it for about two minutes.
 - Do: run it on a worker thread with progress and cancel.
 - Size: S.
+- Done: `archive.write_verified_archive` streams the file into the zip and
+  reads it back (the CRC check) in 1 MiB chunks, with a progress callback
+  and a cancel event, at zipfile's default level instead of 9; a failed or
+  cancelled archive is removed and the original never touched. The
+  Cleanup window runs it on a worker thread behind an "Archiving" dialog
+  (progress bar, Cancel), and removes each original on the Tk thread
+  (`archive.finish_archive`), where the delete service can ask its
+  questions. `archive_file` still does both in one call.
+- Verified: the real Cleanup Recommendations window on a 150 MB,
+  400-day-old log: Cancel at 30% left no .zip and the original intact
+  (longest UI stall 13 ms); a full run wrote a 534 KB zip and removed the
+  original (longest stall 51 ms). `tests/test_archive.py` covers a write
+  failing part-way and a cancel.
 
 **P2-13. Fold the Data build back into main.**
 - Why: 17 of the `data` branch's 18 commits are "Merge branch 'main' into

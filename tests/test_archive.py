@@ -1,7 +1,10 @@
 import os
 import sys
+import threading
 import zipfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -90,18 +93,30 @@ def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path):
     assert os.path.exists(result.archive_path)
 
 
-def test_archive_file_cleans_up_partial_archive_on_write_failure(tmp_path, monkeypatch):
+def test_a_write_that_fails_part_way_leaves_no_archive_and_the_original(tmp_path):
     target = tmp_path / "notes.txt"
-    target.write_text("hello")
+    target.write_bytes(b"hello" * 500_000)  # a few chunks
     node = detached_file(str(target), size=target.stat().st_size)
 
-    def boom(*args, **kwargs):
-        raise OSError("disk full")
+    def disk_full(done, _total):
+        if done > 0:
+            raise OSError("disk full")
 
-    monkeypatch.setattr(zipfile.ZipFile, "write", boom)
+    with pytest.raises(OSError, match="disk full"):
+        archive.write_verified_archive(node, progress=disk_full)
 
-    result = archive.archive_file(node, "Cleanup Recommendations", _never_called)
+    assert not os.path.exists(str(target) + ".zip"), "partial archive must not be left behind"
+    assert target.read_bytes() == b"hello" * 500_000
 
-    assert result.success is False
-    expected_zip = str(target) + ".zip"
-    assert not os.path.exists(expected_zip), "partial/broken archive must not be left behind"
+
+def test_cancelling_leaves_no_archive(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_bytes(b"hello" * 500_000)
+    node = detached_file(str(target), size=target.stat().st_size)
+    cancel = threading.Event()
+
+    with pytest.raises(archive.ArchiveCancelled):
+        archive.write_verified_archive(node, cancel, progress=lambda done, _total: cancel.set())
+
+    assert not os.path.exists(str(target) + ".zip")
+    assert target.exists()

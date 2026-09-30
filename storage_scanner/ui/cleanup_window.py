@@ -8,7 +8,21 @@ selection and confirmation, and Protected rows can never be deleted at all.
 
 import queue
 import threading
-from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, StringVar, Toplevel, X, messagebox, ttk
+import zipfile
+from tkinter import (
+    BOTH,
+    BOTTOM,
+    END,
+    LEFT,
+    RIGHT,
+    TOP,
+    DoubleVar,
+    StringVar,
+    Toplevel,
+    X,
+    messagebox,
+    ttk,
+)
 
 from history import (
     get_installed_install_locations,
@@ -17,7 +31,13 @@ from history import (
     record_install_locations_snapshot,
 )
 from storage_scanner import cleanup_cache
-from storage_scanner.archive import archive_file, likely_compresses_well
+from storage_scanner.archive import (
+    ArchiveCancelled,
+    check_archivable,
+    finish_archive,
+    likely_compresses_well,
+    write_verified_archive,
+)
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE,
     CATEGORY_ORPHANED_INSTALL,
@@ -46,6 +66,36 @@ _CATEGORY_TAGS = {
     CATEGORY_DUPLICATE: "duplicate",
     CATEGORY_ORPHANED_INSTALL: "orphaned_install",
 }
+
+
+def _archive_progress_dialog(parent):
+    """(dialog, percent DoubleVar, label StringVar, cancel Event) for an
+    archive run over `parent`, which it keeps from being used meanwhile."""
+    dialog = Toplevel(parent)
+    dialog.title("Archiving")
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+    label_var = StringVar(value="Starting …")
+    progress_var = DoubleVar(value=0)
+    cancel_event = threading.Event()
+    ttk.Label(dialog, textvariable=label_var, padding=(16, 14, 16, 6), width=60).pack(
+        side=TOP, fill=X
+    )
+    ttk.Progressbar(dialog, variable=progress_var, maximum=100, length=420).pack(
+        side=TOP, padx=16, pady=(0, 10)
+    )
+    cancel = ttk.Button(dialog, text="Cancel")
+
+    def request_cancel():
+        cancel_event.set()
+        cancel.state(["disabled"])
+        label_var.set("Cancelling …")
+
+    cancel.configure(command=request_cancel)
+    cancel.pack(side=BOTTOM, pady=(0, 14))
+    dialog.protocol("WM_DELETE_WINDOW", request_cancel)
+    dialog.grab_set()
+    return dialog, progress_var, label_var, cancel_event
 
 
 class CleanupMixin:
@@ -461,37 +511,95 @@ class CleanupMixin:
                     report=False,
                 )[0]
 
-            archived = 0
-            partial = 0
-            failed = []
-            for iid, rec in targets:
-                result = archive_file(rec.node, "Cleanup Recommendations", remove_original)
-                if not result.success:
-                    failed.append(f"{rec.node.path}: {result.error}")
-                    continue
-                archived += 1
+            # Compressing a big file takes minutes, so it runs on a worker
+            # thread (archive.write_verified_archive); removing each original
+            # stays here on the Tk thread, since the delete service may ask
+            # questions in dialogs.
+            dialog, progress_var, label_var, cancel_event = _archive_progress_dialog(win)
+            events = queue.Queue()
+            outcome = {"archived": 0, "partial": 0, "failed": [], "cancelled": False}
+
+            def work():
+                for iid, rec in targets:
+                    if cancel_event.is_set():
+                        break
+                    events.put(("file", rec.node.name))
+                    refused = check_archivable(rec.node)
+                    if refused:
+                        events.put(("failed", (iid, rec, refused)))
+                        continue
+                    try:
+                        path = write_verified_archive(
+                            rec.node,
+                            cancel_event,
+                            progress=lambda done, total: events.put(("bytes", done / total)),
+                        )
+                    except ArchiveCancelled:
+                        break
+                    except (OSError, zipfile.BadZipFile) as exc:
+                        logger.exception("Archiving failed for %r", rec.node.path)
+                        events.put(("failed", (iid, rec, str(exc))))
+                        continue
+                    events.put(("written", (iid, rec, path)))
+                events.put(("done", None))
+
+            def on_written(iid, rec, path):
+                result = finish_archive(rec.node, "Cleanup Recommendations", path, remove_original)
+                outcome["archived"] += 1
                 if not result.original_removed:
-                    partial += 1
-                    failed.append(result.error)
+                    outcome["partial"] += 1
+                    outcome["failed"].append(result.error)
                 # A removed original's row is already gone (forget_deleted).
                 if iid in iid_to_rec:
                     del iid_to_rec[iid]
                     tv.delete(iid)
 
-            if archived:
-                resave_cache()
+            def poll():
+                while True:
+                    try:
+                        kind, payload = events.get_nowait()
+                    except queue.Empty:
+                        win.after(100, poll)
+                        return
+                    if kind == "file":
+                        label_var.set(f"Compressing {payload} …")
+                        progress_var.set(0)
+                    elif kind == "bytes":
+                        progress_var.set(payload * 100)
+                    elif kind == "failed":
+                        _iid, rec, error = payload
+                        outcome["failed"].append(f"{rec.node.path}: {error}")
+                    elif kind == "written":
+                        on_written(*payload)
+                    else:
+                        outcome["cancelled"] = cancel_event.is_set()
+                        dialog.destroy()
+                        report()
+                        return
 
-            status_bits = [f"Archived {archived:,} file(s) (rescan to see the .zip files)."]
-            if partial:
-                status_bits.append(f"{partial} kept both copies (original couldn't be removed).")
-            self.status_var.set(" ".join(status_bits))
-            if failed:
-                messagebox.showerror(
-                    "Storage Scanner",
-                    "Some files could not be archived, or kept their original:\n\n"
-                    + "\n\n".join(failed[:10]),
-                    parent=win,
-                )
+            def report():
+                if outcome["archived"]:
+                    resave_cache()
+                status_bits = [
+                    f"Archived {outcome['archived']:,} file(s) (rescan to see the .zip files)."
+                ]
+                if outcome["partial"]:
+                    status_bits.append(
+                        f"{outcome['partial']} kept both copies (original couldn't be removed)."
+                    )
+                if outcome["cancelled"]:
+                    status_bits.append("Cancelled; the rest were left as they were.")
+                self.status_var.set(" ".join(status_bits))
+                if outcome["failed"]:
+                    messagebox.showerror(
+                        "Storage Scanner",
+                        "Some files could not be archived, or kept their original:\n\n"
+                        + "\n\n".join(outcome["failed"][:10]),
+                        parent=win,
+                    )
+
+            threading.Thread(target=work, daemon=True).start()
+            win.after(100, poll)
 
         def add_selected_to_cart():
             selected = list(tv.selection())
