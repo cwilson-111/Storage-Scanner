@@ -875,7 +875,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
   shared app attributes in a Protocol.
 - Size: L. Verify: every file under 500 lines; coverage of the moved logic.
 
-**P2-15. Run the tests on Linux and macOS, and settle the Python range.**
+**P2-15. Run the tests on Linux and macOS, and settle the Python range — ✅
+done (2026-09-29)**
 - Why: CI tests only `windows-latest` on 3.12, yet Linux and macOS builds
   ship. Under WSL (Python 3.14.4): 569 passed and 55 failed, all of them
   Windows-only tests without a skip marker (`test_schedule.py` 22,
@@ -887,6 +888,20 @@ or the path has a `%` — ✅ done (2026-09-29)**
   and 3.13 (and 3.14); raise the floor to 3.11 in README and
   `pyproject.toml`.
 - Size: S–M. Verify: green test jobs on all three OSes.
+- Done: a `windows` pytest marker (registered in `tests/conftest.py`, which
+  skips it off Windows) on the Win32/NTFS/Task Scheduler tests, whole
+  modules for `test_scheduled_tasks.py` and `test_turbo_scan_integration.py`;
+  `test_installed_apps.py` skips without `winreg`; `test_schedule.py` uses a
+  folder path of the platform it runs on. CI job `test-other-os` runs
+  pytest on ubuntu (under xvfb) and macOS with 3.12 and 3.13, and Windows
+  with 3.13; every build job needs it. README says 3.11+ (no
+  `requires-python` exists to change).
+- Verified: WSL Ubuntu, Python 3.14: 60 failures and a collection error →
+  665 passed, 69 skipped. CI run for 1a61582: all six test-other-os jobs
+  and the Windows job green.
+- Found on the way: `conftest.py`'s refuse-the-real-log guard looked for a
+  `logging.FileHandler`, which P3-5 had replaced, so it had stopped
+  checking the log; it now checks `logging_setup.log_dir`.
 
 **P2-16. Build provenance and pinned build tools.**
 - Why: there's no artifact attestation. `requirements-dev.txt` uses `>=`, so

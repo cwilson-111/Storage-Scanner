@@ -65,7 +65,7 @@ jobs:
     # The macOS and Linux builds ship too, and more than one Python runs the
     # app from source. Windows-only tests carry @pytest.mark.windows and are
     # skipped off Windows (tests/conftest.py); lint, types, coverage and the
-    # scale gate run once, in the job above.
+    # scale gate run once, in the job above. Every build waits for both.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -97,7 +97,7 @@ jobs:
           fi
 
   build:
-    needs: test
+    needs: [test, test-other-os]
     runs-on: windows-latest
     steps:
       # Actions are pinned to an immutable commit SHA rather than a mutable
@@ -160,7 +160,7 @@ jobs:
             dist/SHA256SUMS.txt
 
   build-macos:
-    needs: test
+    needs: [test, test-other-os]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -225,7 +225,7 @@ jobs:
             dist/SHA256SUMS-macos.txt
 
   build-linux:
-    needs: test
+    needs: [test, test-other-os]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
