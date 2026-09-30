@@ -961,13 +961,28 @@ scheduled JSON output before any service, ingest API or console. Size: L.
 - Do: rewrite it from this backlog.
 - Size: S.
 
-**P3-5. The log loses lines when the app and a scheduled scan overlap.**
+**P3-5. The log loses lines when the app and a scheduled scan overlap — ✅
+done (2026-09-29)**
 - Why: `RotatingFileHandler` (`logging_setup.py:34-38`) can't rename a file
   another process has open (WinError 32): 3,362 of 30,000 lines were lost in
   a two-process repro. The log runs at DEBUG and holds full paths.
 - Do: one log file per process, or a handler that doesn't rename; INFO by
   default.
 - Size: S.
+- Done: the log is rotated only when a process starts
+  (`logging_setup._rotate_at_start`; skipped if another process has the
+  file open), and written through a plain StreamHandler on a stream that
+  only appends: on Windows a handle opened for `FILE_APPEND_DATA` alone
+  (`_append_stream`), because "a" mode there only seeks to the end before
+  each write and two processes overwrote each other's lines even with no
+  rotation. INFO by default; `STORAGE_SCANNER_LOG_LEVEL=DEBUG` for a
+  diagnosis.
+- Verified: a two-process repro (15,000 lines each into one log folder):
+  main kept 27,407 of 30,000; with rotation removed but "a" mode, 28,222;
+  now 30,000 of 30,000. `tests/test_logging_setup.py` covers rotation at
+  start, an open log left alone, and two open append streams.
+- Not done: a single process writing more than 2 MB grows the file past
+  that until the next start.
 
 **P3-6. The "journal wrapped" check uses the wrong field — ✅ done
 (2026-09-29)**
