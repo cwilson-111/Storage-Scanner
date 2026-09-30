@@ -310,7 +310,7 @@ done (2026-09-26)**
   database.
 
 **P1-7. The main tree freezes on a column click or a delete in a big
-folder.**
+folder — ✅ done (2026-09-29)**
 - Why: `_sort_level` (`ui/main_window.py:1091-1099`) moves rows one
   `tree.move` at a time, which is quadratic in Tk. Measured on this machine
   (Tk 8.6.15), one folder of 35,000 files: sorting by name took 108 s and by
@@ -321,6 +321,29 @@ folder.**
   only the rows whose position changed; after a delete refresh only visible
   rows and ancestors.
 - Size: S. Verify: under 1 s at 35,000, kept as a benchmark.
+- Done: `_sort_level` puts a level in order with one
+  `Treeview.set_children` call and retags only the rows that moved an odd
+  number of places, through the new `_restripe` (Tk's `tag add`/`tag
+  remove` over a list of rows: four Tk calls per level). After a delete,
+  `_remove_main_tree_row` restripes only the rows below the deleted one,
+  rewrites a sibling's "% of Parent" only when its text changed (new
+  `live_tree_model.share`/`share_text`), and refreshes the ancestors as
+  before. Sort semantics are unchanged (same keys, stable ties, the
+  direction toggle, lazy placeholders left alone).
+- Verified: `benchmarks/main_tree.py` (a real, shown Tk window, one folder
+  of random files, Tk 8.6.15) before → after: at 10,000 files name sort
+  0.85 → 0.04 s, size sort 0.66 → 0.04 s, deleting the first row 0.25 →
+  0.07 s; at 35,000, 12.7 → 0.11 s, 7.1 → 0.11 s and 0.88 → 0.22 s; at
+  100,000 after: 0.37, 0.32 and 0.60 s. This machine's "before" at 35,000
+  was 12.7 s, not the 108 s measured above. `tests/test_main_tree_rows.py`
+  checks order and stripes after each heading click and after deletes
+  (first, middle, one level down), plus shares and ancestor sizes. Driving
+  the real app on 4,000 scanned files: each heading click 0.04 s, order
+  and stripes right; a delete through the service left no stale share.
+- Not done: a delete of a node with no row here (from Search or
+  Duplicates, under a folder never opened) still redraws every row
+  (`delete_dialogs._remove_deleted_from_tree`); the heat colour of
+  siblings still isn't recomputed after a delete (it never was).
 
 **P1-8. `--cli` in the released exe crashes when typed in a console.**
 - Why: the exe is built `--windowed` (`build.yml:87`), so `sys.stdout` is

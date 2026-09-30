@@ -1,0 +1,210 @@
+"""The finished scan's main tree on a real Tk Treeview: the order and the
+even/odd stripes of its rows after a heading click and after a delete
+(roadmap P1-7 moved both to whole-level Tk calls; benchmarks/main_tree.py
+times them)."""
+
+import os
+import queue
+import threading
+from tkinter import StringVar, TclError, Tk, Toplevel
+
+import pytest
+
+from storage_scanner import scanner
+from storage_scanner.app import StorageScannerApp
+from storage_scanner.formatting import human_size
+from storage_scanner.live_tree_model import node_display
+from storage_scanner.settings import apply_theme
+
+# name -> size in bytes. Names differ in case so the name sort is seen to
+# ignore it; every size differs so the size sort has one right answer.
+TOP_FILES = {"b.txt": 300, "A.txt": 100, "c.txt": 500, "d.txt": 200, "E.txt": 400}
+SUB_FILES = {"y.bin": 10, "X.bin": 50}  # "sub": 60 bytes in 2 files
+ZED_FILES = {"only.bin": 1000}  # "Zed": the biggest row, never opened
+
+
+class _TreeOnly(StorageScannerApp):
+    """The app with just its theme and main tree -- no history database,
+    no update check, no other windows."""
+
+    def __init__(self, root):
+        self.root = root
+        self.root_node = None
+        self.scan_thread = None
+        self.node_by_iid = {}
+        self._heat_tags = set()
+        self._sort_key = "size"
+        self._sort_reverse = True
+        self.status_var = StringVar(master=root)
+        apply_theme(root)
+        self._build_tree()
+
+
+_TK_ROOT: list = []  # the one Tk interpreter, made by the first test that needs it
+
+
+@pytest.fixture
+def app(capsys):
+    """The trimmed app in a window of its own.
+
+    Every test shares one Tk interpreter, made while pytest's output
+    capture is off and never deleted before the process exits. Made under
+    capture (and deleted after each test, or not), the next interpreter in
+    the process often failed to start: "couldn't read file ... init.tcl:
+    No error", in test_make_sbom's Tcl() or in the next test here. Tcl
+    keeps the standard handles its first interpreter found, and under
+    capture those are pytest's temporary files, closed once the test ends;
+    a reused handle number is the likely culprit."""
+    if not _TK_ROOT:
+        with capsys.disabled():
+            try:
+                root = Tk()
+            except TclError as exc:  # no display
+                pytest.skip(f"Tk unavailable: {exc}")
+        root.withdraw()
+        _TK_ROOT.append(root)
+    window = Toplevel(_TK_ROOT[0])
+    window.withdraw()
+    app = _TreeOnly(window)
+    try:
+        yield app
+    finally:
+        window.destroy()
+        # Dropped here, on the main thread: left to the garbage collector,
+        # a Tk variable can be freed on a scanner worker thread, which Tk
+        # refuses ("main thread is not in main loop") after a 1 s wait.
+        app.status_var = None
+
+
+def _write(folder, files):
+    folder.mkdir(exist_ok=True)
+    for name, size in files.items():
+        (folder / name).write_bytes(b"x" * size)
+
+
+@pytest.fixture
+def scanned(app, tmp_path):
+    """A real folder, scanned and shown the way _finish_scan shows it: the
+    root row open with its rows listed, then "sub" opened."""
+    _write(tmp_path, TOP_FILES)
+    _write(tmp_path / "sub", SUB_FILES)
+    _write(tmp_path / "Zed", ZED_FILES)
+    root_node = scanner.scan(str(tmp_path), queue.Queue(), threading.Event())
+    app.root_node = root_node
+    root_iid = app._insert_node("", root_node, parent_size=root_node.size or 1)
+    app.tree.item(root_iid, open=True)
+    app._populate_children(root_iid, root_node)
+    sub_iid = _row(app, root_iid, "sub")
+    app._populate_children(sub_iid, app.node_by_iid[sub_iid])
+    app.tree.item(sub_iid, open=True)
+    return root_iid
+
+
+def _row(app, parent_iid, name):
+    [iid] = [i for i in app.tree.get_children(parent_iid) if app.node_by_iid[i].name == name]
+    return iid
+
+
+def _names(app, parent_iid):
+    return [app.node_by_iid[iid].name for iid in app.tree.get_children(parent_iid)]
+
+
+def _assert_striped(app, parent_iid):
+    """Every row of the level carries exactly the stripe of its position,
+    and still its type tag (folders are bold)."""
+    for index, iid in enumerate(app.tree.get_children(parent_iid)):
+        tags = app.tree.item(iid, "tags")
+        stripes = [t for t in tags if t in ("even", "odd")]
+        assert stripes == ["odd" if index % 2 else "even"], (index, tags)
+        assert ("dir" in tags) == app.node_by_iid[iid].is_dir, tags
+
+
+def test_heading_clicks_order_every_open_level_and_restripe_it(app, scanned):
+    root_iid = scanned
+    sub_iid = _row(app, root_iid, "sub")
+    zed_iid = _row(app, root_iid, "Zed")
+    by_size = ["Zed", "c.txt", "E.txt", "b.txt", "d.txt", "A.txt", "sub"]
+    assert _names(app, root_iid) == by_size  # the default: biggest first
+
+    app._sort_by("name")
+    assert _names(app, root_iid) == ["A.txt", "b.txt", "c.txt", "d.txt", "E.txt", "sub", "Zed"]
+    assert _names(app, sub_iid) == ["X.bin", "y.bin"]
+    _assert_striped(app, root_iid)
+    _assert_striped(app, sub_iid)
+    # An opened folder stays open with its rows; one never opened keeps
+    # just its placeholder until it is.
+    assert app.tree.item(sub_iid, "open")
+    [placeholder] = app.tree.get_children(zed_iid)
+    assert placeholder not in app.node_by_iid
+
+    app._sort_by("name")  # the same heading again: the other way round
+    assert _names(app, root_iid) == ["Zed", "sub", "E.txt", "d.txt", "c.txt", "b.txt", "A.txt"]
+    assert _names(app, sub_iid) == ["y.bin", "X.bin"]
+    _assert_striped(app, root_iid)
+    _assert_striped(app, sub_iid)
+
+    app._sort_by("size")
+    assert _names(app, root_iid) == by_size
+    assert _names(app, sub_iid) == ["X.bin", "y.bin"]
+    _assert_striped(app, root_iid)
+
+    app._sort_by("name")
+    app._sort_by("items")  # most files first; equal counts keep their order
+    assert _names(app, root_iid) == ["sub", "A.txt", "b.txt", "c.txt", "d.txt", "E.txt", "Zed"]
+    _assert_striped(app, root_iid)
+
+    app.tree.focus(zed_iid)
+    app._on_open(None)  # opening it lists its rows in the current order
+    assert _names(app, zed_iid) == ["only.bin"]
+
+
+def test_a_deleted_row_leaves_the_rest_in_order_restriped_with_fresh_shares(app, scanned):
+    root_iid = scanned
+    root_node = app.node_by_iid[root_iid]
+    total = sum(TOP_FILES.values()) + sum(SUB_FILES.values()) + sum(ZED_FILES.values())
+    assert root_node.size == total
+    app._sort_by("name")
+
+    def delete(parent_iid, name):
+        iid = _row(app, parent_iid, name)
+        os.remove(app.node_by_iid[iid].path)
+        app._remove_main_tree_row(iid)
+        return iid
+
+    def assert_shares(parent_iid):
+        parent_size = app.node_by_iid[parent_iid].size
+        for iid in app.tree.get_children(parent_iid):
+            expected = node_display(app.node_by_iid[iid], parent_size).values
+            assert app.tree.set(iid, "percent") == expected[2], app.node_by_iid[iid].name
+
+    # A row from the middle: the rows below it move up onto the other stripe.
+    gone = delete(root_iid, "c.txt")
+    assert not app.tree.exists(gone) and gone not in app.node_by_iid
+    assert _names(app, root_iid) == ["A.txt", "b.txt", "d.txt", "E.txt", "sub", "Zed"]
+    _assert_striped(app, root_iid)
+    assert_shares(root_iid)
+    assert root_node.size == total - 500
+    assert app.tree.set(root_iid, "size") == human_size(total - 500)
+
+    # The first row: every other row moves.
+    delete(root_iid, "A.txt")
+    assert _names(app, root_iid) == ["b.txt", "d.txt", "E.txt", "sub", "Zed"]
+    _assert_striped(app, root_iid)
+    assert_shares(root_iid)
+
+    # A row one level down: its folder's and the root's rows shrink too.
+    sub_iid = _row(app, root_iid, "sub")
+    delete(sub_iid, "X.bin")
+    assert _names(app, sub_iid) == ["y.bin"]
+    _assert_striped(app, sub_iid)
+    assert_shares(sub_iid)
+    assert app.tree.set(sub_iid, "size") == human_size(10)
+    assert app.tree.set(sub_iid, "items") == "1"
+    assert root_node.file_count == 5
+    assert app.tree.set(root_iid, "size") == human_size(total - 500 - 100 - 50)
+    assert app.status_var.get().endswith("in 5 files")
+
+    # A later click sorts what's left.
+    app._sort_by("size")
+    assert _names(app, root_iid) == ["Zed", "E.txt", "b.txt", "d.txt", "sub"]
+    _assert_striped(app, root_iid)

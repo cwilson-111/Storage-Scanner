@@ -36,6 +36,17 @@ def row_label(node, icon):
     return f"{icon} {node.name}{suffix}"
 
 
+def share(size, parent_size):
+    """`size` as a fraction of `parent_size`, clamped to 0..1 (0 when the
+    parent is empty)."""
+    return min(1.0, max(0.0, size / parent_size)) if parent_size else 0.0
+
+
+def share_text(fraction):
+    """The "% of Parent" column for a share: its bar and its percentage."""
+    return f"{bar(fraction)} {fraction * 100:5.1f}%"
+
+
 def row_display(node, size, alloc_size, file_count, parent_size, state=None):
     """The row for `node` with these totals, as a share of `parent_size`
     (its parent's size; the root row passes its own). `state` is a folder's
@@ -47,8 +58,8 @@ def row_display(node, size, alloc_size, file_count, parent_size, state=None):
             tags=("placeholder", "dir"),
             heat=None,
         )
-    fraction = min(1.0, max(0.0, size / parent_size)) if parent_size else 0.0
-    percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
+    fraction = share(size, parent_size)
+    percent = share_text(fraction)
     items = f"{file_count:,}" if node.is_dir else ""
     # A cloud placeholder's size is its full logical size (what it'll be
     # once downloaded); its on-disk size is what's actually using local
