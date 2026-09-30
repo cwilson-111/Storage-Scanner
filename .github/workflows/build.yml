@@ -61,6 +61,41 @@ jobs:
       - name: Scale benchmark gate
         run: python benchmarks/scale.py --check
 
+  test-other-os:
+    # The macOS and Linux builds ship too, and more than one Python runs the
+    # app from source. Windows-only tests carry @pytest.mark.windows and are
+    # skipped off Windows (tests/conftest.py); lint, types, coverage and the
+    # scale gate run once, in the job above.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
+        include:
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Tk needs a display: xvfb gives the Linux runner one.
+      - name: Run test suite
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y xvfb > /dev/null
+            xvfb-run -a pytest tests/ --no-cov
+          else
+            pytest tests/ --no-cov
+          fi
+
   build:
     needs: test
     runs-on: windows-latest

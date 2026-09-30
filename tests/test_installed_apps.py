@@ -10,7 +10,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import storage_scanner.installed_apps as installed_apps
+import pytest
+
+pytest.importorskip("winreg", reason="the uninstall registry is Windows-only")
+
+import storage_scanner.installed_apps as installed_apps  # noqa: E402
 
 
 class _FakeKey:

@@ -109,6 +109,7 @@ def test_find_subtree_node_returns_root_for_the_root_path():
     assert find_subtree_node(root, "C:\\Data") is root
 
 
+@pytest.mark.windows
 def test_find_subtree_node_walks_down_to_a_nested_file_case_insensitively():
     root = _make_tree()
     node = find_subtree_node(root, "C:\\Data\\Docs\\photo.jpg")

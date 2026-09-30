@@ -18,6 +18,8 @@ from storage_scanner.scheduled_tasks import (
     split_windows_args,
 )
 
+pytestmark = pytest.mark.windows  # Windows-only feature
+
 EXE = r"C:\Program Files\Storage Scanner\StorageScanner.exe"
 PYTHONW = r"C:\Python313\pythonw.exe"
 SCRIPT = r"C:\Users\me\OneDrive\Storage Scanner\Storage-Scanner.py"

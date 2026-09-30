@@ -16,7 +16,7 @@ from storage_scanner.cli import build_arg_parser
 from storage_scanner.schedule import ScheduledScan
 
 EXE = r"C:\Program Files\Storage Scanner\StorageScanner.exe"
-FOLDER = r"C:\Users\me\My Documents"
+FOLDER = r"C:\Users\me\My Documents" if sys.platform == "win32" else "/home/me/My Documents"
 
 
 def _scan(**overrides):
@@ -95,6 +95,7 @@ def test_launch_args_find_the_real_entry_script_from_source():
     assert os.path.exists(args[-1])
 
 
+@pytest.mark.windows
 def test_task_name_is_stable_per_folder_and_safe_for_task_scheduler():
     name = schedule.task_name(_scan())
 
@@ -142,6 +143,7 @@ def _text(root, path):
     return root.find(path, NS).text
 
 
+@pytest.mark.windows
 def test_task_xml_runs_the_scan_command_with_arguments_kept_separate():
     root = _xml(_scan())
 
@@ -151,6 +153,7 @@ def test_task_xml_runs_the_scan_command_with_arguments_kept_separate():
     assert f'--cli "{FOLDER}"' in arguments
 
 
+@pytest.mark.windows
 def test_daily_task_xml_starts_today_at_the_chosen_time():
     root = _xml(_scan(time="7:05"))
     trigger = "t:Triggers/t:CalendarTrigger"
@@ -163,6 +166,7 @@ def test_daily_task_xml_starts_today_at_the_chosen_time():
 @pytest.mark.parametrize(
     "weekday, element", [("MON", "Monday"), ("FRI", "Friday"), ("SUN", "Sunday")]
 )
+@pytest.mark.windows
 def test_weekly_task_xml_names_the_day(weekday, element):
     root = _xml(_scan(frequency="weekly", weekday=weekday))
     days = root.find("t:Triggers/t:CalendarTrigger/t:ScheduleByWeek/t:DaysOfWeek", NS)
@@ -170,6 +174,7 @@ def test_weekly_task_xml_names_the_day(weekday, element):
     assert [child.tag.split("}")[1] for child in days] == [element]
 
 
+@pytest.mark.windows
 def test_task_xml_runs_as_the_user_without_elevation_and_catches_up_on_missed_runs():
     root = _xml(_scan())
 
@@ -179,6 +184,7 @@ def test_task_xml_runs_as_the_user_without_elevation_and_catches_up_on_missed_ru
     assert _text(root, "t:Settings/t:DisallowStartIfOnBatteries") == "false"
 
 
+@pytest.mark.windows
 def test_task_xml_escapes_characters_that_are_special_in_xml():
     folder = r"C:\R&D <archive>"
     root = _xml(_scan(path=folder), command=[EXE, "--cli", folder])
@@ -187,6 +193,7 @@ def test_task_xml_escapes_characters_that_are_special_in_xml():
     assert folder in _text(root, "t:RegistrationInfo/t:Description")
 
 
+@pytest.mark.windows
 def test_a_trailing_backslash_does_not_escape_the_closing_quote():
     # "D:\My Drive\" naively quoted would end in \" - an escaped quote - and
     # swallow every argument after it.
@@ -196,6 +203,7 @@ def test_a_trailing_backslash_does_not_escape_the_closing_quote():
     assert '"D:\\My Drive\\\\" --save-history' in arguments
 
 
+@pytest.mark.windows
 def test_a_command_longer_than_the_old_261_character_limit_is_fine():
     long_folder = "C:\\" + "\\".join(["a long folder name"] * 20)
     scheduled = _scan(path=long_folder)
@@ -220,6 +228,7 @@ def test_create_args_register_the_xml_under_the_folders_task_name():
     ]
 
 
+@pytest.mark.windows
 def test_create_windows_task_passes_a_utf16_xml_file_and_removes_it(monkeypatch):
     seen = {}
 
@@ -247,6 +256,7 @@ def test_create_windows_task_passes_a_utf16_xml_file_and_removes_it(monkeypatch)
     assert not os.path.exists(seen["path"])
 
 
+@pytest.mark.windows
 def test_create_windows_task_reports_schtasks_failure(monkeypatch):
     class Result:
         returncode = 1

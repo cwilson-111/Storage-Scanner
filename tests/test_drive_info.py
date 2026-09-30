@@ -2,6 +2,8 @@ import ctypes
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -63,10 +65,12 @@ def _patch_windll(monkeypatch, kernel32):
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
 
 
+@pytest.mark.windows
 def test_get_volume_root_for_a_drive_letter_path():
     assert get_volume_root(r"C:\Users\test\Documents") == "C:\\"
 
 
+@pytest.mark.windows
 def test_get_volume_root_for_a_unc_path():
     assert get_volume_root(r"\\server\share\folder") == "\\\\server\\share\\"
 

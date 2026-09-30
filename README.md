@@ -292,7 +292,7 @@ missing instead.
 
 ## Run from source
 
-Requires Python 3.9+ (Tkinter ships with the standard Windows and macOS
+Requires Python 3.11+ (tested on 3.11 to 3.14; Tkinter ships with the standard Windows and macOS
 Python installers; on Linux install your distro's Tk package first, e.g.
 `sudo apt install python3-tk` on Debian/Ubuntu).
 

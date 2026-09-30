@@ -116,8 +116,14 @@ def open_without_following_links(path):
     the same user could swap one for a link and have the helper overwrite a
     file the user can't write. Raises OSError instead."""
     if sys.platform != "win32":
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-        return os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8")
+        # Not O_TRUNC: a hard link's target would be emptied before the
+        # link count below could refuse it.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        if os.fstat(fd).st_nlink != 1:
+            os.close(fd)
+            raise OSError(f"Refusing to write {path}: it's a link to somewhere else")
+        os.ftruncate(fd, 0)
+        return os.fdopen(fd, "w", encoding="utf-8")
 
     import ctypes
     import msvcrt

@@ -193,6 +193,7 @@ class _FakeGetDiskFreeSpaceW:
         return 1
 
 
+@pytest.mark.windows
 def test_get_cluster_size_multiplies_sectors_and_bytes_per_sector(monkeypatch):
     fake_disk = _FakeGetDiskFreeSpaceW(sectors_per_cluster=8, bytes_per_sector=512)
     fake_windll = SimpleNamespace(kernel32=SimpleNamespace(GetDiskFreeSpaceW=fake_disk))
@@ -202,6 +203,7 @@ def test_get_cluster_size_multiplies_sectors_and_bytes_per_sector(monkeypatch):
     assert fake_disk.calls == ["C:\\"]
 
 
+@pytest.mark.windows
 def test_get_cluster_size_is_cached_per_volume_root(monkeypatch):
     fake_disk = _FakeGetDiskFreeSpaceW(sectors_per_cluster=8, bytes_per_sector=512)
     fake_windll = SimpleNamespace(kernel32=SimpleNamespace(GetDiskFreeSpaceW=fake_disk))

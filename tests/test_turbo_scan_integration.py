@@ -32,6 +32,8 @@ from storage_scanner.mft_parser import _pack_frn
 from storage_scanner.models import Node
 from storage_scanner.turbo_read import MftRead
 
+pytestmark = pytest.mark.windows  # Windows-only feature
+
 _RECORD_SIZE = 1024
 _SECTOR_SIZE = 512
 _USA_OFFSET = 48

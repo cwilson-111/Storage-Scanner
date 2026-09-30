@@ -244,6 +244,7 @@ def test_a_scan_expands_a_onedrive_folder_but_never_a_link(tmp_path, monkeypatch
     assert _frn(21) in loaded  # a OneDrive folder (reparse, not a link) is walked
 
 
+@pytest.mark.windows
 def test_find_record_by_path_matches_case_insensitively_and_returns_disk_spelling(
     tmp_path, monkeypatch
 ):

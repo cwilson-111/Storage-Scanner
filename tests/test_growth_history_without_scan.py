@@ -4,6 +4,8 @@ earlier runs (and earlier versions) -- not only after a scan this session."""
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -44,6 +46,7 @@ def test_most_recent_scan_path_is_none_before_any_scan(tmp_path, monkeypatch):
     assert history.get_most_recent_scan_path() is None
 
 
+@pytest.mark.windows
 def test_the_path_in_the_path_box_wins_when_it_has_history(tmp_path, monkeypatch):
     _db_with_scans(tmp_path, monkeypatch, r"C:\Data", r"D:\Media")
 

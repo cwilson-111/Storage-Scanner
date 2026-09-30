@@ -10,7 +10,6 @@ folder here, and the session refuses to start if the database or the log
 still resolves inside the real app-data folder.
 """
 
-import logging
 import os
 import sys
 import tempfile
@@ -39,14 +38,18 @@ os.environ["STORAGE_SCANNER_LOG_DIR"] = str(_sandbox / "logs")
 
 def pytest_configure(config):
     import history
-    import storage_scanner.logging_setup  # noqa: F401 - attaches the log handler
+    from storage_scanner import logging_setup  # attaches the log handler
+
+    config.addinivalue_line(
+        "markers", "windows: Windows-only (Win32 APIs, drive letters, NTFS, Task Scheduler)"
+    )
 
     real_dirs = [(base / history.APP_NAME).resolve() for base in _REAL_APP_DATA_BASES]
-    log_files = [
-        Path(handler.baseFilename)
-        for handler in logging.getLogger("storage_scanner").handlers
-        if isinstance(handler, logging.FileHandler)
-    ]
+    log_files = (
+        [Path(logging_setup.log_dir) / logging_setup.LOG_FILE_NAME]
+        if logging_setup.log_dir is not None
+        else []
+    )
     for path in [Path(history.DB_NAME), *log_files]:
         resolved = path.resolve()
         for real_dir in real_dirs:
@@ -55,3 +58,14 @@ def pytest_configure(config):
                     f"{resolved} is inside the real app-data folder {real_dir}; "
                     "refusing to run tests against real user data"
                 )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests marked `windows` on any other OS: they call Win32 APIs or
+    rely on Windows path rules (drive letters, case-insensitive names)."""
+    if sys.platform == "win32":
+        return
+    skip = pytest.mark.skip(reason="Windows only")
+    for item in items:
+        if "windows" in item.keywords:
+            item.add_marker(skip)

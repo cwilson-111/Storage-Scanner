@@ -77,6 +77,7 @@ def _root():
     return _record(5, is_directory=True, names=[])
 
 
+@pytest.mark.windows
 def test_simple_tree_is_built_and_rolled_up():
     folder = _record(10, is_directory=True, names=[_name(ROOT_FRN, "Docs")])
     file_a = _record(11, names=[_name(_frn(10), "a.txt")], logical_size=100, alloc_size=4096)
@@ -366,6 +367,7 @@ def test_root_path_ending_in_separator_uses_full_path_as_name():
     assert tree.name == "C:\\"
 
 
+@pytest.mark.windows
 def test_root_path_without_trailing_separator_uses_basename():
     tree, _orphan_count, _row_frns = build_tree([_root()], root_path="C:\\Users\\foo")
     assert tree.name == "foo"
@@ -403,6 +405,7 @@ def test_a_link_to_a_folder_asked_for_directly_is_refused():
         refuse_linked_folder(_by_name(tree)["Link"], "C:\\Data\\Link", records, row_frns)
 
 
+@pytest.mark.windows
 def test_file_node_is_the_same_row_build_tree_attaches():
     record = _record(
         80,

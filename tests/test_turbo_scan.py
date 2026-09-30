@@ -278,6 +278,7 @@ def test_elevated_helper_result_carries_the_node_and_how_the_mft_was_read(monkey
     assert result_read == mft_read
 
 
+@pytest.mark.windows
 def test_a_helper_result_outside_the_requested_folder_is_refused():
     """P3-7: the elevated helper's result comes back through a temp file."""
     root = Node("C:\\Data", "Data")
