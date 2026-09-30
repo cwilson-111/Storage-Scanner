@@ -40,6 +40,7 @@ class SearchMixin:
 
         win = Toplevel(self.root)
         self._search_win = win
+        scan_tree = self.root_node  # what every row here is from
         win.configure(bg=COLORS["bg"])
         win.title("Search & Filter")
         win.geometry("920x600")
@@ -176,7 +177,7 @@ class SearchMixin:
             name_query = name_var.get().strip() or None
 
             results = filter_nodes(
-                self.root_node,
+                scan_tree,
                 name_query=name_query,
                 extensions=extensions,
                 min_size=min_size,
@@ -229,7 +230,7 @@ class SearchMixin:
         def delete_selected():
             selected = list(tv.selection())
             nodes = [iid_to_node[iid] for iid in selected if iid in iid_to_node]
-            if not nodes:
+            if not nodes or self._refuse_delete_during_scan(parent=win):
                 return
 
             kind = "item" if len(nodes) == 1 else "items"
@@ -241,7 +242,9 @@ class SearchMixin:
             ):
                 return
             # Deleted rows leave this list through forget_deleted.
-            self._delete_nodes([DeleteRequest(node, "Search & Filter") for node in nodes], win)
+            self._delete_nodes(
+                [DeleteRequest(node, "Search & Filter", tree=scan_tree) for node in nodes], win
+            )
 
         ttk.Button(button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected).pack(
             side=LEFT
