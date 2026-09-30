@@ -1,0 +1,22 @@
+# Runs the same ruff and black checks as CI's test job on every commit, so a
+# lint or formatting break (like the NameError ruff reports that went into
+# 32bbf60) is caught before it's pushed. Once per clone:
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Both tools read their settings from pyproject.toml. The versions are the
+# ones CI installs today: requirements-dev.txt only sets floors, so CI takes
+# the newest release, and `pre-commit autoupdate --freeze` catches up. Like
+# the Actions in .github/workflows/build.yml, each hook repo is pinned to an
+# immutable commit SHA, with the tag it corresponds to in the comment.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: a56c0b927e6465d37cae3e97d35d4d18ab2b96cd  # frozen: v0.16.9
+    hooks:
+      - id: ruff-check
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 4160603246a6b365d4a2af661c6d71b0a0f50478  # frozen: 26.5.1
+    hooks:
+      - id: black
