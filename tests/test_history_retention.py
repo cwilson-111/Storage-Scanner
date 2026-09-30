@@ -305,11 +305,11 @@ def test_anomaly_detection_flags_the_same_scans_on_thinned_history(spike):
 
 
 def test_forecast_from_thinned_history_matches_the_full_one():
-    full = _daily_history(500)
-    capacity = full[-1][1] + 500 * GB
+    # get_forecast_history() rows: the same sizes on disk as in files.
+    full = [(created_at, size, size) for created_at, size, _files, _folders in _daily_history(500)]
 
-    whole = forecast_days_until_full(full, capacity)
-    thinned = forecast_days_until_full(_thinned(full), capacity)
+    whole = forecast_days_until_full(full, 500 * GB)
+    thinned = forecast_days_until_full(_thinned(full), 500 * GB)
 
     assert thinned.confidence == whole.confidence == "high"
     assert thinned.span_days == whole.span_days

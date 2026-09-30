@@ -181,6 +181,7 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
     _make_v1_database(v1_db, with_app_metadata)
     growth_before = {pair: _v1_growth(v1_db, *pair) for pair in PAIRS}
     scans_before = _query(v1_db, "SELECT * FROM scans ORDER BY id")
+    scan_columns = "id, scan_path, total_size, drive_capacity, file_count, folder_count, created_at"
 
     history.init_history_db()
 
@@ -190,7 +191,11 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
     columns = [row[1] for row in _query(v1_db, "PRAGMA table_info(folder_snapshots)")]
     assert columns == ["scan_id", "path_id", "size_bytes", "file_count"]
 
-    assert _query(v1_db, "SELECT * FROM scans ORDER BY id") == scans_before
+    assert _query(v1_db, f"SELECT {scan_columns} FROM scans ORDER BY id") == scans_before
+    # Saved before on-disk sizes and drive space were recorded.
+    assert _query(v1_db, "SELECT allocated_size, drive_used, drive_free FROM scans") == [
+        (None, None, None)
+    ] * len(scans_before)
     for (current, previous), rows in growth_before.items():
         migrated = history.get_folder_growth(current, previous)
         assert [row[:4] + row[6:] for row in migrated] == rows
@@ -235,7 +240,7 @@ def test_a_version_2_audit_log_gets_outcomes_that_never_claim_recycled(v1_db):
 
     history.init_history_db()
 
-    assert history.get_app_metadata("schema_version") == "3"
+    assert history.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
     assert [(row[3], row[6], row[8]) for row in history.get_audit_log()] == [
         ("C:\\locked.txt", 0, FAILED),
         ("Q:\\gone.txt", 1, UNVERIFIED),

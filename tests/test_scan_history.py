@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -72,3 +73,18 @@ def test_record_scan_reports_a_budget_breach(tmp_path, monkeypatch):
 
     assert recorded.budget_breach is not None
     assert recorded.budget_breach.threshold_bytes == 10 * MB
+
+
+def test_record_scan_saves_the_on_disk_size_and_the_drives_free_space(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    root = _tree(str(tmp_path))
+    root.alloc_size = 64 * MB
+
+    scan_history.record_scan(root)
+
+    scan_path = scan_history.normalize_scan_path(str(tmp_path))
+    ((_created_at, total_size, allocated_size),) = history.get_forecast_history(scan_path)
+    assert (total_size, allocated_size) == (root.size, 64 * MB)
+    _created_at, drive_free = history.get_latest_drive_free(scan_path)
+    usage = shutil.disk_usage(tmp_path)
+    assert 0 < drive_free <= usage.total

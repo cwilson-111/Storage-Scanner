@@ -15,10 +15,11 @@ import queue
 import sys
 import threading
 import webbrowser
-from tkinter import TOP, Tk, X, ttk
+from tkinter import TOP, Tk, X, messagebox, ttk
 
-from history import init_history_db
+from history import open_history_db
 from storage_scanner.cart import CartManager
+from storage_scanner.history_schema import NewerDatabaseError
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
@@ -81,7 +82,12 @@ class StorageScannerApp(
         self._sort_key = "size"  # "name" | "size" | "items"
         self._sort_reverse = True  # sizes default biggest-first
 
-        init_history_db()
+        history_warning = _open_history()
+        if history_warning:
+            self.root.after(
+                0,
+                lambda: messagebox.showwarning("Scan history", history_warning, parent=root),
+            )
         self.last_scan_id = None
         self.last_previous_scan_id = None
         self.last_growth_rows = []
@@ -173,6 +179,24 @@ class StorageScannerApp(
         self.cancel_event.set()
         self.dup_cancel_event.set()
         self.root.destroy()
+
+
+def _open_history():
+    """Open (create, migrate or recover) the scan history for the GUI, and
+    return what the user needs to be told about it, or None. Never raises:
+    the app works without its history, so a file it can't use must not keep
+    the window from opening."""
+    try:
+        return open_history_db()
+    except NewerDatabaseError as exc:
+        logger.warning("%s", exc)
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.exception("Could not open the scan history")
+        return (
+            f"Scan history couldn't be opened ({exc}). Scanning works, but scans "
+            "won't be saved to history until this is fixed. Details are in the log."
+        )
 
 
 def main():
