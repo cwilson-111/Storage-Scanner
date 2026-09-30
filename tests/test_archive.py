@@ -7,7 +7,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner import archive
+from storage_scanner.delete_outcome import FAILED, RECYCLED
+from storage_scanner.delete_service import DeleteResult
 from storage_scanner.models import Node, detached_file
+
+
+def _removes_original(request):
+    os.remove(request.node.path)
+    return DeleteResult(request, RECYCLED)
+
+
+def _cannot_remove_original(request):
+    return DeleteResult(request, FAILED, "It may be in use.")
+
+
+def _never_called(request):
+    raise AssertionError("the original must not be touched")
 
 
 def test_likely_compresses_well_true_for_text():
@@ -34,19 +49,13 @@ def test_unique_archive_path_avoids_collisions(tmp_path):
     assert second == f"{target} (2).zip"
 
 
-def test_archive_file_compresses_and_removes_original(tmp_path, monkeypatch):
+def test_archive_file_compresses_and_removes_original(tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("hello world" * 1000)
 
     node = detached_file(str(target), size=target.stat().st_size)
 
-    monkeypatch.setattr(
-        archive,
-        "recycle_and_log",
-        lambda node, source, action, extra_error_context=None: True,
-    )
-
-    result = archive.archive_file(node, source="Cleanup Recommendations")
+    result = archive.archive_file(node, "Cleanup Recommendations", _removes_original)
 
     assert result.success is True
     assert result.original_removed is True
@@ -61,23 +70,17 @@ def test_archive_file_compresses_and_removes_original(tmp_path, monkeypatch):
 
 def test_archive_file_rejects_directories():
     node = Node("/some/dir", "dir")
-    result = archive.archive_file(node, source="Cleanup Recommendations")
+    result = archive.archive_file(node, "Cleanup Recommendations", _never_called)
     assert result.success is False
     assert "files" in result.error.lower()
 
 
-def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path, monkeypatch):
+def test_archive_file_reports_partial_when_original_cannot_be_removed(tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("hello")
     node = detached_file(str(target), size=target.stat().st_size)
 
-    monkeypatch.setattr(
-        archive,
-        "recycle_and_log",
-        lambda node, source, action, extra_error_context=None: False,
-    )
-
-    result = archive.archive_file(node, source="Cleanup Recommendations")
+    result = archive.archive_file(node, "Cleanup Recommendations", _cannot_remove_original)
 
     assert result.success is True  # the archive itself was created fine
     assert result.original_removed is False
@@ -97,7 +100,7 @@ def test_archive_file_cleans_up_partial_archive_on_write_failure(tmp_path, monke
 
     monkeypatch.setattr(zipfile.ZipFile, "write", boom)
 
-    result = archive.archive_file(node, source="Cleanup Recommendations")
+    result = archive.archive_file(node, "Cleanup Recommendations", _never_called)
 
     assert result.success is False
     expected_zip = str(target) + ".zip"

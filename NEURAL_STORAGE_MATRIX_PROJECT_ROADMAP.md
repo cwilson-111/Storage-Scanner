@@ -79,7 +79,36 @@ gated on a demand signal (outside issues, downloads, or a named pilot); if
 it starts, begin with the existing CLI plus scheduled task writing JSON to
 a folder, not a Windows service.
 
-### P0 — data safety, do now
+### P0 — data safety — ✅ done (2026-09-29)
+
+All five items below are fixed on `fix/p0-delete-safety`. Every window now
+deletes through one service, `storage_scanner/delete_service.py`
+(`audit.py` and `recycle_and_log` are gone):
+- P0-1: `recycle_windows.bin_blockers` checks the volume (subst, network,
+  removable, no bin, bin turned off), the path length (259 for the item,
+  258 inside a folder, measured), and the bin's capacity before anything is
+  touched; if the bin can't take it, nothing is deleted unless the user
+  confirms a permanent delete. `FOF_WANTNUKEWARNING` is passed (without
+  `FOF_NOCONFIRMATION`, which cancels it), `fAnyOperationsAborted` is
+  checked, and a recycled item is looked up in the bin by its `$I` file
+  afterwards.
+- P0-2: the ledger records an outcome (`delete_outcome`: recycled, deleted
+  permanently, refused, failed; older rows migrate to "not verified"), and
+  the Audit window shows it.
+- P0-3: names ending in a dot or space are refused with a rename hint and
+  left out of duplicate matching.
+- P0-4: `delete_guard` refuses volume roots, the scan root, Windows,
+  Program Files, ProgramData, the profile and its known folders (via
+  `SHGetKnownFolderPath`, so OneDrive-moved folders count), and anything
+  containing them; folders of 10 GB or 50,000 files need their name typed.
+- P0-5: after each delete the service tells the Cart, the duplicate cache
+  and every open window; a copy deleted as a duplicate is only deleted if
+  another copy of its group is still on disk; nested Cart items count once.
+
+Verified by `tests/test_delete_service.py` (the four P0-5 scenarios, the
+P0-3 repro), `tests/test_delete_guard.py`, and `tests/test_recycle_windows.py`
+(a real `subst` drive and a 300-character path are refused and left on
+disk; an ordinary file is found in the real Recycle Bin).
 
 **P0-1. Recycle can delete permanently and still report success
 (Windows).**
@@ -895,8 +924,8 @@ This will make testing and performance work much easier.
   merely *modified* between being enumerated and being acted on later. A
   narrower version of this — a file changing between being reviewed in a
   Cleanup/Duplicates list and actually being deleted — was closed on
-  2026-09-19 (`audit.recycle_and_log` now refuses to delete a file whose
-  size no longer matches what was scanned).
+  2026-09-19 (the delete service, now `delete_service.check_stale`, refuses
+  to delete a file whose size no longer matches what was scanned).
 
 ## Market-leading product roadmap
 
@@ -968,7 +997,7 @@ Every recommendation should show **why it was flagged**, estimated recoverable s
 
 **✅ Done: Orphaned install category (Windows).** A fourth recommendation category flags folders that exactly match an `InstallLocation` this app previously saw registered in the uninstall registry (HKLM native + WOW6432Node, HKCU; `storage_scanner/installed_apps.py`) whose owning app is no longer installed. `history.py`'s `known_install_locations` table keeps the snapshot across runs, since a single registry read can only say what's installed *now*. Exact path match only — no fuzzy/name heuristics — so the first run on a machine only learns (the window says so) and finds nothing until a later run sees an app disappear. Anything nested under an orphan folder is dropped from the list so the same bytes aren't counted twice. Risk is Medium: an uninstalled app's folder can still hold user data.
 
-**✅ Done: Cleanup Cart.** A cross-window queue (`storage_scanner/cart.py`, `ui/cart_window.py`): add items from the main tree, Duplicate Files, or Cleanup Recommendations, review them in one place (toolbar shows count + reclaimable size), and send them to the Recycle Bin in one batch. Items nested under another cart item collapse into it. Each item still goes through `audit.recycle_and_log`, and anything refused (e.g. the file changed size since the scan, via `audit.check_stale`) is listed with its reason. Session-only by design: cleared on every rescan, since cart entries point at nodes in the replaced tree.
+**✅ Done: Cleanup Cart.** A cross-window queue (`storage_scanner/cart.py`, `ui/cart_window.py`): add items from the main tree, Duplicate Files, or Cleanup Recommendations, review them in one place (toolbar shows count + reclaimable size), and send them to the Recycle Bin in one batch. Items nested under another cart item collapse into it. Each item goes through `delete_service.DeleteService` like every other delete, and anything refused (e.g. the file changed size since the scan, via `delete_service.check_stale`) is listed with its reason; items deleted from another window drop out of the Cart. Session-only by design: cleared on every rescan, since cart entries point at nodes in the replaced tree.
 
 ### 4. Make duplicate cleanup genuinely safer
 
@@ -1416,7 +1445,7 @@ only**, never table data.
     threshold;
   - execution only to the Recycle Bin/Trash or a quarantine, never a
     permanent delete;
-  - `audit.check_stale` refusing any file that changed since the plan was
+  - `delete_service.check_stale` refusing any file that changed since the plan was
     built;
   - a full audit record of every item.
 - **Databases stay alert-only.** No automatic shrink, purge or truncate.

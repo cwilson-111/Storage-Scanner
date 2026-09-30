@@ -17,7 +17,6 @@ from history import (
 )
 from storage_scanner import cleanup_cache
 from storage_scanner.archive import archive_file, likely_compresses_well
-from storage_scanner.audit import recycle_and_log
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE,
     CATEGORY_ORPHANED_INSTALL,
@@ -28,6 +27,7 @@ from storage_scanner.cleanup_recommendations import (
     find_orphaned_install_folders,
     find_protected_and_review_candidates,
 )
+from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
@@ -304,6 +304,45 @@ class CleanupMixin:
             win.destroy()
             self.start_scan()
 
+        def forget_deleted(deleted):
+            # With a live scan, a duplicate row also goes once its file is no
+            # longer a spare copy of a group that still exists (its group's
+            # other copies were deleted, or it became the keeper).
+            spare_copies = (
+                {rec.node for rec in build_duplicate_recommendations(self.duplicates or [])}
+                if live
+                else None
+            )
+            gone = [
+                iid
+                for iid, rec in iid_to_rec.items()
+                if deleted.covers(rec.node)
+                or (
+                    spare_copies is not None
+                    and rec.category == CATEGORY_DUPLICATE
+                    and rec.node not in spare_copies
+                )
+            ]
+            for iid in gone:
+                del iid_to_rec[iid]
+                tv.delete(iid)
+            if gone:
+                resave_cache()
+                summarize(list(iid_to_rec.values()))
+
+        self._watch_deletions(win, forget_deleted)
+
+        def requests_for(targets):
+            return [
+                DeleteRequest(
+                    rec.node,
+                    "Cleanup Recommendations",
+                    as_duplicate=rec.category == CATEGORY_DUPLICATE,
+                    scan_root=display_scan_path,
+                )
+                for _iid, rec in targets
+            ]
+
         def delete_selected():
             selected = list(tv.selection())
             # Protected rows are silently skipped even if selected (e.g. via
@@ -330,28 +369,8 @@ class CleanupMixin:
             ):
                 return
 
-            deleted = 0
-            failed = []
-            for iid, rec in targets:
-                if recycle_and_log(rec.node, source="Cleanup Recommendations"):
-                    deleted += 1
-                    self._remove_search_result_from_tree(rec.node)
-                    self._remove_from_duplicate_cache(rec.node)
-                    iid_to_rec.pop(iid, None)
-                    tv.delete(iid)
-                else:
-                    failed.append(rec.node.path)
-
-            if deleted:
-                resave_cache()
-
-            self.status_var.set(f"Deleted {deleted:,} item(s) to {TRASH_NAME}.")
-            if failed:
-                messagebox.showerror(
-                    "Storage Scanner",
-                    "Some items could not be deleted:\n\n" + "\n".join(failed[:10]),
-                    parent=win,
-                )
+            # Deleted rows leave this list through forget_deleted.
+            self._delete_nodes(requests_for(targets), win)
 
         def archive_selected():
             selected = list(tv.selection())
@@ -395,21 +414,27 @@ class CleanupMixin:
             ):
                 return
 
+            def remove_original(request):
+                return self._delete_nodes(
+                    [request._replace(scan_root=display_scan_path)], win, report=False
+                )[0]
+
             archived = 0
             partial = 0
             failed = []
             for iid, rec in targets:
-                result = archive_file(rec.node, source="Cleanup Recommendations")
+                result = archive_file(rec.node, "Cleanup Recommendations", remove_original)
                 if not result.success:
                     failed.append(f"{rec.node.path}: {result.error}")
                     continue
                 archived += 1
-                if result.original_removed:
-                    self._remove_search_result_from_tree(rec.node)
-                else:
+                if not result.original_removed:
                     partial += 1
-                iid_to_rec.pop(iid, None)
-                tv.delete(iid)
+                    failed.append(result.error)
+                # A removed original's row is already gone (forget_deleted).
+                if iid in iid_to_rec:
+                    del iid_to_rec[iid]
+                    tv.delete(iid)
 
             if archived:
                 resave_cache()
@@ -421,7 +446,8 @@ class CleanupMixin:
             if failed:
                 messagebox.showerror(
                     "Storage Scanner",
-                    "Some files could not be archived:\n\n" + "\n".join(failed[:10]),
+                    "Some files could not be archived, or kept their original:\n\n"
+                    + "\n\n".join(failed[:10]),
                     parent=win,
                 )
 
@@ -442,7 +468,11 @@ class CleanupMixin:
                 )
                 return
             for rec in targets:
-                self.cart.add(rec.node, "Cleanup Recommendations")
+                self.cart.add(
+                    rec.node,
+                    "Cleanup Recommendations",
+                    as_duplicate=rec.category == CATEGORY_DUPLICATE,
+                )
             self._refresh_cart_indicator()
 
         ttk.Label(

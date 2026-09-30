@@ -1,4 +1,8 @@
-"""Recycle Bin / Trash deletion and elevated-relaunch support."""
+"""macOS/Linux Trash, and elevated-relaunch support.
+
+The Windows Recycle Bin lives in recycle_windows.py; delete_service.py is the
+only caller of either.
+"""
 
 import contextlib
 import ctypes
@@ -19,13 +23,6 @@ from storage_scanner.scan_progress import Phase
 
 PHASE_WAITING_FOR_ELEVATION = "Waiting for administrator approval"
 PHASE_LOADING_RESULTS = "Loading the Turbo Scan results"
-
-_FO_DELETE = 3
-_FOF_SILENT = 0x0004
-_FOF_NOCONFIRMATION = 0x0010
-_FOF_ALLOWUNDO = 0x0040  # the bit that routes deletes to the Recycle Bin
-_FOF_NOERRORUI = 0x0400
-_FOF_NORECURSEREPARSE = 0x8000  # don't follow into a junction/symlink's target
 
 _SEE_MASK_NOCLOSEPROCESS = 0x00000040
 _SW_HIDE = 0
@@ -54,37 +51,6 @@ class _SHELLEXECUTEINFOW(ctypes.Structure):
         # neither member is used here
         ("hProcess", wintypes.HANDLE),
     ]
-
-
-class _SHFILEOPSTRUCTW(ctypes.Structure):
-    _fields_ = [
-        ("hwnd", wintypes.HWND),
-        ("wFunc", wintypes.UINT),
-        ("pFrom", wintypes.LPCWSTR),
-        ("pTo", wintypes.LPCWSTR),
-        ("fFlags", ctypes.c_uint16),  # FILEOP_FLAGS is a WORD
-        ("fAnyOperationsAborted", wintypes.BOOL),
-        ("hNameMappings", wintypes.LPVOID),
-        ("lpszProgressTitle", wintypes.LPCWSTR),
-    ]
-
-
-def _recycle_windows(path):
-    """Send a file or folder to the Windows Recycle Bin (so it's recoverable).
-
-    Uses the shell's SHFileOperationW with FOF_ALLOWUNDO — pure stdlib, no
-    extra dependency. `pFrom` must be double-NUL terminated. Returns True on
-    success, False otherwise.
-    """
-    op = _SHFILEOPSTRUCTW()
-    op.hwnd = None
-    op.wFunc = _FO_DELETE
-    op.pFrom = os.path.abspath(path) + "\x00\x00"
-    op.pTo = None
-    op.fFlags = (
-        _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI | _FOF_NORECURSEREPARSE
-    )
-    return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
 
 def _recycle_macos(path):
@@ -182,15 +148,16 @@ def _recycle_linux(path):
 
 
 def recycle(path):
-    """Send a file or folder to the platform Recycle Bin / Trash (recoverable).
+    """Move a file or folder to the macOS or Linux Trash (recoverable).
 
-    Returns True on success, False otherwise.
+    Returns True on success, False otherwise. Windows deletes go through
+    recycle_windows.recycle(), which reports more than success or failure.
     """
     if IS_MACOS:
         return _recycle_macos(path)
     if IS_LINUX:
         return _recycle_linux(path)
-    return _recycle_windows(path)
+    raise RuntimeError("Windows deletes go through recycle_windows (see delete_service)")
 
 
 def open_trash():

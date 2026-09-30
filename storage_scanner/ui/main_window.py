@@ -32,7 +32,7 @@ from tkinter import (
 
 from history import get_app_metadata, set_app_metadata, set_budget
 from storage_scanner import history_retention, turbo_scan
-from storage_scanner.audit import recycle_and_log
+from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import (
     relaunch_elevated_windows,
@@ -1123,9 +1123,9 @@ class MainWindowMixin:
     def _remove_main_tree_row(self, iid):
         """Remove a node's row from the main tree after it's been deleted,
         rolling the removed size/count back out of every ancestor and
-        refreshing whatever changed on screen. Shared by _delete_selected
-        and the Cleanup Cart's batch executor (cart_window.py) for any
-        cart item that still has a live row in this tree.
+        refreshing whatever changed on screen. Called for every deleted
+        node that has a row here, whichever window deleted it (see
+        DeletionMixin._remove_deleted_from_tree).
         """
         node = self.node_by_iid.get(iid)
         if not node:
@@ -1169,25 +1169,20 @@ class MainWindowMixin:
         node = self.node_by_iid.get(iid)
         if not node or self._refuse_delete_during_scan():
             return
-        kind = "folder" if node.is_dir else "file"
-        if not messagebox.askyesno(
-            f"Delete to {TRASH_NAME}",
-            f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
-            f"{human_size(node.size)}" + (f" in {node.file_count:,} files" if node.is_dir else ""),
-            icon="warning",
-        ):
-            return
-
-        if not recycle_and_log(node, source="Main tree"):
-            messagebox.showerror(
-                "Storage Scanner",
-                f"Could not delete:\n{node.path}\n\n"
-                "It may be in use, protected, or require admin rights.",
-            )
-            return
-
-        self._remove_from_duplicate_cache(node)
-        self._remove_main_tree_row(iid)
+        request = DeleteRequest(node, "Main tree")
+        # Something that will be refused anyway (the scan's own root, a
+        # drive, a system folder) isn't worth an "are you sure?" first.
+        if self.delete_service.refusal(request) is None:
+            kind = "folder" if node.is_dir else "file"
+            if not messagebox.askyesno(
+                f"Delete to {TRASH_NAME}",
+                f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
+                f"{human_size(node.size)}"
+                + (f" in {node.file_count:,} files" if node.is_dir else ""),
+                icon="warning",
+            ):
+                return
+        self._delete_nodes([request])
 
     # -- Context menu actions ---------------------------------------------- #
     def _show_tools_menu(self):

@@ -1,12 +1,13 @@
 """The Storage Scanner Tkinter application.
 
-StorageScannerApp itself is composed from fourteen mixins, each living in its
+StorageScannerApp itself is composed from fifteen mixins, each living in its
 own file under storage_scanner/ui/ — split out so the toolbar/tree, the tree
 filling in during a scan, the scan progress line, history saving, duplicate
 detection, search/filter, the treemap, cleanup recommendations, the audit
 log, budgets, export and scheduled scans, the largest-files/file-types
-windows, the Cleanup Cart, and the first-run Getting Started guide can each
-be read, changed, and tested without wading through the others.
+windows, the Cleanup Cart, the first-run Getting Started guide, and deleting
+(through storage_scanner/delete_service.py) can each be read, changed, and
+tested without wading through the others.
 """
 
 import os
@@ -26,6 +27,7 @@ from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
 from storage_scanner.ui.cart_window import CartMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
+from storage_scanner.ui.delete_dialogs import DeletionMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
 from storage_scanner.ui.history_window import HistoryMixin
@@ -53,6 +55,7 @@ class StorageScannerApp(
     AutomationMixin,
     CartMixin,
     OnboardingMixin,
+    DeletionMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root
@@ -105,6 +108,10 @@ class StorageScannerApp(
         # replaces self.root_node, since cart entries hold Node references
         # tied to the old tree.
         self.cart = CartManager()
+        # Every delete, from every window, goes through this service
+        # (storage_scanner/delete_service.py); it keeps the cart, the
+        # duplicate cache above and the tree in step afterwards.
+        self._init_deletion()
         self.dup_stats = {
             "files_total": 0,
             "files_checked": 0,

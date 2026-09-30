@@ -21,10 +21,9 @@ from tkinter import (
     ttk,
 )
 
-from storage_scanner.audit import recycle_and_log
+from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
-from storage_scanner.models import remove_from_tree
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
 from storage_scanner.search import filter_nodes, parse_size
 from storage_scanner.settings import COLORS
@@ -127,6 +126,25 @@ class SearchMixin:
 
         iid_to_node = {}
 
+        def summarize():
+            if iid_to_node:
+                total_size = sum(n.size for n in iid_to_node.values())
+                summary_var.set(
+                    f"{len(iid_to_node):,} result(s)  —  {human_size(total_size)} total"
+                )
+            else:
+                summary_var.set("No matches.")
+
+        def forget_deleted(deleted):
+            gone = [iid for iid, node in iid_to_node.items() if deleted.covers(node)]
+            for iid in gone:
+                del iid_to_node[iid]
+                tv.delete(iid)
+            if gone:
+                summarize()
+
+        self._watch_deletions(win, forget_deleted)
+
         def clear_filters():
             for var in (name_var, ext_var, min_size_var, max_size_var, after_var, before_var):
                 var.set("")
@@ -188,11 +206,7 @@ class SearchMixin:
                 )
                 iid_to_node[iid] = node
 
-            if results:
-                total_size = sum(n.size for n in results)
-                summary_var.set(f"{len(results):,} result(s)  —  {human_size(total_size)} total")
-            else:
-                summary_var.set("No matches.")
+            summarize()
 
         win.bind("<Return>", lambda _event: run_search())
 
@@ -226,29 +240,8 @@ class SearchMixin:
                 parent=win,
             ):
                 return
-
-            deleted = 0
-            failed = []
-            for iid in selected:
-                node = iid_to_node.get(iid)
-                if not node:
-                    continue
-                if recycle_and_log(node, source="Search & Filter"):
-                    deleted += 1
-                    self._remove_search_result_from_tree(node)
-                    self._remove_from_duplicate_cache(node)
-                    iid_to_node.pop(iid, None)
-                    tv.delete(iid)
-                else:
-                    failed.append(node.path)
-
-            self.status_var.set(f"Deleted {deleted:,} item(s) to {TRASH_NAME}.")
-            if failed:
-                messagebox.showerror(
-                    "Storage Scanner",
-                    "Some items could not be deleted:\n\n" + "\n".join(failed[:10]),
-                    parent=win,
-                )
+            # Deleted rows leave this list through forget_deleted.
+            self._delete_nodes([DeleteRequest(node, "Search & Filter") for node in nodes], win)
 
         ttk.Button(button_bar, text=f"Reveal in {FILE_MANAGER_NAME}", command=reveal_selected).pack(
             side=LEFT
@@ -257,9 +250,3 @@ class SearchMixin:
         ttk.Button(button_bar, text="Delete Selected", command=delete_selected).pack(side=RIGHT)
 
         tv.bind("<Double-1>", lambda _e: reveal_selected())
-
-    def _remove_search_result_from_tree(self, target_node):
-        """Remove a deleted file or folder from the in-memory scan tree,
-        taking its size and file count out of every folder above it."""
-        if self.root_node:
-            remove_from_tree(self.root_node, target_node)

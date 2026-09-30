@@ -1,14 +1,12 @@
-"""Duplicate-file detection pipeline and the Duplicate Files window.
+"""The Duplicate Files window, and running the finder behind it.
 
-A mixin composed into StorageScannerApp (storage_scanner/app.py).
+A mixin composed into StorageScannerApp (storage_scanner/app.py). Finding
+the groups is storage_scanner.duplicate_finder's; deleting a copy goes
+through the delete service, which re-checks the group on disk first.
 """
 
-import hashlib
-import os
 import queue
 import threading
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import (
     BOTH,
     BOTTOM,
@@ -26,7 +24,6 @@ from tkinter import (
     ttk,
 )
 
-from storage_scanner.audit import recycle_and_log
 from storage_scanner.cleanup_recommendations import (
     get_sampled_duplicates_from_groups,
     is_protected_path,
@@ -34,9 +31,10 @@ from storage_scanner.cleanup_recommendations import (
     keeper_reason,
     pick_keeper,
 )
+from storage_scanner.delete_service import DeleteRequest
+from storage_scanner.duplicate_finder import find_duplicate_files, settle_group
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
-from storage_scanner.models import FLAG_CLOUD_PLACEHOLDER, FileNode, iter_file_rows, iter_folders
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
     IS_MACOS,
@@ -51,345 +49,11 @@ class DuplicatesMixin:
         """Return True if this path should be ignored during duplicate scans."""
         return is_protected_path(path)
 
-    # -- Content sampling --------------------------------------------------- #
-    # Both digests read at offsets derived from `size`: the size the scan
-    # recorded, which candidates are grouped on and is_sampled_duplicate()
-    # judges. A file that's no longer that size changed since the scan; its
-    # windows would no longer be the ones `size` implies, and a match could
-    # claim a byte-exact coverage it never had, so it hashes to None instead.
-    def _partial_hash_file(
-        self, path, size, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES
-    ):
-        """BLAKE2b of the first and last `chunk_size` bytes of a file the
-        scan recorded as `size` bytes.
-
-        For a file no larger than 2 * chunk_size those two windows overlap
-        or touch, so this digest already covers every byte. None if the
-        file can't be read, is no longer `size` bytes, or the scan was
-        cancelled.
-        """
-        if cancel_event and cancel_event.is_set():
-            return None
-        try:
-            with open(path, "rb") as f:
-                if os.fstat(f.fileno()).st_size != size:
-                    return None
-                h = hashlib.blake2b(f.read(chunk_size), digest_size=32)
-                if size > chunk_size:
-                    f.seek(size - chunk_size)
-                    h.update(f.read(chunk_size))
-                return h.hexdigest()
-        except OSError:
-            return None
-
-    def _middle_hash_file(
-        self, path, size, cancel_event=None, chunk_size=DUPLICATE_HASH_CHUNK_BYTES
-    ):
-        """BLAKE2b of the `chunk_size` bytes centered on the midpoint of a
-        file the scan recorded as `size` bytes.
-
-        The window starts at (size - chunk_size) // 2. For any file of
-        2 * chunk_size < size <= 3 * chunk_size that start is <= chunk_size
-        and its end is >= size - chunk_size, so together with the head and
-        tail windows every byte is covered and a match is byte-exact.
-        Above 3 * chunk_size the bytes between the windows are never read:
-        a match there is sampled, not verified. None if the file can't be
-        read, is no longer `size` bytes, or the scan was cancelled.
-        """
-        if cancel_event and cancel_event.is_set():
-            return None
-        try:
-            with open(path, "rb") as f:
-                if os.fstat(f.fileno()).st_size != size:
-                    return None
-                f.seek(max(0, (size - chunk_size) // 2))
-                return hashlib.blake2b(f.read(chunk_size), digest_size=32).hexdigest()
-        except OSError:
-            return None
-
     def _find_duplicate_files(self, progress_q=None, cancel_event=None):
-        """
-        Find duplicate files under the scanned root.
-
-        1. Collect files.
-        2. Group by size.
-        3. Hash the first and last chunk of files with matching sizes.
-        4. Hash the middle chunk of files still matching, when they're
-           larger than two chunks (smaller ones are already fully covered).
-
-        Returns [(size, (edge_digest, middle_digest), nodes), ...], largest
-        recoverable space first. Groups of files up to three chunks are
-        byte-exact matches; larger ones only matched on the sampled windows
-        (see cleanup_recommendations.is_sampled_duplicate).
-        """
-
-        if not self.root_node:
-            return []
-
-        if cancel_event is None:
-            cancel_event = threading.Event()
-
-        # A purely local counter, never self.dup_stats -- this function
-        # runs from two independent callers that can be active at once
-        # (show_duplicates()'s own background worker, and
-        # CleanupMixin's own duplicate-candidate scan). Mutating a single
-        # shared dict from either would race the other and cross-
-        # contaminate whichever window is currently displaying it.
-        # show_duplicates()'s live-progress display still works exactly
-        # as before: it reads self.dup_stats only from the "stats"
-        # messages posted below, assigned wholesale by
-        # _poll_duplicate_progress, never by mutating this dict in place.
-        stats = {
-            "files_total": self.root_node.file_count if self.root_node else 0,
-            "files_checked": 0,
-            "files_skipped": 0,
-            "bytes_skipped": 0,
-            "partial_hashed": 0,
-            "middle_hashed": 0,
-        }
-
-        # ------------------------------------------------------------
-        # Phase 0: collect files from your existing scanned tree,
-        # straight from each folder's columns
-        # ------------------------------------------------------------
-        all_files = []
-        stack = [self.root_node] if self.root_node.is_dir else []
-
-        while stack:
-            if cancel_event.is_set():
-                return []
-
-            folder = stack.pop()
-
-            if self._should_skip_duplicate_scan(folder.path):
-                # Count skipped files under this skipped directory.
-                skipped_count = 0
-                skipped_bytes = 0
-                for skipped_folder, rows in iter_file_rows(folder):
-                    sizes = skipped_folder.file_sizes
-                    for i in rows:
-                        skipped_count += 1
-                        skipped_bytes += sizes[i]
-
-                stats["files_skipped"] += skipped_count
-                stats["bytes_skipped"] += skipped_bytes
-
-                if progress_q:
-                    progress_q.put(("stats", dict(stats)))
-
-                continue
-
-            stack.extend(folder.dirs)
-
-            sizes, flags = folder.file_sizes, folder.file_flags
-            for i in folder.file_rows():
-                size = sizes[i]
-                if size <= 0:
-                    continue
-                node = FileNode(folder, i)
-                # Cloud placeholders (OneDrive Files On-Demand, etc.)
-                # report their full logical size but aren't actually on
-                # local disk — hashing one would force Windows to
-                # download it just to compare it. Skip them entirely.
-                if flags[i] & FLAG_CLOUD_PLACEHOLDER or self._should_skip_duplicate_scan(node.path):
-                    stats["files_skipped"] += 1
-                    stats["bytes_skipped"] += size
-
-                    if progress_q:
-                        progress_q.put(("stats", dict(stats)))
-                else:
-                    all_files.append(node)
-
-        stats["files_checked"] = len(all_files)
-
-        if progress_q:
-            progress_q.put(
-                (
-                    "stats",
-                    dict(stats),
-                )
-            )
-
-        total_files = max(1, len(all_files))
-
-        if progress_q:
-            progress_q.put(("progress", 0, total_files, f"Collecting files … 0/{total_files:,}"))
-
-        # ------------------------------------------------------------
-        # Phase 1: group files by size
-        # ------------------------------------------------------------
-        by_size = defaultdict(list)
-
-        for index, node in enumerate(all_files, start=1):
-            if cancel_event.is_set():
-                return []
-
-            by_size[node.size].append(node)
-
-            if progress_q and (index % 1000 == 0 or index == total_files):
-                progress_q.put(
-                    (
-                        "progress",
-                        index,
-                        total_files,
-                        f"Checking file sizes … {index:,}/{total_files:,}",
-                    )
-                )
-
-        # Only files with matching size can be duplicates
-        same_size_groups = [nodes for nodes in by_size.values() if len(nodes) > 1]
-
-        files_to_partial_hash = []
-        for nodes in same_size_groups:
-            files_to_partial_hash.extend(nodes)
-
-        total_partial_files = max(1, len(files_to_partial_hash))
-
-        if not files_to_partial_hash:
-            return []
-
-        if progress_q:
-            progress_q.put(
-                (
-                    "progress",
-                    0,
-                    total_partial_files,
-                    f"Partial hashing possible duplicates … 0/{total_partial_files:,}",
-                )
-            )
-
-        # ------------------------------------------------------------
-        # Phase 2: hash first + last chunk
-        # ------------------------------------------------------------
-        chunk_size = DUPLICATE_HASH_CHUNK_BYTES
-        by_partial_hash = defaultdict(list)
-
-        max_workers = min(
-            8, (os.cpu_count() or 4) * 2
-        )  # Change max workers to 4 if it gets sluggish
-
-        def partial_job(node):
-            if cancel_event.is_set():
-                return node, None
-
-            return node, self._partial_hash_file(node.path, node.size, cancel_event, chunk_size)
-
-        completed = 0
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(partial_job, node) for node in files_to_partial_hash]
-
-            for future in as_completed(futures):
-                if cancel_event.is_set():
-                    return []
-
-                node, digest = future.result()
-                completed += 1
-
-                stats["partial_hashed"] = completed
-
-                if digest:
-                    by_partial_hash[(node.size, digest)].append(node)
-
-                if progress_q and (completed % 50 == 0 or completed == total_partial_files):
-                    progress_q.put(
-                        (
-                            "progress",
-                            completed,
-                            total_partial_files,
-                            "Partial hashing possible duplicates … "
-                            f"{completed:,}/{total_partial_files:,}",
-                        )
-                    )
-
-        # ------------------------------------------------------------
-        # Phase 3: hash the middle chunk of surviving candidates
-        # ------------------------------------------------------------
-        # Head + tail already cover every byte of a file no larger than two
-        # chunks, so those keep their phase-2 key as-is; only larger files
-        # need the middle window read.
-        by_final_key = defaultdict(list)
-        files_to_middle_hash = []
-
-        for (size, digest), nodes in by_partial_hash.items():
-            if len(nodes) < 2:
-                continue
-            if size <= 2 * chunk_size:
-                by_final_key[(size, (digest, None))].extend(nodes)
-            else:
-                files_to_middle_hash.extend((node, digest) for node in nodes)
-
-        total_middle_files = max(1, len(files_to_middle_hash))
-
-        if files_to_middle_hash and progress_q:
-            progress_q.put(
-                (
-                    "progress",
-                    0,
-                    total_middle_files,
-                    f"Hashing middle of matching candidates … 0/{total_middle_files:,}",
-                )
-            )
-
-        def middle_job(node, partial_digest):
-            if cancel_event.is_set():
-                return node, partial_digest, None
-
-            return (
-                node,
-                partial_digest,
-                self._middle_hash_file(node.path, node.size, cancel_event, chunk_size),
-            )
-
-        completed = 0
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(middle_job, node, partial_digest)
-                for node, partial_digest in files_to_middle_hash
-            ]
-
-            for future in as_completed(futures):
-                if cancel_event.is_set():
-                    return []
-
-                node, partial_digest, middle_digest = future.result()
-                completed += 1
-
-                stats["middle_hashed"] = completed
-
-                if middle_digest:
-                    by_final_key[(node.size, (partial_digest, middle_digest))].append(node)
-
-                if progress_q and (completed % 10 == 0 or completed == total_middle_files):
-                    progress_q.put(
-                        (
-                            "progress",
-                            completed,
-                            total_middle_files,
-                            "Hashing middle of matching candidates … "
-                            f"{completed:,}/{total_middle_files:,}",
-                        )
-                    )
-
-        if progress_q:
-            progress_q.put(("stats", dict(stats)))
-
-        # ------------------------------------------------------------
-        # Phase 4: build final duplicate list
-        # ------------------------------------------------------------
-        duplicates = []
-
-        for (size, digest), nodes in by_final_key.items():
-            if len(nodes) > 1:
-                duplicates.append((size, digest, nodes))
-
-        duplicates.sort(
-            key=lambda item: item[0] * (len(item[2]) - 1),
-            reverse=True,
+        """duplicate_finder.find_duplicate_files over this session's tree."""
+        return find_duplicate_files(
+            self.root_node, progress_q, cancel_event, skip=self._should_skip_duplicate_scan
         )
-
-        return duplicates
 
     def show_duplicates(self):
         if not self.root_node:
@@ -509,7 +173,6 @@ class DuplicatesMixin:
         win = Toplevel(self.root)
         self._duplicates_win = win
         win.configure(bg=COLORS["bg"])
-        win.title(f"Duplicate Files — {len(duplicates)} groups")
         win.geometry("980x600")
 
         try:
@@ -517,43 +180,22 @@ class DuplicatesMixin:
         except Exception:
             logger.debug("Duplicates window iconbitmap failed", exc_info=True)
 
-        total_wasted = sum(size * (len(nodes) - 1) for size, _digest, nodes in duplicates)
         stats = getattr(self, "dup_stats", {})
-        files_checked = stats.get("files_checked", 0)
-        files_skipped = stats.get("files_skipped", 0)
-        bytes_skipped = stats.get("bytes_skipped", 0)
-        partial_hashed = stats.get("partial_hashed", 0)
-        middle_hashed = stats.get("middle_hashed", 0)
-        sampled_groups = sum(
-            1 for size, _digest, _nodes in duplicates if is_sampled_duplicate(size)
-        )
         window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
-        sampled_note = (
-            f"  ({sampled_groups:,} over {human_size(3 * DUPLICATE_HASH_CHUNK_BYTES)} matched "
-            f"on first/middle/last {window} only)"
-            if sampled_groups
-            else ""
-        )
+        header_var = StringVar()
+        scan_path = self.root_node.path
 
-        ttk.Label(
-            win,
-            padding=(10, 8),
-            text=(
-                f"Duplicate files under {self.root_node.path}  —  "
-                f"{len(duplicates):,} groups, potential cleanup: {human_size(total_wasted)}"
-                f"{sampled_note}"
-            ),
-        ).pack(side=TOP, fill=X)
+        ttk.Label(win, padding=(10, 8), textvariable=header_var).pack(side=TOP, fill=X)
 
         ttk.Label(
             win,
             padding=(10, 0, 10, 8),
             text=(
-                f"Checked: {files_checked:,} files  |  "
-                f"Skipped system files: {files_skipped:,}  |  "
-                f"Skipped size: {human_size(bytes_skipped)}  |  "
-                f"Head/tail hashed: {partial_hashed:,}  |  "
-                f"Middle hashed: {middle_hashed:,}"
+                f"Checked: {stats.get('files_checked', 0):,} files  |  "
+                f"Skipped system files: {stats.get('files_skipped', 0):,}  |  "
+                f"Skipped size: {human_size(stats.get('bytes_skipped', 0))}  |  "
+                f"Head/tail hashed: {stats.get('partial_hashed', 0):,}  |  "
+                f"Middle hashed: {stats.get('middle_hashed', 0):,}"
             ),
             style="Accent.TLabel",
         ).pack(side=TOP, fill=X)
@@ -590,72 +232,107 @@ class DuplicatesMixin:
         tv.tag_configure("keep", foreground=COLORS["accent2"])
         tv.tag_configure("dupe", foreground=COLORS["fg"])
 
-        # Per-group state, so the keeper can be re-picked interactively (via
-        # right-click) and always excluded from deletion — this is what
-        # actually guarantees at least one copy survives per group, not just
-        # a warning label asking the user to be careful.
+        # Per-group state, kept in step with deletes from any window
+        # (forget_deleted). The keeper can be re-picked (right-click) and is
+        # never a deletion target here; the delete service's on-disk re-check
+        # guarantees a copy survives even if this list is somehow behind.
         iid_to_node = {}
         iid_to_group = {}
-        group_nodes = {}  # group_num -> [nodes...]
-        group_keeper_iid = {}  # group_num -> iid currently marked "keep"
+        group_nodes = {}  # group_num -> [nodes], sorted by path
+        group_size = {}  # group_num -> bytes per copy
+        group_keeper = {}  # group_num -> the node marked Keeper
+        group_rows = {}  # group_num -> [iid, ...]
 
         details_var = StringVar(value="Select a row to see why it was flagged.")
 
-        def _row_values(group_num, node, size, total_copies, role):
-            copy_index = group_nodes[group_num].index(node) + 1
-            return (group_num, role, human_size(size), f"{copy_index}/{total_copies}", node.path)
+        def row_values(group_num, node):
+            nodes = group_nodes[group_num]
+            role = "Keeper" if node == group_keeper[group_num] else "Duplicate"
+            copies = f"{nodes.index(node) + 1}/{len(nodes)}"
+            return (group_num, role, human_size(group_size[group_num]), copies, node.path)
+
+        def refresh_group(group_num):
+            for iid in group_rows[group_num]:
+                node = iid_to_node[iid]
+                tag = "keep" if node == group_keeper[group_num] else "dupe"
+                tv.item(
+                    iid,
+                    values=row_values(group_num, node),
+                    tags=(tag, tv.item(iid, "tags")[1]),
+                )
+
+        def summarize():
+            sizes = [(group_size[g], len(nodes)) for g, nodes in group_nodes.items()]
+            wasted = sum(size * (copies - 1) for size, copies in sizes)
+            sampled = sum(1 for size, _copies in sizes if is_sampled_duplicate(size))
+            sampled_note = (
+                f"  ({sampled:,} over {human_size(3 * DUPLICATE_HASH_CHUNK_BYTES)} matched "
+                f"on first/middle/last {window} only)"
+                if sampled
+                else ""
+            )
+            header_var.set(
+                f"Duplicate files under {scan_path}  —  {len(sizes):,} groups, "
+                f"potential cleanup: {human_size(wasted)}{sampled_note}"
+            )
+            win.title(f"Duplicate Files — {len(sizes)} groups")
+            return len(sizes), wasted
 
         row_index = 0
         for group_num, (size, _digest, nodes) in enumerate(duplicates, start=1):
-            nodes = sorted(nodes, key=lambda n: n.path.lower())
-            group_nodes[group_num] = nodes
-            keeper = pick_keeper(nodes)
-
-            for node in nodes:
-                is_keeper = node is keeper
-                tag_type = "keep" if is_keeper else "dupe"
-                stripe = "odd" if row_index % 2 else "even"
-
+            group_nodes[group_num] = sorted(nodes, key=lambda n: n.path.lower())
+            group_size[group_num] = size
+            group_keeper[group_num] = pick_keeper(group_nodes[group_num])
+            group_rows[group_num] = []
+            for node in group_nodes[group_num]:
+                tag = "keep" if node == group_keeper[group_num] else "dupe"
                 iid = tv.insert(
                     "",
                     END,
-                    values=_row_values(
-                        group_num,
-                        node,
-                        size,
-                        len(nodes),
-                        "Keeper" if is_keeper else "Duplicate",
-                    ),
-                    tags=(tag_type, stripe),
+                    values=row_values(group_num, node),
+                    tags=(tag, "odd" if row_index % 2 else "even"),
                 )
                 iid_to_node[iid] = node
                 iid_to_group[iid] = group_num
-                if is_keeper:
-                    group_keeper_iid[group_num] = iid
+                group_rows[group_num].append(iid)
                 row_index += 1
+        group_count, total_wasted = summarize()
+
+        def forget_deleted(deleted):
+            """A delete from any window: drop the deleted copies, dissolve a
+            group left with one copy (it's no longer a duplicate of anything)
+            and re-pick a group's keeper if it was the one deleted."""
+            affected = {
+                iid_to_group[iid] for iid, node in iid_to_node.items() if deleted.covers(node)
+            }
+            for group_num in affected:
+                remaining, keeper = settle_group(
+                    group_nodes[group_num], group_keeper[group_num], deleted
+                )
+                for iid in list(group_rows[group_num]):
+                    if keeper is None or iid_to_node[iid] not in remaining:
+                        tv.delete(iid)
+                        del iid_to_node[iid]
+                        del iid_to_group[iid]
+                        group_rows[group_num].remove(iid)
+                if keeper is None:
+                    for state in (group_nodes, group_size, group_keeper, group_rows):
+                        del state[group_num]
+                    continue
+                group_nodes[group_num] = remaining
+                group_keeper[group_num] = keeper
+                refresh_group(group_num)
+            if affected:
+                summarize()
+
+        self._watch_deletions(win, forget_deleted)
 
         def make_keeper(iid):
             group_num = iid_to_group.get(iid)
-            node = iid_to_node.get(iid)
-            if group_num is None or node is None:
+            if group_num is None or iid_to_node[iid] == group_keeper[group_num]:
                 return
-            old_keeper_iid = group_keeper_iid.get(group_num)
-            if old_keeper_iid == iid:
-                return
-
-            if old_keeper_iid and tv.exists(old_keeper_iid):
-                tv.item(
-                    old_keeper_iid,
-                    tags=(
-                        "dupe",
-                        tv.item(old_keeper_iid, "tags")[1],
-                    ),
-                )
-                tv.set(old_keeper_iid, "role", "Duplicate")
-
-            tv.item(iid, tags=("keep", tv.item(iid, "tags")[1]))
-            tv.set(iid, "role", "Keeper")
-            group_keeper_iid[group_num] = iid
+            group_keeper[group_num] = iid_to_node[iid]
+            refresh_group(group_num)
             details_var.set(
                 f"Manually set as keeper for group {group_num}. "
                 f"The previous keeper is now a regular duplicate."
@@ -663,14 +340,12 @@ class DuplicatesMixin:
 
         def show_row_reason(iid):
             group_num = iid_to_group.get(iid)
-            node = iid_to_node.get(iid)
-            if group_num is None or node is None:
+            if group_num is None:
                 return
-            nodes = group_nodes[group_num]
-            keeper_iid = group_keeper_iid.get(group_num)
-            keeper = iid_to_node.get(keeper_iid, node)
-            if iid == keeper_iid:
-                details_var.set(f"Kept: {keeper_reason(keeper, nodes)}")
+            node = iid_to_node[iid]
+            keeper = group_keeper[group_num]
+            if node == keeper:
+                details_var.set(f"Kept: {keeper_reason(keeper, group_nodes[group_num])}")
             elif is_sampled_duplicate(node.size):
                 details_var.set(
                     f"Likely duplicate of the keeper ({keeper.path}): same size and same "
@@ -687,12 +362,12 @@ class DuplicatesMixin:
 
         def show_row_menu(event):
             iid = tv.identify_row(event.y)
-            if not iid:
+            if not iid or iid not in iid_to_group:
                 return
             tv.selection_set(iid)
             tv.focus(iid)
             row_menu.delete(0, END)
-            if group_keeper_iid.get(iid_to_group.get(iid)) != iid:
+            if group_keeper[iid_to_group[iid]] != iid_to_node[iid]:
                 row_menu.add_command(
                     label="Make this the keeper",
                     command=lambda: make_keeper(iid),
@@ -714,27 +389,39 @@ class DuplicatesMixin:
         button_bar.pack(side=BOTTOM, fill=X)
 
         def reveal_selected():
-            sel = tv.focus()
-            node = iid_to_node.get(sel)
+            node = iid_to_node.get(tv.focus())
             if node:
                 self._reveal(node.path, is_dir=False)
 
         def copy_selected_path():
-            sel = tv.focus()
-            node = iid_to_node.get(sel)
+            node = iid_to_node.get(tv.focus())
             if node:
                 self.root.clipboard_clear()
                 self.root.clipboard_append(node.path)
 
-        def delete_selected_duplicates():
-            selected = list(tv.selection())
-            keeper_iids = set(group_keeper_iid.values())
-            # The keeper in each group is never a valid deletion target,
-            # even if selected (e.g. via select-all) — this is what actually
-            # guarantees at least one copy survives per group.
-            targets = [iid for iid in selected if iid in iid_to_node and iid not in keeper_iids]
-            skipped_keepers = len(selected) - len(targets)
+        def selected_copies():
+            """(the selected non-keeper copies, how many selected keepers were
+            left out). The keeper in each group is never a deletion target,
+            even if selected (e.g. via select-all)."""
+            selected = [iid for iid in tv.selection() if iid in iid_to_node]
+            copies = [
+                iid_to_node[iid]
+                for iid in selected
+                if iid_to_node[iid] != group_keeper[iid_to_group[iid]]
+            ]
+            return copies, len(selected) - len(copies)
 
+        def sampled_warning(count):
+            return (
+                f"\n\n⚠ {count} file(s) are from sampled matches "
+                "(only first, middle, and last 1 MB compared — bytes between "
+                "the compared windows weren't checked)."
+                if count
+                else ""
+            )
+
+        def delete_selected_duplicates():
+            targets, skipped_keepers = selected_copies()
             if not targets:
                 messagebox.showinfo(
                     "Storage Scanner",
@@ -749,61 +436,27 @@ class DuplicatesMixin:
                 if skipped_keepers
                 else ""
             )
-
-            # Check if any target nodes are from sampled groups
-            sampled_count, sampled_nodes = get_sampled_duplicates_from_groups(
-                [iid_to_node.get(iid) for iid in targets], duplicates
+            sampled_count, _sampled = get_sampled_duplicates_from_groups(
+                targets, self.duplicates or []
             )
-            sampled_warning = (
-                (
-                    f"\n\n⚠ {sampled_count} file(s) are from sampled matches "
-                    "(only first, middle, and last 1 MB compared — bytes between "
-                    "the compared windows weren't checked)."
-                )
-                if sampled_count
-                else ""
-            )
-
             if not messagebox.askyesno(
                 "Delete selected duplicates",
-                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}{sampled_warning}",
+                f"Send {len(targets)} selected file(s) to the {TRASH_NAME}?{note}"
+                + sampled_warning(sampled_count),
                 icon="warning",
                 parent=win,
             ):
                 return
-            deleted_count = 0
-            failed = []
-
-            for iid in targets:
-                node = iid_to_node.get(iid)
-                if not node:
-                    continue
-
-                if recycle_and_log(node, source="Duplicate Files"):
-                    deleted_count += 1
-                    iid_to_node.pop(iid, None)
-                    iid_to_group.pop(iid, None)
-                    tv.delete(iid)
-                    self._remove_search_result_from_tree(node)
-                    self._remove_from_duplicate_cache(node)
-                else:
-                    failed.append(node.path)
-
-            self.status_var.set(f"Deleted {deleted_count:,} duplicate file(s) to {TRASH_NAME}.")
-
-            if failed:
-                messagebox.showerror(
-                    "Storage Scanner",
-                    "Some files could not be deleted:\n\n" + "\n".join(failed[:10]),
-                    parent=win,
-                )
+            # Deleted rows leave this window through forget_deleted.
+            self._delete_nodes(
+                [DeleteRequest(node, "Duplicate Files", as_duplicate=True) for node in targets],
+                win,
+            )
 
         def add_selected_to_cart():
-            selected = list(tv.selection())
-            keeper_iids = set(group_keeper_iid.values())
-            # Same exclusion as delete: a group's keeper can never be
-            # queued for deletion, even via the cart.
-            targets = [iid for iid in selected if iid in iid_to_node and iid not in keeper_iids]
+            # Same exclusion as delete: a group's keeper can never be queued
+            # for deletion, even via the cart.
+            targets, _skipped = selected_copies()
             if not targets:
                 messagebox.showinfo(
                     "Storage Scanner",
@@ -812,27 +465,24 @@ class DuplicatesMixin:
                 )
                 return
 
-            # Check if any target nodes are from sampled groups
             sampled_count, sampled_nodes = get_sampled_duplicates_from_groups(
-                [iid_to_node.get(iid) for iid in targets], duplicates
+                targets, self.duplicates or []
             )
             if sampled_count and not messagebox.askyesno(
                 "Add sampled duplicates to cart",
-                f"Add {len(targets)} file(s) to the Cleanup Cart?\n\n"
-                f"⚠ {sampled_count} file(s) are from sampled matches "
-                "(only first, middle, and last 1 MB compared — bytes between "
-                "the compared windows weren't checked).",
+                f"Add {len(targets)} file(s) to the Cleanup Cart?" + sampled_warning(sampled_count),
                 icon="warning",
                 parent=win,
             ):
                 return
 
-            for iid in targets:
-                node = iid_to_node.get(iid)
-                if node:
-                    # Track whether this node is from a sampled group
-                    is_sampled = node in sampled_nodes
-                    self.cart.add(node, "Duplicate Files", is_sampled=is_sampled)
+            for node in targets:
+                self.cart.add(
+                    node,
+                    "Duplicate Files",
+                    is_sampled=node in sampled_nodes,
+                    as_duplicate=True,
+                )
             self._refresh_cart_indicator()
 
         ttk.Button(
@@ -861,52 +511,10 @@ class DuplicatesMixin:
 
         tv.bind("<Double-1>", lambda _e: reveal_selected())
 
-        if not duplicates:
+        if not group_count:
             self.status_var.set("No duplicate files found.")
         else:
             self.status_var.set(
-                f"Found {len(duplicates):,} duplicate groups. "
+                f"Found {group_count:,} duplicate groups. "
                 f"Potential cleanup: {human_size(total_wasted)}"
             )
-
-    def _remove_from_duplicate_cache(self, target_node):
-        """Keep self.duplicates (the last completed "Find Duplicate Files"
-        result, reused by Cleanup Recommendations -- see
-        cleanup_window.show_cleanup_recommendations) consistent after a
-        file or folder is deleted through *any* window, so a later reopen
-        never recommends deleting something that's already gone.
-
-        A group that drops to one remaining copy is no longer a duplicate
-        of anything and is dropped entirely, not just shrunk to one row.
-        """
-        duplicates = self.duplicates
-        if not duplicates:
-            return
-
-        if target_node.is_dir:
-            # Every file under a deleted folder lives in one of its folders.
-            gone_folders = set(iter_folders(target_node))
-
-            def gone(node):
-                return node.parent in gone_folders
-
-        else:
-
-            def gone(node):
-                return node == target_node
-
-        updated = []
-        changed = False
-        for size, digest, nodes in duplicates:
-            remaining = [n for n in nodes if not gone(n)]
-            if len(remaining) == len(nodes):
-                updated.append((size, digest, nodes))
-                continue
-            changed = True
-            if len(remaining) > 1:
-                updated.append((size, digest, remaining))
-
-        if changed:
-            self.duplicates = updated
-
-    # -- Shutdown ---------------------------------------------------------- #

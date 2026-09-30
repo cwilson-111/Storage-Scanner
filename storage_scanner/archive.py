@@ -2,15 +2,17 @@
 
 Compressing is safer than deleting: nothing is lost, just shrunk into a
 .zip next to the original. The original is only ever removed — through the
-same Recycle Bin/audit-log path every other deletion in the app uses —
-after the archive has been written *and verified*, never before.
+same delete service (storage_scanner.delete_service) every other deletion in
+the app uses — after the archive has been written *and verified*, never
+before.
 """
 
 import os
 import zipfile
 from collections import namedtuple
 
-from storage_scanner.audit import recycle_and_log
+from storage_scanner.delete_guard import refusal_reason
+from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.logging_setup import logger
 
 ArchiveResult = namedtuple(
@@ -67,14 +69,20 @@ def _unique_archive_path(path):
         n += 1
 
 
-def archive_file(node, source):
+def archive_file(node, source, remove_original):
     """Compress `node` (a file) to a .zip beside it, verify the archive,
-    then remove the original via recycle_and_log(). Never partially
-    destructive: the original is untouched unless the archive was written
-    and verified successfully first.
+    then remove the original with `remove_original(DeleteRequest)`, which
+    returns a delete_service.DeleteResult (the app's delete service). Never
+    partially destructive: the original is untouched unless the archive
+    was written and verified successfully first.
     """
     if node.is_dir:
         return ArchiveResult(False, None, False, "Archiving only supports individual files.")
+    # A path the original couldn't be deleted from isn't worth archiving --
+    # and a Windows-trimmed name would zip a different file (delete_guard).
+    refused = refusal_reason(node.path)
+    if refused:
+        return ArchiveResult(False, None, False, refused)
 
     archive_path = _unique_archive_path(node.path)
 
@@ -94,18 +102,20 @@ def archive_file(node, source):
                 logger.warning("Could not clean up partial archive %r", archive_path, exc_info=True)
         return ArchiveResult(False, None, False, str(exc))
 
-    original_removed = recycle_and_log(
-        node,
-        source=source,
-        action="archive",
-        extra_error_context=f"archive already written to {archive_path}",
+    result = remove_original(
+        DeleteRequest(
+            node,
+            source,
+            action="archive",
+            error_context=f"archive already written to {archive_path}",
+        )
     )
     error = (
         None
-        if original_removed
+        if result.removed
         else (
-            f"Archived to {archive_path}, but the original could not be removed — "
-            "both copies now exist."
+            f"Archived to {archive_path}, but the original could not be removed "
+            f"({result.message}) — both copies now exist."
         )
     )
-    return ArchiveResult(True, archive_path, original_removed, error)
+    return ArchiveResult(True, archive_path, result.removed, error)

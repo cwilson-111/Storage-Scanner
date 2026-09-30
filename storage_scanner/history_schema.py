@@ -1,5 +1,5 @@
-"""The scan-history database layout (history.py's tables) and its one
-migration.
+"""The scan-history database layout (history.py's tables) and its
+migrations.
 
 Kept apart from history.py's queries and free of any import from it:
 history.py opens the connection and the transaction, this only issues the
@@ -16,11 +16,20 @@ Schema versions, recorded as app_metadata's "schema_version":
    (scan_id, path_id) in a WITHOUT ROWID table, so one scan's rows are a
    contiguous primary-key range and "the same folder in the previous
    scan" is a primary-key lookup on two integers.
+3. audit_log.outcome: what actually happened (storage_scanner.
+   delete_outcome). Older rows only knew "the delete call returned
+   success", which a silent permanent delete also returned, so they become
+   "unverified", not "recycled"; failed rows become "failed".
 """
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+from storage_scanner.delete_outcome import FAILED, UNVERIFIED
+
+SCHEMA_VERSION = 3
+
+# The outcome of an audit row written without one (see version 3).
+LEGACY_OUTCOME_SQL = f"CASE WHEN success THEN '{UNVERIFIED}' ELSE '{FAILED}' END"
 
 _TABLES = (
     """
@@ -72,7 +81,8 @@ _TABLES = (
         is_dir INTEGER NOT NULL,
         size_bytes INTEGER NOT NULL,
         success INTEGER NOT NULL,
-        error_message TEXT
+        error_message TEXT,
+        outcome TEXT
     )
     """,
     """
@@ -141,13 +151,21 @@ def _copy_v1_folder_rows(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _add_audit_outcome(conn: sqlite3.Connection) -> None:
+    """Version 3: the outcome column, filled in for every existing row."""
+    columns = {column[1] for column in conn.execute("PRAGMA table_info(audit_log)")}
+    if "outcome" not in columns:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN outcome TEXT")
+        conn.execute(f"UPDATE audit_log SET outcome = {LEGACY_OUTCOME_SQL}")
+
+
 def ensure_schema(conn: sqlite3.Connection) -> bool:
-    """Create every history table, migrating a version 1 database first.
+    """Create every history table, migrating an older database first.
 
     Runs inside the caller's transaction, so a migration that fails part
     way leaves the old tables exactly as they were; running it again once
-    at SCHEMA_VERSION changes nothing. Returns True if it migrated (the
-    caller may then reclaim the old layout's space).
+    at SCHEMA_VERSION changes nothing. Returns True if it migrated the
+    version 1 folder layout (the caller may then reclaim its space).
     """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS app_metadata (
@@ -155,7 +173,8 @@ def ensure_schema(conn: sqlite3.Connection) -> bool:
             value TEXT NOT NULL
         )
     """)
-    migrate = _stored_version(conn) < 2
+    stored_version = _stored_version(conn)
+    migrate = stored_version < 2
     if migrate:
         # Its indexes (idx_folder_scan, idx_folder_path) go with it, and are
         # dropped along with it below.
@@ -163,10 +182,12 @@ def ensure_schema(conn: sqlite3.Connection) -> bool:
 
     for statement in _TABLES:
         conn.execute(statement)
+    _add_audit_outcome(conn)
 
     if migrate:
         _copy_v1_folder_rows(conn)
         conn.execute("DROP TABLE folder_snapshots_v1")
+    if stored_version < SCHEMA_VERSION:
         conn.execute(
             """
             INSERT INTO app_metadata (key, value) VALUES ('schema_version', ?)
