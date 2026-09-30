@@ -623,7 +623,8 @@ show it.**
   derive a folder's path from its parent instead of storing it.
 - Size: M. Verify: the new scale.py metric.
 
-**P2-4. The Turbo cache file is 615 MB and 54% empty.**
+**P2-4. The Turbo cache file is 615 MB and 54% empty — ✅ done
+(2026-09-29), real-drive check pending (P1-3)**
 - Why: `turbo_scan_cache.db` here: 150,319 pages of 4 KB, 80,987 of them on
   the free list, for 1,478,444 records, which is about 192 B per record live
   against `baseline.json`'s 128.1 (real names are longer, and the names
@@ -635,6 +636,20 @@ show it.**
   Clear button in Settings.
 - Size: S–M. Verify: the file size stays near the live size after full
   rescans.
+- Done (compaction rather than a new file per scan): after each full save
+  `turbo_cache` VACUUMs when over a quarter of the pages are free, and
+  drops drives not refreshed for 90 days (`STALE_VOLUME_DAYS`). A file
+  SQLite can't read is deleted and started over (`init_cache_db`, and
+  `turbo_read` on TurboCacheCorruptError, via `turbo_cache.discard`); a
+  connection that fails while opening is closed first, since Windows won't
+  delete an open file. Tools ▸ Settings ▸ "Clear Turbo Scan Cache…" shows
+  the size and deletes it.
+- Verified: `tests/test_turbo_cache.py`: 20,000 records then 1,000 → the
+  file shrinks below a quarter; a 90-day-stale drive dropped; a junk file
+  started over (that test found the open-connection bug). The menu item in
+  the real app cleared a 20 KB sandbox cache.
+- Not done: a real Turbo Scan to see this machine's 615 MB shrink (needs
+  elevation).
 
 **P2-5. History edge cases give wrong answers — ✅ done (2026-09-29).**
 Reproduced on synthetic
@@ -981,11 +996,13 @@ scheduled JSON output before any service, ingest API or console. Size: L.
 - Done: deleted (it had also caught a stray file from a bash command using
   `%TEMP%` during the v1.12.0 release; `$TEMP` is used now).
 
-**P3-4. The Obsidian project note is out of date.**
+**P3-4. The Obsidian project note is out of date — ✅ done (2026-09-29)**
 - Why: its overview still describes a single `treesize.py`, its feature list
   is June's, and its notes stop at v1.8.0.
 - Do: rewrite it from this backlog.
 - Size: S.
+- Done: rewritten from the current code, backlog and release process;
+  the old dated notes are condensed under "History".
 
 **P3-5. The log loses lines when the app and a scheduled scan overlap — ✅
 done (2026-09-29)**

@@ -377,3 +377,51 @@ def test_reused_record_number_is_stored_under_its_new_frn(tmp_path, monkeypatch)
     loaded = _load()
     assert set(loaded) == {ROOT_FRN, _frn(11, sequence_number=2)}
     assert loaded[_frn(11, sequence_number=2)].names[0].name == "second.txt"
+
+
+def _many(count, name_length=60):
+    return [_root()] + [
+        _record(100 + i, names=[_name(ROOT_FRN, f"{i:08d}" + "n" * name_length)], logical_size=i)
+        for i in range(count)
+    ]
+
+
+def test_a_full_save_that_leaves_the_file_mostly_empty_compacts_it(tmp_path, monkeypatch):
+    """P2-4: every full save rewrote a volume's rows and kept the freed
+    pages -- 615 MB, 54% of it empty, on the review machine."""
+    db_path = _init_db(tmp_path, monkeypatch)
+    _save(_many(20_000))
+    big = db_path.stat().st_size
+
+    _save(_many(1_000))
+
+    assert db_path.stat().st_size < big / 4
+    assert len(_load()) == 1_001
+
+
+def test_a_drive_not_refreshed_for_months_is_dropped_at_the_next_full_save(tmp_path, monkeypatch):
+    db_path = _init_db(tmp_path, monkeypatch)
+    turbo_cache.save_full_scan(999, "E:\\", ROOT_FRN, 1024, [_root()])
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE cached_volumes SET last_refreshed_at = '2020-01-01T00:00:00' "
+        "WHERE volume_serial = 999"
+    )
+    conn.commit()
+    conn.close()
+
+    _save([_root()])
+
+    assert turbo_cache.get_cached_volume(999) is None
+    assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is not None
+
+
+def test_a_cache_file_that_is_not_a_database_is_started_over(tmp_path, monkeypatch):
+    db_path = tmp_path / "turbo_scan_cache.db"
+    db_path.write_bytes(b"not a database at all " * 200)
+    monkeypatch.setattr(turbo_cache, "DB_NAME", db_path)
+
+    turbo_cache.init_cache_db()
+    _save([_root()])
+
+    assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is not None

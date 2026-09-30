@@ -208,10 +208,10 @@ def test_a_journal_that_cant_cover_the_gap_invalidates_and_reads_in_full(
     assert mft_read.full_read_reason == reason
 
 
-def test_a_damaged_cache_invalidates_and_reads_in_full(monkeypatch):
-    """A damaged cache must be treated like a stale journal: invalidate
-    this volume and read in full, so the NEXT scan rebuilds cleanly instead
-    of hitting the same damage (and Compatible fallback) forever."""
+def test_a_damaged_cache_is_started_over_and_read_in_full(monkeypatch):
+    """A damaged cache must not cost a full read on every scan: the file is
+    started over (not just this volume's rows, which a damaged file can't be
+    trusted to delete) and this scan reads in full and fills it again."""
     _valid_cache(monkeypatch)
     monkeypatch.setattr(turbo_read.turbo_cache, "apply_incremental_changes", lambda *a: None)
 
@@ -219,16 +219,15 @@ def test_a_damaged_cache_invalidates_and_reads_in_full(monkeypatch):
         raise turbo_read.turbo_cache.TurboCacheCorruptError("malformed")
 
     monkeypatch.setattr(turbo_read, "_subtree_from_cache", damaged)
-    invalidated = []
-    monkeypatch.setattr(
-        turbo_read.turbo_cache, "invalidate_volume", lambda serial: invalidated.append(serial)
-    )
+    calls = []
+    monkeypatch.setattr(turbo_read.turbo_cache, "discard", lambda: calls.append("discard"))
+    monkeypatch.setattr(turbo_read.turbo_cache, "init_cache_db", lambda: calls.append("init"))
     _full_scan_parses_everything(monkeypatch)
 
     node, mft_read = _scan(_FakeRecordSource(record_count=1))
 
     assert node == ("full", 1)
-    assert invalidated == [1]
+    assert calls[-2:] == ["discard", "init"]
     assert mft_read.full_read_reason == "cache was corrupt"
 
 

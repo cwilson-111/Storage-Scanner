@@ -148,6 +148,16 @@ def scan_subtree_using_cache(record_source, volume_root, target_path, progress_q
         turbo_cache.init_cache_db()
         cached = turbo_cache.get_cached_volume(volume_serial)
         reason = "first scan of this drive"
+    except turbo_cache.TurboCacheCorruptError as exc:
+        # Damaged past what init_cache_db noticed: start the file over, so
+        # this full read is cached instead of repeating on every scan.
+        logger.warning("Turbo Scan cache is damaged (%s); starting a new one", exc)
+        reason = "cache was corrupt"
+        try:
+            turbo_cache.discard()
+            turbo_cache.init_cache_db()
+        except Exception:  # noqa: BLE001 - caching is a pure optimization
+            logger.warning("Could not start a new Turbo Scan cache", exc_info=True)
     except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
         logger.warning(
             "Turbo Scan cache is unavailable for %r; scanning without it",
@@ -177,7 +187,11 @@ def scan_subtree_using_cache(record_source, volume_root, target_path, progress_q
             else:
                 reason = "USN journal unreadable"
             try:
-                turbo_cache.invalidate_volume(volume_serial)
+                if isinstance(exc, turbo_cache.TurboCacheCorruptError):
+                    turbo_cache.discard()
+                    turbo_cache.init_cache_db()
+                else:
+                    turbo_cache.invalidate_volume(volume_serial)
             except Exception:  # noqa: BLE001 - best-effort cleanup only
                 logger.warning(
                     "Could not invalidate Turbo Scan cache for %r",

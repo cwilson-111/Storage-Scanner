@@ -28,15 +28,40 @@ This module has no ctypes/Win32 access at all, matching mft_parser.py's own
 both together (storage_scanner.turbo_scan) are separate modules.
 """
 
+import contextlib
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from history import APP_DATA_DIR
+from storage_scanner import history_files
 from storage_scanner.logging_setup import logger
 from storage_scanner.mft_parser import _FRN_RECORD_NUMBER_MASK, FileNameAttr, ParsedRecord
 
 DB_NAME = APP_DATA_DIR / "turbo_scan_cache.db"
+
+# A drive whose cache hasn't been refreshed for this long (unplugged,
+# reformatted, gone) loses it at the next full save of another drive.
+STALE_VOLUME_DAYS = 90
+
+
+def discard():
+    """Delete the cache file outright (and its -wal/-shm). Nothing in it is
+    anything but a copy of what the drives hold: the next Turbo Scan of each
+    drive just reads its whole MFT again."""
+    for suffix in ("", "-wal", "-shm"):
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(f"{DB_NAME}{suffix}")
+
+
+def cache_size_bytes():
+    """What the cache takes on disk, -wal included."""
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        with contextlib.suppress(OSError):
+            total += os.path.getsize(f"{DB_NAME}{suffix}")
+    return total
+
 
 _RECORD_FIELDS = (
     "frn",
@@ -56,15 +81,42 @@ _R_RECORD_COLUMNS = ", ".join(f"r.{field}" for field in _RECORD_FIELDS)
 
 def _connect():
     conn = sqlite3.connect(DB_NAME)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA temp_store = MEMORY")
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA temp_store = MEMORY")
+    except BaseException:
+        # A damaged file fails right here; left open, Windows won't let
+        # discard() delete it.
+        conn.close()
+        raise
     return conn
 
 
 def init_cache_db():
+    """Create (or upgrade) the cache tables. A file SQLite can't read as a
+    database is deleted and a new one started: before, a damaged cache
+    meant a full read on every scan, for good."""
+    try:
+        _create_tables()
+    except sqlite3.DatabaseError as exc:
+        if not history_files.is_damaged(exc):
+            raise
+        logger.warning("Turbo Scan cache %s is damaged (%s); starting a new one", DB_NAME, exc)
+        discard()
+        _create_tables()
+
+
+def _create_tables():
     conn = _connect()
+    try:
+        _create_tables_on(conn)
+    finally:
+        conn.close()
+
+
+def _create_tables_on(conn):
     cur = conn.cursor()
 
     cur.execute("PRAGMA table_info(cached_records)")
@@ -136,7 +188,6 @@ def init_cache_db():
     """)
 
     conn.commit()
-    conn.close()
 
 
 class TurboCacheCorruptError(Exception):
@@ -226,14 +277,17 @@ _INSERT_NAME = """
 
 def get_cached_volume(volume_serial):
     """The cached_volumes row for `volume_serial` as a dict, or None if this
-    volume has never been cached."""
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM cached_volumes WHERE volume_serial = ?", (volume_serial,))
-    row = cur.fetchone()
-    conn.close()
-    return dict(row) if row is not None else None
+    volume has never been cached. Raises TurboCacheCorruptError if the
+    database is damaged."""
+
+    def query(cur):
+        cur.execute("SELECT * FROM cached_volumes WHERE volume_serial = ?", (volume_serial,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return dict(zip((column[0] for column in cur.description), row))
+
+    return _reading(query)
 
 
 def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
@@ -269,13 +323,40 @@ def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
     cur.executemany(_INSERT_RECORD, (_record_row(volume_serial, r) for r in records))
     cur.executemany(_INSERT_NAME, _name_rows(volume_serial, records))
 
+    stale_before = (datetime.now() - timedelta(days=STALE_VOLUME_DAYS)).isoformat(
+        timespec="seconds"
+    )
+    # Cascades to their records and names.
+    cur.execute(
+        "DELETE FROM cached_volumes WHERE volume_serial != ? AND last_refreshed_at < ?",
+        (volume_serial, stale_before),
+    )
     conn.commit()
+    _compact_if_mostly_empty(conn)
     conn.close()
     logger.debug(
         "turbo_cache: saved full scan of volume %s (%d records)",
         volume_serial,
         len(records),
     )
+
+
+def _compact_if_mostly_empty(conn):
+    """VACUUM when over a quarter of the file's pages are free. A full save
+    deletes a volume's rows and writes them again, and SQLite keeps the
+    freed pages: this machine's cache was 615 MB, 54% of it empty. The
+    VACUUM rewrites the file (seconds for hundreds of MB), which is why it
+    waits until it's worth it."""
+    pages = conn.execute("PRAGMA page_count").fetchone()[0]
+    free = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    if free * 4 <= pages:
+        return
+    try:
+        conn.execute("VACUUM")
+    except sqlite3.Error:
+        logger.warning("Could not compact the Turbo Scan cache", exc_info=True)
+        return
+    logger.info("turbo_cache: compacted %s (%d of %d pages were free)", DB_NAME, free, pages)
 
 
 def save_journal_cursor(volume_serial, usn_journal_id, next_usn):

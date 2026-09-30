@@ -31,7 +31,7 @@ from tkinter import (
 )
 
 from history import get_app_metadata, get_folder_sizes, set_app_metadata, set_budget
-from storage_scanner import history_retention, turbo_scan, update_check
+from storage_scanner import history_retention, turbo_cache, turbo_scan, update_check
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import (
@@ -185,6 +185,9 @@ class MainWindowMixin:
                 label="Turbo Scan (Experimental) — NTFS MFT fast path",
                 variable=self.turbo_scan_var,
                 command=self._on_toggle_turbo_scan,
+            )
+            settings_menu.add_command(
+                label="Clear Turbo Scan Cache…", command=self._clear_turbo_cache
             )
         self.update_check_var = BooleanVar(
             value=get_app_metadata(update_check.ENABLED_KEY, "1") != "0"
@@ -497,6 +500,30 @@ class MainWindowMixin:
     # -- Scan lifecycle ---------------------------------------------------- #
     def _on_toggle_turbo_scan(self):
         set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
+
+    def _clear_turbo_cache(self):
+        """Settings ▸ Clear Turbo Scan Cache: say how big it is, and delete
+        it if asked (turbo_cache.discard)."""
+        if self._scan_running():
+            messagebox.showinfo("Storage Scanner", "Wait until the scan finishes.")
+            return
+        size = turbo_cache.cache_size_bytes()
+        if not size:
+            messagebox.showinfo("Storage Scanner", "The Turbo Scan cache is empty.")
+            return
+        if not messagebox.askyesno(
+            "Clear Turbo Scan Cache",
+            f"The Turbo Scan cache takes {human_size(size)}. Delete it?\n\n"
+            "The next Turbo Scan of each drive reads its whole MFT again, then "
+            "caches it anew.",
+        ):
+            return
+        try:
+            turbo_cache.discard()
+        except OSError as exc:
+            messagebox.showerror("Storage Scanner", f"Could not delete the cache:\n{exc}")
+            return
+        self.status_var.set(f"Cleared the Turbo Scan cache ({human_size(size)}).")
 
     def _on_change_history_keep_all(self):
         set_app_metadata(history_retention.KEEP_ALL_DAYS_KEY, self.history_keep_all_var.get())
