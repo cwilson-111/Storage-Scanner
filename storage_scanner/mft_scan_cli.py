@@ -96,7 +96,7 @@ class _ProgressFileWriter:
 
     def _write(self, text):
         tmp_path = self.path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with open_without_following_links(tmp_path) as f:
             f.write(text)
         for attempt in range(1, _REPLACE_ATTEMPTS + 1):
             try:
@@ -106,6 +106,73 @@ class _ProgressFileWriter:
                 if attempt == _REPLACE_ATTEMPTS:
                     raise
                 time.sleep(_REPLACE_RETRY_SECONDS)
+
+
+def open_without_following_links(path):
+    """`path` opened for writing (created if missing, emptied if not), as a
+    text stream -- but never through a symbolic link, junction or extra hard
+    link. The unelevated app picks these paths in the user's temp folder and
+    this helper runs elevated, so without this another process running as
+    the same user could swap one for a link and have the helper overwrite a
+    file the user can't write. Raises OSError instead."""
+    if sys.platform != "win32":
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        return os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8")
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _FileInfo(ctypes.Structure):  # BY_HANDLE_FILE_INFORMATION
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("created", wintypes.FILETIME),
+            ("accessed", wintypes.FILETIME),
+            ("written", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("index_high", wintypes.DWORD),
+            ("index_low", wintypes.DWORD),
+        ]
+
+    # Its own instance, so these prototypes don't change the shared
+    # ctypes.windll.kernel32 other modules call.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    generic_write, open_always = 0x40000000, 4
+    open_reparse_point = 0x00200000  # open a link itself, never its target
+    reparse_attribute = 0x400
+
+    handle = kernel32.CreateFileW(
+        str(path), generic_write, 0, None, open_always, open_reparse_point, None
+    )
+    if handle is None or handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    info = _FileInfo()
+    if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+        error = ctypes.WinError(ctypes.get_last_error())
+        kernel32.CloseHandle(handle)
+        raise error
+    if info.attributes & reparse_attribute or info.links != 1:
+        kernel32.CloseHandle(handle)
+        raise OSError(f"Refusing to write {path}: it's a link to somewhere else")
+    fd = msvcrt.open_osfhandle(handle, os.O_BINARY)  # type: ignore[attr-defined]
+    stream = os.fdopen(fd, "w", encoding="utf-8")
+    stream.truncate(0)
+    return stream
 
 
 def build_arg_parser():
@@ -142,7 +209,7 @@ def _write_error(output_path, exc):
         "traceback": traceback.format_exc(),
     }
     try:
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open_without_following_links(output_path) as f:
             json.dump(envelope, f)
     except OSError:
         pass  # stderr (below) is all that's left
@@ -179,7 +246,7 @@ def run_mft_scan(argv):
         finally:
             record_source.close()
 
-        with open(args.output, "w", encoding="utf-8") as f:
+        with open_without_following_links(args.output) as f:
             # The GUI launching this helper is always the same build, so the
             # envelope's shape never has to be negotiated.
             json.dump({"node": node_to_dict(subtree_node), "mft_read": mft_read.to_dict()}, f)

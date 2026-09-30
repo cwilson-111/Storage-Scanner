@@ -60,7 +60,9 @@ def _append_stream(path):
     import msvcrt
     from ctypes import wintypes
 
-    create_file = ctypes.windll.kernel32.CreateFileW
+    # Its own instance, so the prototype set here doesn't change the shared
+    # ctypes.windll.kernel32 other modules call.
+    create_file = ctypes.WinDLL("kernel32", use_last_error=True).CreateFileW
     create_file.restype = wintypes.HANDLE
     create_file.argtypes = [
         wintypes.LPCWSTR,
@@ -74,7 +76,7 @@ def _append_stream(path):
     file_append_data, share_all, open_always, normal = 0x4, 0x7, 4, 0x80
     handle = create_file(str(path), file_append_data, share_all, None, open_always, normal, None)
     if handle is None or handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError()
+        raise ctypes.WinError(ctypes.get_last_error())
     fd = msvcrt.open_osfhandle(handle, os.O_APPEND | os.O_BINARY)  # type: ignore[attr-defined]
     return open(fd, "a", encoding="utf-8")
 

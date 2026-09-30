@@ -1051,7 +1051,8 @@ done (2026-09-29)**
 - Verified: `tests/test_turbo_read.py`'s wrap case now has FirstUsn above
   the cursor and LowestValidUsn 0, which the old check let through.
 
-**P3-7. Harden the elevated helper's output file.**
+**P3-7. Harden the elevated helper's output file — ✅ done (2026-09-29),
+not run elevated here**
 - Why: the unelevated app picks a path in `%TEMP%` (`file_ops.py:427-429`)
   and the elevated helper writes to it. [inference] Another process running
   as the same user could swap it for a link and make the helper overwrite a
@@ -1062,6 +1063,20 @@ done (2026-09-29)**
 - Do: open the output without following links (or hand over an inherited
   handle), and check that result paths are under the requested root.
 - Size: S.
+- Done: the helper writes its result, its error and its progress `.tmp`
+  file through `mft_scan_cli.open_without_following_links`: on Windows
+  `CreateFileW` with `FILE_FLAG_OPEN_REPARSE_POINT`, refusing a reparse
+  point or a file with more than one hard link; elsewhere `O_NOFOLLOW`.
+  The app checks the result before using it (`turbo_scan.
+  _first_path_outside`): every folder under the requested one, every file
+  name a plain name; otherwise it falls back to Compatible Scan.
+  `open_without_following_links` and `logging_setup._append_stream` load
+  their own `kernel32` (`ctypes.WinDLL`) so their prototypes don't change
+  the shared `ctypes.windll.kernel32`.
+- Verified: tests: a hard link to another file is refused and that file
+  left as it was; a result with a folder or a `..\` file name outside the
+  requested folder is caught.
+- Not done: a real elevated helper run (P1-3).
 
 **P3-8. Orphaned-install detection trusts a registry read that can fail —
 ✅ done (2026-09-29)**

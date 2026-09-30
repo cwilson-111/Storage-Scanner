@@ -276,3 +276,20 @@ def test_elevated_helper_result_carries_the_node_and_how_the_mft_was_read(monkey
 
     assert (result_node.path, result_node.file_count) == ("C:\\Data", 4)
     assert result_read == mft_read
+
+
+def test_a_helper_result_outside_the_requested_folder_is_refused():
+    """P3-7: the elevated helper's result comes back through a temp file."""
+    root = Node("C:\\Data", "Data")
+    inside = Node("C:\\Data\\sub", "sub")
+    root.dirs.append(inside)
+    inside.add_file("ok.txt", 1)
+    assert turbo_scan._first_path_outside(root, "C:\\Data") is None
+
+    stray = Node("C:\\Windows\\System32", "System32")
+    root.dirs.append(stray)
+    assert turbo_scan._first_path_outside(root, "C:\\Data") == "C:\\Windows\\System32"
+
+    root.dirs.remove(stray)
+    inside.add_file("..\\..\\Windows\\win.ini", 1)
+    assert turbo_scan._first_path_outside(root, "C:\\Data") is not None

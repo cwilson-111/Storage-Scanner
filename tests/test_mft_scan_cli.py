@@ -1,3 +1,5 @@
+import os
+
 """Tests for storage_scanner.mft_scan_cli, the elevated Turbo Scan helper:
 arguments, the JSON envelope it writes for the unelevated GUI, exit codes,
 and the progress file. The scan itself (turbo_read.scan_subtree_using_cache)
@@ -229,3 +231,22 @@ def test_progress_that_cannot_be_written_never_fails_the_scan(monkeypatch, tmp_p
 
     assert mft_scan_cli.run_mft_scan(argv) == mft_scan_cli.EXIT_OK
     assert json.loads(output_path.read_text(encoding="utf-8"))["node"]["size"] == 123
+
+
+def test_the_helper_writes_its_output_but_never_through_a_link(tmp_path):
+    """P3-7: the app picks these paths in the user's temp folder and the
+    helper runs elevated; a path swapped for a link to another file must
+    not let the helper overwrite that file."""
+    plain = tmp_path / "out.json"
+    with mft_scan_cli.open_without_following_links(str(plain)) as f:
+        f.write("ok")
+    assert plain.read_text() == "ok"
+
+    protected = tmp_path / "protected.txt"
+    protected.write_text("keep me")
+    linked = tmp_path / "swapped.json"
+    os.link(protected, linked)
+
+    with pytest.raises(OSError, match="link"):
+        mft_scan_cli.open_without_following_links(str(linked))
+    assert protected.read_text() == "keep me"
