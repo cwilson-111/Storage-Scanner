@@ -16,15 +16,18 @@ same order production code does.
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.mft_parser import FileNameAttr, ParsedRecord, _pack_frn
 from storage_scanner.mft_scan import (
+    LinkedFolderError,
     build_tree,
     file_node,
     finalize_subtree,
-    reroot_if_reparse_point,
+    refuse_linked_folder,
 )
 
 ROOT_FRN = _pack_frn(1, 5)
@@ -42,7 +45,7 @@ def _record(
     sequence_number=1,
     logical_size=0,
     alloc_size=0,
-    is_reparse_point=False,
+    is_link=False,
     is_cloud_placeholder=False,
     mtime=0.0,
     atime=0.0,
@@ -52,7 +55,7 @@ def _record(
         frn=_frn(record_number, sequence_number),
         is_directory=is_directory,
         file_attributes=file_attributes,
-        is_reparse_point=is_reparse_point,
+        is_link=is_link,
         is_cloud_placeholder=is_cloud_placeholder,
         mtime=mtime,
         atime=atime,
@@ -131,9 +134,9 @@ def test_build_tree_alone_leaves_nodes_undeduped_and_unrolled_up():
     assert tree.size == 0  # root's own size hasn't been rolled up yet
 
 
-def test_row_frns_tracks_only_hard_linked_and_reparse_point_file_rows():
-    # The FRN side channel finalize_subtree()/reroot_if_reparse_point()
-    # need: a plain file row or a directory never lands in it.
+def test_row_frns_tracks_only_hard_linked_and_link_file_rows():
+    # The FRN side channel finalize_subtree()/refuse_linked_folder() need:
+    # a plain file row or a directory never lands in it.
     folder = _record(10, is_directory=True, names=[_name(ROOT_FRN, "Docs")])
     plain = _record(11, names=[_name(_frn(10), "plain.txt")], logical_size=1)
     linked = _record(
@@ -141,9 +144,7 @@ def test_row_frns_tracks_only_hard_linked_and_reparse_point_file_rows():
         names=[_name(ROOT_FRN, "original.bin"), _name(_frn(10), "linked.bin")],
         logical_size=5,
     )
-    junction = _record(
-        13, is_directory=True, is_reparse_point=True, names=[_name(ROOT_FRN, "Link")]
-    )
+    junction = _record(13, is_directory=True, is_link=True, names=[_name(ROOT_FRN, "Link")])
 
     tree, _orphan_count, row_frns = build_tree(
         [_root(), folder, plain, linked, junction], root_path="C:\\Data"
@@ -300,16 +301,16 @@ def test_directory_claiming_two_parents_is_expanded_once_with_error_on_the_repea
     assert expanded[0].children[0].name == "inside.txt"
 
 
-def test_reparse_point_directory_is_a_leaf_and_never_expanded():
+def test_link_directory_is_a_leaf_and_never_expanded():
     junction = _record(
         60,
         is_directory=True,
-        is_reparse_point=True,
-        names=[_name(ROOT_FRN, "OneDriveLink")],
+        is_link=True,
+        names=[_name(ROOT_FRN, "Link")],
     )
-    # Even if something (corruptly) claims to live inside it, a reparse
-    # point must never be traversed -- matches scanner.py's leaf treatment
-    # of junctions/symlinks (see tests/test_scan.py's
+    # Even if something (corruptly) claims to live inside it, a link must
+    # never be traversed -- matches scanner.py's leaf treatment of
+    # junctions/symlinks (see tests/test_scan.py's
     # test_symlinked_directory_is_not_traversed).
     ghost_child = _record(61, names=[_name(_frn(60), "inside.txt")], logical_size=1)
 
@@ -318,17 +319,35 @@ def test_reparse_point_directory_is_a_leaf_and_never_expanded():
         root_path="C:\\Data",
     )
 
-    link_node = _by_name(tree)["OneDriveLink"]
+    link_node = _by_name(tree)["Link"]
     assert not link_node.is_dir
     assert link_node.is_link
     assert not link_node.children
     assert orphan_count == 1  # ghost_child's parent was never expanded
 
 
+def test_a_onedrive_folder_is_walked_though_it_is_a_reparse_point():
+    # OneDrive folders carry the reparse bit on disk (0x431), but not a
+    # link's tag. Turbo Scan once showed them as 0-byte links and still
+    # called the scan complete; the Compatible engine walks them.
+    onedrive = _record(
+        63, is_directory=True, file_attributes=0x431, names=[_name(ROOT_FRN, "OneDrive")]
+    )
+    synced = _record(64, names=[_name(_frn(63), "report.docx")], logical_size=300, alloc_size=4096)
+
+    tree, orphan_count, row_frns = build_tree([_root(), onedrive, synced], root_path="C:\\Data")
+    finalize_subtree(tree, row_frns)
+
+    folder = _by_name(tree)["OneDrive"]
+    assert folder.is_dir and not folder.is_link
+    assert (folder.size, folder.alloc_size, folder.file_count) == (300, 4096, 1)
+    assert orphan_count == 0
+
+
 def test_cloud_placeholder_reparse_point_is_not_flagged_as_a_link():
     placeholder = _record(
         62,
-        is_reparse_point=True,
+        is_link=True,
         is_cloud_placeholder=True,
         names=[_name(ROOT_FRN, "photo.jpg")],
         logical_size=2_000_000,
@@ -366,104 +385,22 @@ def test_root_record_that_is_not_a_directory_returns_none():
     assert tree is None
 
 
-# -- reroot_if_reparse_point --------------------------------------------- #
-# A requested scan target that's itself a reparse point (junction/symlink)
-# must still be followed, matching scanner.scan()'s own root-vs-child
-# asymmetry (its root handling uses os.path.isdir(), which transparently
-# follows a reparse point; only its per-child walk excludes them).
+# -- refuse_linked_folder -------------------------------------------------- #
+# A requested scan target that's itself a junction/symlink/mount point
+# can't be read from the MFT: its own directory index is always empty. It
+# goes to the Compatible engine instead, which follows it (os.path.isdir).
 
 
-def test_reroot_follows_the_target_but_leaves_a_nested_reparse_point_alone():
-    link_dir = _record(
-        40,
-        is_directory=True,
-        is_reparse_point=True,
-        names=[_name(ROOT_FRN, "Link")],
-    )
-    inside = _record(41, names=[_name(_frn(40), "inside.txt")], logical_size=10)
-    # A reparse point nested *inside* the one being followed -- this one
-    # must still be excluded; only the single outermost node passed to
-    # reroot_if_reparse_point ever gets the root treatment.
-    nested_link = _record(
-        42,
-        is_directory=True,
-        is_reparse_point=True,
-        names=[_name(_frn(40), "NestedLink")],
-    )
-    deep = _record(43, names=[_name(_frn(42), "deep.txt")], logical_size=20)
-
-    records = [_root(), link_dir, inside, nested_link, deep]
+def test_a_link_to_a_folder_asked_for_directly_is_refused():
+    # Its "contents" in the MFT are nothing (NTFS refuses to make a
+    # non-empty folder a junction); this once came back as an empty tree
+    # where the Compatible engine found the target's 3 files.
+    link_dir = _record(40, is_directory=True, is_link=True, names=[_name(ROOT_FRN, "Link")])
+    records = [_root(), link_dir]
     tree, _orphan_count, row_frns = build_tree(records, root_path="C:\\Data")
 
-    link_node = _by_name(tree)["Link"]
-    assert not link_node.is_dir
-    assert link_node.is_link
-    assert not link_node.has_children
-
-    rerooted = reroot_if_reparse_point(link_node, "C:\\Data\\Link", records, row_frns)
-
-    assert rerooted is not link_node  # a fresh node, not the original leaf
-    assert rerooted.is_dir
-    assert not rerooted.is_link  # matches scanner.py's root Node: never flagged as a link
-    assert rerooted.path == "C:\\Data\\Link"
-
-    children = _by_name(rerooted)
-    assert set(children) == {"inside.txt", "NestedLink"}
-    assert children["inside.txt"].size == 10
-
-    nested = children["NestedLink"]
-    assert not nested.is_dir  # still correctly excluded
-    assert nested.is_link
-    assert not nested.has_children  # "deep.txt" never attached
-
-    # finalize_subtree still works correctly on the rerooted result.
-    finalize_subtree(rerooted, row_frns)
-    assert rerooted.size == 10  # NestedLink, a leaf like any other reparse
-    # point, contributes 0 (matches _make_node's
-    # `file_count = 0 if is_dir else 1`, but its
-    # size is its own logical_size, 0 by default
-    # here since the fixture never set one)
-    assert rerooted.file_count == 2  # inside.txt + NestedLink (a leaf still counts)
-
-
-def test_reroot_is_a_noop_for_a_reparse_point_that_is_actually_a_file():
-    # A symlink to a *file*, not a directory -- scanner.py's os.path.isdir()
-    # would be False for this too, so there's nothing to follow/reveal.
-    link_file = _record(
-        50,
-        is_directory=False,
-        is_reparse_point=True,
-        names=[_name(ROOT_FRN, "LinkToFile")],
-    )
-    records = [_root(), link_file]
-    tree, _orphan_count, row_frns = build_tree(records, root_path="C:\\Data")
-
-    link_node = _by_name(tree)["LinkToFile"]
-    result = reroot_if_reparse_point(link_node, "C:\\Data\\LinkToFile", records, row_frns)
-
-    assert result is link_node
-
-
-def test_reroot_is_a_noop_for_an_ordinary_directory():
-    folder = _record(60, is_directory=True, names=[_name(ROOT_FRN, "Normal")])
-    records = [_root(), folder]
-    tree, _orphan_count, row_frns = build_tree(records, root_path="C:\\Data")
-
-    node = _by_name(tree)["Normal"]
-    result = reroot_if_reparse_point(node, "C:\\Data\\Normal", records, row_frns)
-
-    assert result is node
-
-
-def test_reroot_is_a_noop_for_an_ordinary_file():
-    file_node_record = _record(70, names=[_name(ROOT_FRN, "plain.txt")], logical_size=5)
-    records = [_root(), file_node_record]
-    tree, _orphan_count, row_frns = build_tree(records, root_path="C:\\Data")
-
-    node = _by_name(tree)["plain.txt"]
-    result = reroot_if_reparse_point(node, "C:\\Data\\plain.txt", records, row_frns)
-
-    assert result is node
+    with pytest.raises(LinkedFolderError, match="junction"):
+        refuse_linked_folder(_by_name(tree)["Link"], "C:\\Data\\Link", records, row_frns)
 
 
 def test_file_node_is_the_same_row_build_tree_attaches():
@@ -474,7 +411,7 @@ def test_file_node_is_the_same_row_build_tree_attaches():
         alloc_size=4096,
         mtime=12.5,
         atime=34.5,
-        is_reparse_point=True,
+        is_link=True,
     )
     tree, _orphan_count, _row_frns = build_tree([_root(), record], root_path="C:\\Data")
     row = _by_name(tree)["clip.mp4"]

@@ -22,11 +22,14 @@ import threading
 from ctypes import wintypes
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner import drive_info, mft_volume, turbo_cache, turbo_scan, usn_journal
 from storage_scanner.mft_parser import _pack_frn
+from storage_scanner.models import Node
 from storage_scanner.turbo_read import MftRead
 
 _RECORD_SIZE = 1024
@@ -40,6 +43,7 @@ _MFT_BYTE_OFFSET = 8192  # a couple of clusters of filler ahead of the "$MFT"
 _ATTR_STANDARD_INFORMATION = 0x10
 _ATTR_FILE_NAME = 0x30
 _ATTR_DATA = 0x80
+_ATTR_REPARSE_POINT = 0xC0
 _ATTR_END_MARKER = 0xFFFFFFFF
 _RECORD_FLAG_IN_USE = 0x0001
 _RECORD_FLAG_IS_DIRECTORY = 0x0002
@@ -169,20 +173,26 @@ def _build_record(
     file_name=None,
     file_names=None,
     data=None,
-    is_reparse_point=False,
+    file_attributes=0,
+    reparse_tag=None,
 ):
     """`file_name` is a convenience for the common single-name case;
     `file_names` (a list) supports a genuinely hard-linked record with
-    more than one $FILE_NAME attribute, one per parent directory."""
+    more than one $FILE_NAME attribute, one per parent directory.
+    `reparse_tag` makes it a reparse point carrying that tag."""
     if file_names is None:
         file_names = [file_name]
-    file_attributes = _FILE_ATTRIBUTE_REPARSE_POINT if is_reparse_point else 0
+    if reparse_tag is not None:
+        file_attributes |= _FILE_ATTRIBUTE_REPARSE_POINT
     attrs = bytearray()
     attrs += _resident_attr(_ATTR_STANDARD_INFORMATION, _std_info_value(file_attributes), 0)
     for i, name_value in enumerate(file_names):
         attrs += _resident_attr(_ATTR_FILE_NAME, name_value, 1 + i)
     if data is not None:
         attrs += _resident_attr(_ATTR_DATA, data, 1 + len(file_names))
+    if reparse_tag is not None:
+        reparse_value = struct.pack("<IHH", reparse_tag, 0, 0)
+        attrs += _resident_attr(_ATTR_REPARSE_POINT, reparse_value, 2 + len(file_names))
     attrs += struct.pack("<I", _ATTR_END_MARKER)
 
     flags = _RECORD_FLAG_IN_USE | (_RECORD_FLAG_IS_DIRECTORY if is_directory else 0)
@@ -330,18 +340,20 @@ def _build_fake_volume_with_cross_subtree_hardlink():
     return (b"\x00" * _MFT_BYTE_OFFSET) + mft_bytes
 
 
-def _build_fake_volume_with_reparse_point_scan_target():
-    """Record 0: real $MFT record (one extent). 1-4: unused. 5: root.
-    6: "Link" -- a directory *and* a reparse point (a junction/symlink),
-    directly under root. 7: "inside.txt", a real file under Link. Scanning
-    "C:\\Link" directly must still reveal inside.txt, matching
-    scanner.scan()'s own root-vs-child asymmetry (its root handling just
-    uses os.path.isdir(), which follows a reparse point transparently --
-    only its per-*child* walk excludes them)."""
-    root_frn = _pack_frn(1, 5)
-    link_frn = _pack_frn(1, 6)
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003  # a junction, or a volume mount point
+_IO_REPARSE_TAG_CLOUD = 0x9000001A  # OneDrive Files On-Demand
 
-    total_records = 8  # 0..7
+
+def _build_fake_volume_with_a_junction_and_onedrive():
+    """Record 0: real $MFT record (one extent). 1-4: unused. 5: root.
+    6: "Link", a junction -- its own directory index is empty on real NTFS
+    (a non-empty folder can't become one), so nothing lives under it. 7:
+    "OneDrive", the attributes measured on a real OneDrive folder (0x431,
+    reparse bit included, cloud tag). 8: "synced.txt" under OneDrive."""
+    root_frn = _pack_frn(1, 5)
+    onedrive_frn = _pack_frn(1, 7)
+
+    total_records = 9  # 0..8
     length_clusters = -(-total_records // _RECORDS_PER_CLUSTER)  # ceil division
     record0 = _build_mft_record0([(length_clusters, _MFT_START_LCN)])
 
@@ -356,17 +368,28 @@ def _build_fake_volume_with_reparse_point_scan_target():
             6,
             is_directory=True,
             sequence_number=1,
-            is_reparse_point=True,
+            file_attributes=0x10,
+            reparse_tag=_IO_REPARSE_TAG_MOUNT_POINT,
             file_name=_file_name_value(root_frn, "Link"),
         )
     )
     records.append(
         _build_record(
             7,
+            is_directory=True,
+            sequence_number=1,
+            file_attributes=0x31,
+            reparse_tag=_IO_REPARSE_TAG_CLOUD,
+            file_name=_file_name_value(root_frn, "OneDrive"),
+        )
+    )
+    records.append(
+        _build_record(
+            8,
             is_directory=False,
             sequence_number=1,
-            file_name=_file_name_value(link_frn, "inside.txt"),
-            data=b"hello",
+            file_name=_file_name_value(onedrive_frn, "synced.txt"),
+            data=b"synced!",
         )
     )
 
@@ -577,38 +600,59 @@ def test_hardlink_with_one_occurrence_outside_the_scanned_subtree_is_billed_in_f
     assert node.file_count == 1
 
 
-def test_scanning_a_reparse_point_directly_still_reveals_its_contents(monkeypatch, tmp_path):
-    # scanner.py's Compatible engine follows a reparse point transparently
-    # when it's the scan *root* (os.path.isdir() doesn't care), but excludes
-    # it when it's a *child* encountered during traversal. Before this fix,
-    # Turbo Scan applied the child rule everywhere, so scanning a junction/
-    # symlinked folder directly would come back empty.
+def _use_fake_volume(monkeypatch, tmp_path, kernel32):
     _init_cache_db(tmp_path, monkeypatch)
-    volume_bytes = _build_fake_volume_with_reparse_point_scan_target()
-    kernel32 = _FakeKernel32(volume_bytes)
     monkeypatch.setattr(ctypes, "windll", _FakeWinDLL(kernel32), raising=False)
     monkeypatch.setattr(drive_info, "IS_WINDOWS", True)
     monkeypatch.setattr(turbo_scan, "IS_WINDOWS", True)
     monkeypatch.setattr(turbo_scan, "IS_ROOT", True)
 
-    progress_q, cancel_event = queue.Queue(), threading.Event()
-    node, report = turbo_scan.scan_with_best_engine(
-        "C:\\Link",
-        progress_q,
-        cancel_event,
-        turbo_enabled=True,
+
+def _scan(path):
+    return turbo_scan.scan_with_best_engine(
+        path, queue.Queue(), threading.Event(), turbo_enabled=True
     )
 
-    assert report.engine == turbo_scan.ENGINE_TURBO
-    assert report.fallback_reason is None
-    assert node.name == "Link"
-    assert node.is_dir
-    assert not node.is_link  # matches scanner.py's root Node: never flagged as a link
 
-    child_names = {c.name for c in node.children}
-    assert child_names == {"inside.txt"}
-    assert node.size == len(b"hello")
-    assert node.file_count == 1
+def test_a_onedrive_folder_is_scanned_like_any_folder(monkeypatch, tmp_path):
+    # OneDrive folders carry the reparse bit in NTFS's own attributes; Turbo
+    # Scan once showed them as 0-byte links in a scan it called complete.
+    volume_bytes = _build_fake_volume_with_a_junction_and_onedrive()
+    _use_fake_volume(monkeypatch, tmp_path, _FakeKernel32(volume_bytes))
+
+    volume, full_report = _scan("C:\\")
+    folder, cached_report = _scan("C:\\OneDrive")  # the same folder, from the cache
+
+    assert full_report.engine == cached_report.engine == turbo_scan.ENGINE_TURBO
+    assert cached_report.mft_read == MftRead(incremental=True)
+    children = {c.name: c for c in volume.children}
+    assert children["Link"].is_link  # a junction met during a scan stays a leaf
+    onedrive = children["OneDrive"]
+    assert onedrive.is_dir and not onedrive.is_link
+    for node in (onedrive, folder):
+        assert (node.size, node.file_count) == (len(b"synced!"), 1)
+        assert {c.name for c in node.children} == {"synced.txt"}
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_a_junction_asked_for_directly_falls_back_to_compatible(monkeypatch, tmp_path, cached):
+    # A junction's own directory index is always empty, so Turbo Scan
+    # showed 0 bytes in 0 files where Compatible found the target's files.
+    # Both reading paths -- a full MFT read and the cache -- must refuse.
+    volume_bytes = _build_fake_volume_with_a_junction_and_onedrive()
+    _use_fake_volume(monkeypatch, tmp_path, _FakeKernel32(volume_bytes))
+    if cached:
+        _scan("C:\\")
+    compatible_result = Node("C:\\Link", "Link")
+    monkeypatch.setattr(turbo_scan.scanner, "scan", lambda *a, **k: compatible_result)
+
+    node, report = turbo_scan.scan_with_best_engine(
+        "C:\\Link", queue.Queue(), threading.Event(), turbo_enabled=True
+    )
+
+    assert node is compatible_result
+    assert report.engine == turbo_scan.ENGINE_COMPATIBLE
+    assert "junction" in report.fallback_reason
 
 
 # -- cache + USN Journal incremental refresh --------------------------------- #
@@ -765,3 +809,76 @@ def test_rescanning_one_folder_loads_it_from_the_cache_matching_a_full_read(monk
     for node in (full_node, cached_node):
         assert {c.name for c in node.children} == {"inside.txt"}
         assert (node.size, node.file_count) == (5, 1)
+
+
+class _JournalledKernel32(_FakeKernel32):
+    """A USN journal that answers FSCTL_READ_USN_JOURNAL from its StartUsn,
+    as the real one does, plus one file change made while a full read is
+    under way: right after the chunk holding `change_record` has been read,
+    that record's bytes are replaced and the change is journalled."""
+
+    def __init__(self, volume_bytes, change_record, new_record_bytes, parent_frn):
+        super().__init__(volume_bytes)
+        self.entries = []  # (usn, frn, parent_frn, reason)
+        self._change = (change_record, new_record_bytes, parent_frn)
+
+    def ReadFile(self, handle, buffer, length, bytes_read_ref, overlapped):
+        start = self._file_pointer
+        result = super().ReadFile(handle, buffer, length, bytes_read_ref, overlapped)
+        if self._change is not None:
+            record_number, new_bytes, parent_frn = self._change
+            offset = _MFT_BYTE_OFFSET + record_number * _RECORD_SIZE
+            if start <= offset < start + length:
+                volume = bytearray(self.volume_bytes)
+                volume[offset : offset + _RECORD_SIZE] = new_bytes
+                self.volume_bytes = bytes(volume)
+                frn = _pack_frn(1, record_number)
+                self.entries.append((self.usn_next_usn, frn, parent_frn, 0x80000002))
+                self.usn_next_usn += 100  # DATA_EXTEND | CLOSE, then the head moves on
+                self._change = None
+        return result
+
+    def DeviceIoControl(
+        self, handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped
+    ):
+        if code != usn_journal._FSCTL_READ_USN_JOURNAL:
+            return super().DeviceIoControl(
+                handle, code, in_buf, in_size, out_ref, out_size, bytes_ret_ref, overlapped
+            )
+        request = ctypes.cast(in_buf, ctypes.POINTER(usn_journal._READ_USN_JOURNAL_DATA_V0))
+        start_usn = request.contents.StartUsn
+        records = b"".join(
+            _pack_usn_record(frn, parent, usn, reason)
+            for usn, frn, parent, reason in self.entries
+            if usn >= start_usn
+        )
+        payload = _usn_read_response(self.usn_next_usn, records)
+        out_ref.raw = payload.ljust(out_size, b"\x00")
+        ctypes.cast(bytes_ret_ref, ctypes.POINTER(wintypes.DWORD)).contents.value = len(payload)
+        return 1
+
+
+def test_a_change_made_during_a_full_read_reaches_the_next_incremental_scan(monkeypatch, tmp_path):
+    # The journal cursor used to be taken after the full read and the cache
+    # write, so a change to a record already read fell before it and was
+    # never applied: the full scan and every incremental one after it
+    # showed the old size.
+    sub_frn = _pack_frn(1, 7)
+    grown = _build_record(
+        8,
+        is_directory=False,
+        sequence_number=1,
+        file_name=_file_name_value(sub_frn, "inside.txt"),
+        data=b"g" * 600,
+    )
+    kernel32 = _JournalledKernel32(_build_fake_volume(), 8, grown, sub_frn)
+    _use_fake_volume(monkeypatch, tmp_path, kernel32)
+
+    during, during_report = _scan("C:\\Sub")
+    after, after_report = _scan("C:\\Sub")
+
+    assert during_report.mft_read.incremental is False
+    assert during.size == len(b"xyz12")  # read before the change was made
+    assert kernel32.entries  # the change did happen mid-read
+    assert after_report.mft_read == MftRead(incremental=True)
+    assert after.size == 600

@@ -18,6 +18,7 @@ from datetime import datetime
 from urllib.parse import quote
 
 from storage_scanner.drive_info import get_volume_root
+from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_LINUX, IS_MACOS
 from storage_scanner.scan_progress import Phase
 
@@ -386,8 +387,9 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     already strictly better, even best-effort.)
 
     Returns (True, parsed_dict) on success, (False, error_message) on any
-    failure: elevation declined, the helper exiting non-zero, a missing or
-    unparseable output file, or cancellation.
+    failure: elevation declined, the helper exiting non-zero (with the
+    helper's own error, when it wrote one -- see _helper_failure), a
+    missing or unparseable output file, or cancellation.
     """
     volume_root = get_volume_root(path)
 
@@ -464,7 +466,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
             kernel32.CloseHandle(h_process)
 
         if exit_code.value != 0:
-            return False, f"Turbo Scan helper exited with code {exit_code.value}."
+            return False, _helper_failure(output_path, exit_code.value)
 
         # Reading a whole volume's result back (and turbo_scan's
         # dict_to_node after it) takes seconds on a big tree.
@@ -477,8 +479,28 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     finally:
         with contextlib.suppress(OSError):
             os.remove(output_path)
-        with contextlib.suppress(OSError):
-            os.remove(progress_path)
+        # The progress writer's temp file too, left behind when its last
+        # swap never got past the reader (see mft_scan_cli._ProgressFileWriter).
+        for leftover in (progress_path, progress_path + ".tmp"):
+            with contextlib.suppress(OSError):
+                os.remove(leftover)
+
+
+def _helper_failure(output_path, exit_code):
+    """The failure message for a helper that exited with `exit_code`: its
+    own error, when it managed to write one to the output file (see
+    mft_scan_cli._write_error), with the traceback logged here -- the
+    helper's stderr is lost under ShellExecuteExW."""
+    message = f"Turbo Scan helper exited with code {exit_code}"
+    try:
+        with open(output_path, encoding="utf-8") as f:
+            envelope = json.load(f)
+        error = envelope["error"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return message + "."
+    if envelope.get("traceback"):
+        logger.warning("Turbo Scan helper failed:\n%s", envelope["traceback"])
+    return f"{message}: {error}"
 
 
 def _post_phase(progress_q, label):

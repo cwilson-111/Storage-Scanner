@@ -131,10 +131,11 @@ def scan_subtree_using_cache(record_source, volume_root, target_path, progress_q
     layered on top of the exact full-read behavior Turbo Scan always had,
     not a prerequisite for a scan to succeed.
 
-    Does raise if `cancel_event` is set mid-scan, or if `target_path`
-    isn't in the volume -- both mean no trustworthy result, and propagate
-    up to turbo_scan.scan_with_best_engine's broad except, which falls back to the
-    Compatible engine.
+    Does raise if `cancel_event` is set mid-scan, if `target_path` isn't
+    in the volume, or if it is a junction, symbolic link or mount point
+    (mft_scan.LinkedFolderError) -- all mean no trustworthy result, and
+    propagate up to turbo_scan.scan_with_best_engine's broad except, which
+    falls back to the Compatible engine.
     """
     volume_serial = record_source.volume_serial
     cached = None
@@ -201,7 +202,33 @@ def _post(progress_q, label, done=None, total=None, unit=""):
         progress_q.put(("phase", Phase(label, done, total, unit)))
 
 
+def _journal_position(record_source, volume_root):
+    """The volume's current USN journal state, or None if it can't be read
+    (no journal, and none can be created through a read-only handle): the
+    cache is then saved without a cursor, and the next scan reads the whole
+    MFT again."""
+    try:
+        return usn_journal.ensure_journal(record_source.raw_handle)
+    except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
+        logger.warning(
+            "Could not read the USN journal of %r; the next Turbo Scan of this "
+            "volume will do a full read again",
+            volume_root,
+            exc_info=True,
+        )
+        return None
+
+
 def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, cancel_event):
+    # The journal position is taken before the first record is read. A
+    # change made while the read is under way -- even to a record already
+    # read -- then lies after the saved cursor, so the next incremental scan
+    # applies it; replaying a change the read already saw just re-parses
+    # that record. Taken after the read, as it once was, such a change fell
+    # before the cursor and was never applied: a file grown during a full
+    # read kept its old size through every incremental scan after it.
+    journal = _journal_position(record_source, volume_root)
+
     records = []
     total = record_source.record_count
     throttle = Throttle(REPORT_INTERVAL_SECONDS)
@@ -234,12 +261,8 @@ def _full_scan_and_cache(record_source, volume_serial, volume_root, progress_q, 
                 record_source.record_size,
                 records,
             )
-            # Captured only now, after the scan (and the cache write of its
-            # results) has fully finished -- capturing it any earlier would
-            # risk losing changes made while the scan itself was still
-            # running.
-            state = usn_journal.ensure_journal(record_source.raw_handle)
-            turbo_cache.save_journal_cursor(volume_serial, state.journal_id, state.next_usn)
+            if journal is not None:
+                turbo_cache.save_journal_cursor(volume_serial, journal.journal_id, journal.next_usn)
         except Exception:  # noqa: BLE001 - caching is a pure optimization, never fatal to the scan
             logger.warning(
                 "Could not cache this Turbo Scan of %r; the next scan of this "
@@ -327,10 +350,10 @@ def _subtree_from_cache(cached, volume_root, target_path):
 
     if not target_record.is_directory:
         return mft_scan.file_node(target_record, path)
+    if target_record.is_link:
+        raise mft_scan.LinkedFolderError(path)  # see mft_scan.refuse_linked_folder
 
     records = turbo_cache.load_subtree_records(cached["volume_serial"], target_record)
-    # The requested folder is the root here, so a reparse point is followed
-    # (build_tree's root rule) without reroot_if_reparse_point.
     root_node, orphan_count, row_frns = mft_scan.build_tree(
         records,
         root_path=path,
@@ -351,11 +374,9 @@ def _subtree_from_records(records, volume_root, target_path):
     if orphan_count:
         logger.warning("Turbo Scan of %r had %d unreachable record(s)", volume_root, orphan_count)
     subtree_node = find_subtree_node(root_node, target_path)
-    # A requested folder that's itself a reparse point (junction/symlink)
-    # must still be followed, matching scanner.scan()'s own root handling
-    # -- see mft_scan.reroot_if_reparse_point's docstring for why this
-    # can't just be decided up front, during build_tree().
-    subtree_node = mft_scan.reroot_if_reparse_point(subtree_node, target_path, records, row_frns)
+    # A requested folder that's itself a junction/symlink/mount point
+    # can't be read from the MFT -- see mft_scan.refuse_linked_folder.
+    mft_scan.refuse_linked_folder(subtree_node, target_path, records, row_frns)
     # Hard-link dedup is deliberately scoped to just this subtree, not the
     # whole volume -- see mft_scan.finalize_subtree's docstring for why.
     return mft_scan.finalize_subtree(subtree_node, row_frns)
