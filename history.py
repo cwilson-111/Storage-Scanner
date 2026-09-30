@@ -429,31 +429,50 @@ def list_scans_for_path(scan_path, limit=200):
 
 
 def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
-    """The `limit` folders of the current scan that grew the most (shrinking
-    ones last), each against the same folder in the previous scan -- or
-    against 0 if the previous scan didn't have it. Folders only the
-    previous scan had aren't listed. Equal growth is ordered by path."""
+    """The `limit` folders (None: all) that grew the most (shrinking ones
+    last), each against the same folder in the other scan. Only folders of
+    MIN_FOLDER_SIZE_FOR_HISTORY or more are kept, so a folder only one scan
+    has either appeared or disappeared, or crossed that size: it's counted
+    against 0, and its growth_percent is None. Equal growth is ordered by
+    path."""
     conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
         """
-        SELECT
-            p.path,
-            COALESCE(prev.size_bytes, 0) AS previous_size,
-            curr.size_bytes AS current_size,
-            curr.size_bytes - COALESCE(prev.size_bytes, 0) AS growth_bytes,
-            curr.file_count
-        FROM folder_snapshots curr
-        JOIN folder_paths p ON p.id = curr.path_id
-        LEFT JOIN folder_snapshots prev
-            ON prev.scan_id = ?
-           AND prev.path_id = curr.path_id
-        WHERE curr.scan_id = ?
-        ORDER BY growth_bytes DESC, p.path
+        SELECT path, previous_size, current_size, growth_bytes, file_count FROM (
+            SELECT
+                p.path AS path,
+                COALESCE(prev.size_bytes, 0) AS previous_size,
+                curr.size_bytes AS current_size,
+                curr.size_bytes - COALESCE(prev.size_bytes, 0) AS growth_bytes,
+                curr.file_count AS file_count
+            FROM folder_snapshots curr
+            JOIN folder_paths p ON p.id = curr.path_id
+            LEFT JOIN folder_snapshots prev
+                ON prev.scan_id = ?
+               AND prev.path_id = curr.path_id
+            WHERE curr.scan_id = ?
+            UNION ALL
+            SELECT p.path, prev.size_bytes, 0, -prev.size_bytes, 0
+            FROM folder_snapshots prev
+            JOIN folder_paths p ON p.id = prev.path_id
+            WHERE prev.scan_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM folder_snapshots curr
+                  WHERE curr.scan_id = ? AND curr.path_id = prev.path_id
+              )
+        )
+        ORDER BY growth_bytes DESC, path
         LIMIT ?
     """,
-        (previous_scan_id, current_scan_id, limit),
+        (
+            previous_scan_id,
+            current_scan_id,
+            previous_scan_id,
+            current_scan_id,
+            -1 if limit is None else limit,
+        ),
     )
 
     rows = cur.fetchall()
@@ -462,7 +481,7 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     for row in rows:
         folder_path, previous_size, current_size, growth_bytes, file_count = row
 
-        if previous_size > 0:
+        if previous_size > 0 and current_size > 0:
             growth_percent = ((current_size - previous_size) / previous_size) * 100
         else:
             growth_percent = None
@@ -545,8 +564,8 @@ def get_growth_summary(current_scan_id, previous_scan_id):
     if previous_files > 0:
         file_count_change_percent = (file_count_change / previous_files) * 100
 
-    growth_rows = get_folder_growth(current_scan_id, previous_scan_id, limit=50)
-    tracked_folders = len(growth_rows)
+    growth_rows = get_folder_growth(current_scan_id, previous_scan_id, limit=None)
+    tracked_folders = sum(1 for row in growth_rows if row[2] > 0)
     new_folders = sum(1 for row in growth_rows if row[1] == 0 and row[2] > 0)
 
     largest_growth_folder = None

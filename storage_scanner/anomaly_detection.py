@@ -20,6 +20,12 @@ from storage_scanner.formatting import human_size
 
 MIN_DELTAS_FOR_BASELINE = 3
 DEFAULT_Z_THRESHOLD = 2.0
+# A change must also differ from what this path's usual rate predicts by at
+# least this much, and by this share of the size before it, to count: a
+# perfectly steady folder otherwise flags a 4 KB change as "far outside its
+# usual pattern" (zero variance makes any deviation infinite).
+MIN_ANOMALY_BYTES = 10 * 1024 * 1024
+MIN_ANOMALY_SHARE = 0.001
 
 Anomaly = namedtuple(
     "Anomaly",
@@ -91,6 +97,10 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
         others = [(d, k) for _c, d, k in deltas[:index] + deltas[index + 1 :]]
         z = _z_score(delta, days, others)
         if z is None or abs(z) < z_threshold:
+            continue
+        expected = days * sum(d for d, _k in others) / sum(k for _d, k in others)
+        size_before = history[index][1]
+        if abs(delta - expected) < max(MIN_ANOMALY_BYTES, MIN_ANOMALY_SHARE * size_before):
             continue
 
         score_text = (

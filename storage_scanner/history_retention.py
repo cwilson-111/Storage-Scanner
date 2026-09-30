@@ -39,6 +39,9 @@ KEEP_ALL_DAYS_KEY = "history_keep_all_days"
 DEFAULT_KEEP_ALL_DAYS = 30
 # The setting's value for "never thin history".
 KEEP_FOREVER = "forever"
+# A save this much newer than every other scan of its path is taken as the
+# clock having jumped (see scans_to_prune).
+_CLOCK_JUMP = timedelta(days=365)
 
 # (minimum age, bucket), coarsest first: a scan at least this old keeps
 # only the newest scan in its bucket.
@@ -83,7 +86,13 @@ def scans_to_prune(
 ) -> list[int]:
     """Ids of the scans retention drops, from every (id, created_at) scan
     of one scan path. `now` is when the newest scan was saved. A scan whose
-    created_at can't be parsed is never dropped."""
+    created_at can't be parsed is never dropped.
+
+    A save made more than _CLOCK_JUMP after every other scan of the path
+    prunes nothing: that's what one save made with the clock years ahead
+    looks like, and ages counted from it would thin every earlier scan to a
+    handful, for good. A real break that long costs only this: its
+    thinning waits for the next scan."""
     if keep_all_days is None:
         return []
 
@@ -97,6 +106,8 @@ def scans_to_prune(
         return []
     dated.sort()
     first_id = dated[0][1]
+    if len(dated) > 1 and now - dated[-2][0] > _CLOCK_JUMP:
+        return []
 
     keep_all = timedelta(days=keep_all_days)
     newest_in_bucket: dict[Hashable, int] = {}

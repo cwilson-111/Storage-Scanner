@@ -380,17 +380,34 @@ def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
 
     rows = history.get_folder_growth(newer, older)
 
-    # Largest growth first; a folder only the older scan had isn't listed.
+    # Largest growth first; a folder only the older scan had comes last,
+    # counted against 0 (it's gone, or now under the 50 MB history keeps).
     assert rows == [
         ("C:/Example/new", 0, 500, 500, None, "Growing", 7),
         ("C:/Example/grew", 100, 150, 50, 50.0, "Growing", 7),
         ("C:/Example/same", 200, 200, 0, 0.0, "Unchanged", 7),
         ("C:/Example/shrank", 400, 300, -100, -25.0, "Shrinking", 7),
+        ("C:/Example/gone", 999, 0, -999, None, "Shrinking", 0),
     ]
     summary = history.get_growth_summary(newer, older)
     assert (summary["tracked_folders"], summary["new_folders"]) == (4, 1)
     assert summary["largest_growth_folder"][0] == "C:/Example/new"
-    assert summary["largest_shrink_folder"][0] == "C:/Example/shrank"
+    assert summary["largest_shrink_folder"][0] == "C:/Example/gone"
+
+
+def test_the_growth_summary_counts_every_folder_not_just_the_top_50(tmp_path, monkeypatch):
+    """P2-5: 202 tracked folders read as 50, and a big shrink below the
+    top 50 growers was never named."""
+    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history.init_history_db()
+    growing = {f"C:/Example/g{i:03}": 100 for i in range(200)}
+    older = _save({**growing, "C:/Example/big": 50_000})
+    newer = _save({**dict.fromkeys(growing, 110), "C:/Example/big": 1_000, "C:/Example/x": 5})
+
+    summary = history.get_growth_summary(newer, older)
+
+    assert summary["tracked_folders"] == 202
+    assert summary["largest_shrink_folder"][0] == "C:/Example/big"
 
 
 def test_folder_growth_limit_breaks_ties_by_path(tmp_path, monkeypatch):

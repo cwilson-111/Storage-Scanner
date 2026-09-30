@@ -8,11 +8,14 @@ sys.path.insert(0, str(ROOT))
 from storage_scanner.anomaly_detection import detect_size_anomalies, latest_scan_anomaly
 
 BASE = datetime(2024, 1, 1)
+MB = 1024**2
 
 
 def _history(sizes):
-    """sizes: [total_size, ...], one per day starting at BASE."""
-    return [((BASE + timedelta(days=i)).isoformat(), size, 0, 0) for i, size in enumerate(sizes)]
+    """sizes: [total size in MiB, ...], one per day starting at BASE."""
+    return [
+        ((BASE + timedelta(days=i)).isoformat(), size * MB, 0, 0) for i, size in enumerate(sizes)
+    ]
 
 
 def test_too_few_deltas_returns_no_anomalies():
@@ -37,7 +40,7 @@ def test_single_spike_among_steady_growth_is_flagged():
 
     assert len(anomalies) == 1
     assert anomalies[0].kind == "spike"
-    assert anomalies[0].growth_bytes == 5100
+    assert anomalies[0].growth_bytes == 5100 * MB
     assert anomalies[0].z_score > 2.0
 
 
@@ -50,7 +53,7 @@ def test_single_drop_among_steady_growth_is_flagged():
 
     assert len(anomalies) == 1
     assert anomalies[0].kind == "drop"
-    assert anomalies[0].growth_bytes == -5000
+    assert anomalies[0].growth_bytes == -5000 * MB
 
 
 def test_unusually_slow_growth_is_a_drop_not_a_spike():
@@ -67,7 +70,7 @@ def test_unusually_slow_growth_is_a_drop_not_a_spike():
     anomalies = detect_size_anomalies(history)
 
     assert len(anomalies) == 1
-    assert anomalies[0].growth_bytes == 50  # still positive: this scan really did grow
+    assert anomalies[0].growth_bytes == 50 * MB  # still positive: this scan really did grow
     assert anomalies[0].kind == "drop"  # but far slower than usual -> a "drop" vs. baseline
     assert anomalies[0].z_score < 0
     assert "Grew by" in anomalies[0].message
@@ -86,11 +89,28 @@ def test_unusually_small_shrink_is_a_spike_not_a_drop():
     anomalies = detect_size_anomalies(history)
 
     assert len(anomalies) == 1
-    assert anomalies[0].growth_bytes == -50  # still negative: this scan really did shrink
+    assert anomalies[0].growth_bytes == -50 * MB  # still negative: this scan really did shrink
     assert anomalies[0].kind == "spike"  # but far less than usual -> a "spike" vs. baseline
     assert anomalies[0].z_score > 0
     assert "Shrank by" in anomalies[0].message
     assert "Grew" not in anomalies[0].message
+
+
+def test_a_tiny_change_to_a_perfectly_steady_folder_is_not_an_anomaly():
+    """Zero variance made any deviation infinitely unusual: a folder the
+    same size for weeks was flagged for 4 KB."""
+    history = [((BASE + timedelta(days=i)).isoformat(), 40 * 1024**3, 0, 0) for i in range(6)]
+    history.append(((BASE + timedelta(days=6)).isoformat(), 40 * 1024**3 + 4096, 0, 0))
+
+    assert detect_size_anomalies(history) == []
+
+
+def test_a_real_drop_in_a_steady_folder_still_is():
+    history = [((BASE + timedelta(days=i)).isoformat(), 40 * 1024**3, 0, 0) for i in range(6)]
+    history.append(((BASE + timedelta(days=6)).isoformat(), 10 * 1024**3, 0, 0))
+
+    [anomaly] = detect_size_anomalies(history)
+    assert anomaly.kind == "drop"
 
 
 def test_latest_scan_anomaly_returns_none_when_last_transition_is_normal():

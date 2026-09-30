@@ -36,11 +36,20 @@ def _iso(when):
 
 def _pruned(*ages, keep_all_days=30):
     """Which of `ages` (scans that long before NOW) get pruned, with a first
-    scan long before them all and a newest scan at NOW around them."""
-    times = [FIRST, *(NOW - age for age in ages), NOW]
+    scan long before them all, and scans an hour before NOW and at NOW after
+    them (a history saved regularly, so ages count from NOW)."""
+    times = [FIRST, *(NOW - age for age in ages), NOW - timedelta(hours=1), NOW]
     scans = [(scan_id, _iso(when)) for scan_id, when in enumerate(times, start=1)]
     pruned = set(scans_to_prune(scans, NOW, keep_all_days))
     return {age for scan_id, age in enumerate(ages, start=2) if scan_id in pruned}
+
+
+def test_one_save_with_the_clock_years_ahead_thins_nothing():
+    """P2-5: one save three years in the future thinned 96 scans to 3."""
+    daily = [(i, _iso(NOW - timedelta(days=95 - i))) for i in range(96)]
+    jumped = NOW + timedelta(days=3 * 365)
+
+    assert scans_to_prune([*daily, (96, _iso(jumped))], jumped, 30) == []
 
 
 def _days(days, seconds=0):

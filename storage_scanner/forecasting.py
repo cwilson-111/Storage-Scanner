@@ -23,6 +23,9 @@ from collections import namedtuple
 from datetime import datetime
 
 MIN_POINTS_FOR_FORECAST = 3
+# Beyond about a century a days count means nothing (see
+# format_forecast_range).
+MAX_FORECAST_DAYS = 36_500
 
 Forecast = namedtuple(
     "Forecast",
@@ -172,9 +175,13 @@ def format_forecast_range(forecast):
     """The days-until-full range of an "ok" Forecast with days left, as
     text: fewest days first ("~80–120 days"). Noisy history can leave the
     slow end of the slope band not growing at all, and so no upper bound
-    (days_optimistic None): that reads "at least N days"."""
+    (days_optimistic None): that reads "at least N days". Anything past
+    MAX_FORECAST_DAYS says so instead of a number: a growth rate fitted to a
+    few days can put the end quintillions of days away."""
     low, high = forecast.days_pessimistic, forecast.days_optimistic
-    if high is None:
+    if low >= MAX_FORECAST_DAYS:
+        return f"more than {MAX_FORECAST_DAYS // 365} years"
+    if high is None or high >= MAX_FORECAST_DAYS:
         return f"at least {low:,} days"
     if low == high:
         return f"~{forecast.days_estimate:,} days"

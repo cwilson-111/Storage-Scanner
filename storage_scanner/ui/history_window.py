@@ -50,6 +50,15 @@ from storage_scanner.settings import COLORS, FONT_BOLD
 from storage_scanner.ui.history_scans import build_scans_tab
 
 
+def _change_percent_text(previous_size, growth_percent):
+    """A folder's change as a percentage, or for one only a single scan has
+    (history keeps folders of 50 MB or more), which way it went: it may have
+    appeared or gone, or only crossed 50 MB."""
+    if growth_percent is not None:
+        return f"{growth_percent:.1f}%"
+    return "New / was <50 MB" if previous_size == 0 else "Gone / now <50 MB"
+
+
 class HistoryMixin:
     def _finish_history_save(
         self, current_scan_id, previous_scan_id, growth_rows, budget_breach, progress_token
@@ -219,7 +228,8 @@ class HistoryMixin:
         if current_id is None or previous_id is None:
             return None
 
-        rows = get_folder_growth(current_id, previous_id, limit=50)
+        # Every row: a drop's folder sorts last, past any top-N cut.
+        rows = get_folder_growth(current_id, previous_id, limit=None)
         normalized_root = os.path.normcase(os.path.normpath(scan_path))
         candidates = [
             row for row in rows if os.path.normcase(os.path.normpath(row[0])) != normalized_root
@@ -519,7 +529,7 @@ class HistoryMixin:
                 self._format_change(summary["file_count_change"], is_bytes=False),
             ),
             ("Tracked folders", f"{summary['tracked_folders']:,}"),
-            ("New folders", f"{summary['new_folders']:,}"),
+            ("New folders (or newly over 50 MB)", f"{summary['new_folders']:,}"),
             (
                 "Largest growth folder",
                 self._summarize_folder_change(summary["largest_growth_folder"]),
@@ -588,7 +598,8 @@ class HistoryMixin:
                     END,
                     values=(
                         folder_path,
-                        f"{human_size(growth_bytes)} ({self._format_percent(growth_percent)})",
+                        f"{human_size(growth_bytes)} "
+                        f"({_change_percent_text(previous_size, growth_percent)})",
                         growth_type,
                     ),
                     tags=(status_tag, "odd" if index % 2 else "even"),
@@ -659,7 +670,7 @@ class HistoryMixin:
                 file_count,
             ) = row
 
-            percent_text = "New" if growth_percent is None else f"{growth_percent:.1f}%"
+            percent_text = _change_percent_text(previous_size, growth_percent)
 
             if growth_type == "Growing":
                 status_tag = "growing"

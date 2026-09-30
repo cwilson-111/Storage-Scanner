@@ -636,7 +636,8 @@ show it.**
 - Size: S–M. Verify: the file size stays near the live size after full
   rescans.
 
-**P2-5. History edge cases give wrong answers.** Reproduced on synthetic
+**P2-5. History edge cases give wrong answers — ✅ done (2026-09-29).**
+Reproduced on synthetic
 databases:
 - The growth summary is built from the top 50 rows only (`history.py:442`):
   50 tracked folders when there are 202, and no "largest shrink" despite a
@@ -654,6 +655,27 @@ databases:
   included; skip pruning when the clock jumps; require a minimum absolute or
   relative change for an anomaly; cap long estimates.
 - Size: M. Verify: each case as a test.
+- Done: `history.get_folder_growth` also returns folders only the previous
+  scan had (current size 0, percent None) and takes `limit=None`;
+  `get_growth_summary` and the anomaly's folder lookup use every row.
+  Growth History labels a folder only one scan has "New / was <50 MB" or
+  "Gone / now <50 MB" (history keeps folders of 50 MB or more, so it can't
+  tell appearing from crossing that size), and the summary says "New folders
+  (or newly over 50 MB)". Retention prunes nothing on a save made more than
+  a year after every other scan of its path (`_CLOCK_JUMP`). An anomaly
+  must also differ from the usual rate by at least 10 MiB and 0.1% of the
+  size before it. Forecasts past 36,500 days read "more than 100 years".
+- Verified: tests for each: 202 tracked folders and the big shrink named
+  (`test_history.py`), the jumped-clock save thinning nothing
+  (`test_history_retention.py`), 4 KB on a steady 40 GB folder not flagged
+  and a 30 GB drop still flagged (`test_anomaly_detection.py`, whose other
+  cases now use MiB-sized numbers), the capped forecast
+  (`test_forecasting.py`). The real Growth History window showed the new
+  and gone labels.
+- Cost: listing gone folders reads the previous scan's rows too, so
+  `history_20k_growth_steps_per_row` went 21.8 → 45.9 (0.011 → 0.02 s for
+  20,000 folder rows); `benchmarks/baseline.json` was updated for that
+  metric only.
 
 **P2-6. Errors in the window are invisible — ✅ done (2026-09-29)**
 - Why: Tk callback exceptions are only logged (`app.py:131-132`), and the UI

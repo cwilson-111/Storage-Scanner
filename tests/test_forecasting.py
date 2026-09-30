@@ -193,3 +193,11 @@ def test_a_disconnected_drive_forecasts_from_the_free_space_its_last_scan_saw(
     created_at, _free = history_db.get_latest_drive_free("q:\\media")
     assert free == 70 * GB
     assert as_of == f" at the scan of {created_at.split('T')[0]}"
+
+
+def test_a_rate_that_would_take_centuries_says_so_instead_of_a_number():
+    """P2-5: a forecast from a tiny rate printed "999,000,000,000,000,000 days"."""
+    history = _history([(0, 1000 * GB), (1, 1000 * GB + 1), (2, 1000 * GB + 2)])
+    forecast = forecast_days_until_full(history, free_bytes=900 * GB)
+
+    assert HistoryMixin()._format_forecast(forecast).count("more than 100 years") == 1
