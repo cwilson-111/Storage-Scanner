@@ -31,6 +31,7 @@ from storage_scanner.ui.cart_window import CartMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.delete_dialogs import DeletionMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
+from storage_scanner.ui.error_dialog import ErrorDialogMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
 from storage_scanner.ui.history_window import HistoryMixin
 from storage_scanner.ui.live_tree import LiveTreeMixin
@@ -63,16 +64,17 @@ class StorageScannerApp(
     CartMixin,
     OnboardingMixin,
     DeletionMixin,
+    ErrorDialogMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root
         self._initial_path = initial_path
         root.title("Storage Scanner — Elevated (Admin)" if IS_ROOT else "Storage Scanner")
         root.geometry("960x640")
-        # Tkinter's default behavior for an exception raised inside a widget
-        # callback (button command, bind, etc.) is to print a traceback to
-        # stderr and keep going — invisible in a windowed/no-console build.
-        root.report_callback_exception = self._log_tk_callback_exception
+        # Tkinter's default for an exception raised inside a widget callback
+        # (button command, bind, etc.) is a traceback on stderr, invisible
+        # in a windowed build; this logs it and shows a dialog instead.
+        root.report_callback_exception = self._report_tk_callback_exception
         apply_theme(root)
         try:
             root.iconbitmap(resource_path("icon.ico"))
@@ -149,10 +151,6 @@ class StorageScannerApp(
         # First-run guide (see storage_scanner/onboarding.py). Only the GUI
         # ever builds this class — main()'s headless modes return before it.
         self.root.after(500, self._show_onboarding_on_launch)
-
-    @staticmethod
-    def _log_tk_callback_exception(exc, val, tb):
-        logger.error("Unhandled exception in Tk callback", exc_info=(exc, val, tb))
 
     def _check_for_update_worker(self):
         newer_tag = check_for_update()

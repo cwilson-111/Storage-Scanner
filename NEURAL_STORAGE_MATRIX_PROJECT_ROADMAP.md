@@ -655,13 +655,22 @@ databases:
   relative change for an anomaly; cap long estimates.
 - Size: M. Verify: each case as a test.
 
-**P2-6. Errors in the window are invisible.**
+**P2-6. Errors in the window are invisible — ✅ done (2026-09-29)**
 - Why: Tk callback exceptions are only logged (`app.py:131-132`), and the UI
   has no way to open the log folder, so a failing button does nothing
   (P1-4 leaves an empty window).
 - Do: a short dialog, "Something went wrong — details are in the log", with
   an Open Log Folder button.
 - Size: S. Verify: force an exception in a callback.
+- Done: `ui/error_dialog.py` (`ErrorDialogMixin`) is the app's
+  `report_callback_exception`: it logs the traceback as before, then shows
+  "That didn't work." with the error's one-line summary, where the log is,
+  and an Open Log Folder button (`logging_setup.log_dir`, the folder the
+  log handler actually writes to). One dialog at a time, so an error that
+  repeats doesn't stack windows.
+- Verified: the real app with two exceptions forced in `after` callbacks:
+  one dialog, both tracebacks in the log, Open Log Folder opened the log
+  folder in use.
 
 **P2-7. Closing during "Saving history" loses the scan — ✅ done
 (2026-09-29)**
