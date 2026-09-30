@@ -1128,11 +1128,15 @@ not run elevated here**
   real read of 56: "orphaned-install detection skipped: the installed-apps
   list came back incomplete", and the 1,000 rows were left as they were.
 
-**P3-9. Accessibility.**
+**P3-9. Accessibility — README and keyboard flows ✅ (2026-09-29); screen
+readers need a different toolkit.**
 - Why: `ttk.Treeview` exposes nothing to Windows screen readers.
 - Do: finish keyboard-only flows (P2-20), state the limit in README, and
   count accessibility in any future UI-toolkit decision.
 - Size: M.
+- Done: the main tree's keyboard flows (P2-20), and a README
+  "Accessibility" section listing the keys and stating plainly that
+  screen readers don't read the tree's or lists' rows.
 
 **P3-10. A cheap route to bug reports — ✅ done (2026-09-29)**
 - Why: no outside issue has ever been filed, crash-report opt-in (item 9) is

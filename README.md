@@ -370,6 +370,21 @@ the test suite (`tests/test_benchmark_scan.py`), so CI gates them too.
 - [PRIVACY.md](PRIVACY.md) — what the app reads, stores, and (doesn't) send anywhere.
 - [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md) — exactly how a release binary is built, and what that does/doesn't guarantee.
 
+## Accessibility
+
+The main window works from the keyboard: Tab between controls, the arrow
+keys in the tree, Enter to open a folder, Backspace or Alt+Up to go up,
+Delete to send to the Recycle Bin/Trash, Shift+F10 or the Menu key for the
+row's menu, Ctrl+C to copy a path, Ctrl+F to search, F5 to scan again
+(Cmd instead of Ctrl on macOS). Most other windows are lists with buttons,
+reachable with Tab.
+
+Screen readers are the limit: the tree and lists are Tk widgets, which
+don't expose their rows to Windows' accessibility interfaces, so a screen
+reader can't read them. Changing that means a different UI toolkit; it's
+a factor in any decision about one (roadmap
+P3-9). If this blocks you, please say so in an issue.
+
 ## Roadmap
 
 The full plan, with what's done and what's next, is in
