@@ -40,7 +40,13 @@ from storage_scanner.file_ops import (
     run_elevated_scan_macos,
 )
 from storage_scanner.formatting import human_size
-from storage_scanner.live_tree_model import node_display, sort_key_function
+from storage_scanner.live_tree_model import (
+    node_display,
+    resorted,
+    share,
+    share_text,
+    sort_key_function,
+)
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
@@ -1089,20 +1095,36 @@ class MainWindowMixin:
         walk("")
 
     def _sort_level(self, parent_iid):
-        kids = [k for k in self.tree.get_children(parent_iid) if k in self.node_by_iid]
-        if not kids:
+        """Put one populated level's rows in the current sort order: one
+        Treeview.set_children call for the whole level (moving rows one at
+        a time is quadratic in Tk -- 35,000 rows took minutes), then a new
+        stripe only for the rows that moved an odd number of places. A row
+        with no node (a folder's "loading" placeholder) stays after them."""
+        tree = self.tree
+        node_by_iid = self.node_by_iid
+        shown = tree.get_children(parent_iid)
+        kids = [iid for iid in shown if iid in node_by_iid]
+        order = resorted(kids, node_by_iid, self._sort_key, self._sort_reverse)
+        if order == kids:
             return
-        sort_key = sort_key_function(self._sort_key)
-        kids.sort(key=lambda iid: sort_key(self.node_by_iid[iid]), reverse=self._sort_reverse)
-        for index, iid in enumerate(kids):
-            self.tree.move(iid, parent_iid, index)
-            self._set_stripe(iid, index)
+        tree.set_children(parent_iid, *order, *(iid for iid in shown if iid not in node_by_iid))
+        was_at = {iid: index for index, iid in enumerate(kids)}
+        self._restripe((iid, index) for index, iid in enumerate(order) if (index - was_at[iid]) % 2)
 
-    def _set_stripe(self, iid, index):
-        """Rewrite a row's even/odd background tag, keeping its other tags."""
-        tags = [t for t in self.tree.item(iid, "tags") if t not in ("even", "odd")]
-        tags.append("odd" if index % 2 else "even")
-        self.tree.item(iid, tags=tuple(tags))
+    def _restripe(self, rows):
+        """Give each (iid, index) row the even/odd background tag for that
+        index, keeping its other tags. Tk's "tag add"/"tag remove" take a
+        list of rows, so this is four Tk calls however many rows there are
+        (tkinter doesn't wrap either, hence tk.call)."""
+        by_stripe = {"even": [], "odd": []}
+        for iid, index in rows:
+            by_stripe["odd" if index % 2 else "even"].append(iid)
+        tree = self.tree
+        for stripe, other in (("even", "odd"), ("odd", "even")):
+            iids = by_stripe[stripe]
+            if iids:
+                tree.tk.call(tree, "tag", "remove", other, iids)
+                tree.tk.call(tree, "tag", "add", stripe, iids)
 
     def _refresh_row(self, iid):
         """Recompute a row's size / on disk / percent / files text from its node."""
@@ -1123,16 +1145,23 @@ class MainWindowMixin:
     def _remove_main_tree_row(self, iid):
         """Remove a node's row from the main tree after it's been deleted,
         rolling the removed size/count back out of every ancestor and
-        refreshing whatever changed on screen. Called for every deleted
-        node that has a row here, whichever window deleted it (see
+        refreshing whatever changed on screen: the ancestors' rows, the
+        siblings whose share of their (now smaller) parent reads
+        differently, and the stripe of every row below it, which moved up
+        a line. Called for every deleted node that has a row here,
+        whichever window deleted it (see
         DeletionMixin._remove_deleted_from_tree).
         """
         node = self.node_by_iid.get(iid)
         if not node:
             return
 
-        parent_iid = self.tree.parent(iid)
+        tree = self.tree
+        parent_iid = tree.parent(iid)
         parent_node = self.node_by_iid.get(parent_iid)
+        siblings = tree.get_children(parent_iid)
+        position = siblings.index(iid)
+        old_parent_size = (parent_node.size if parent_node else 0) or 1
 
         # Subtract the removed size/count from every ancestor (incl. the root
         # row, whose parent is ""). root_node is the same object as its row.
@@ -1142,21 +1171,34 @@ class MainWindowMixin:
             if an:
                 an.size -= node.size
                 an.file_count -= node.file_count
-            anc = self.tree.parent(anc)
+            anc = tree.parent(anc)
         if parent_node:
             parent_node.remove_child(node)
 
         self._forget_subtree(iid)
-        self.tree.delete(iid)
+        tree.delete(iid)
 
-        # Siblings' "% of parent" and the ancestor sizes all shifted — refresh.
-        for index, sib in enumerate(self.tree.get_children(parent_iid)):
-            self._refresh_row(sib)
-            self._set_stripe(sib, index)
+        self._restripe(
+            (sib, index) for index, sib in enumerate(siblings[position + 1 :], start=position)
+        )
+        if parent_node:
+            # Only the siblings' "% of Parent" depends on the parent's size,
+            # and a top-level row's share is of itself. In a big folder
+            # most shares still read the same, so only the rest are
+            # rewritten (rewriting every sibling took seconds at 35,000).
+            new_parent_size = parent_node.size or 1
+            for sib in siblings:
+                sib_node = self.node_by_iid.get(sib)
+                if sib_node is None:
+                    continue
+                size = sib_node.size
+                text = share_text(share(size, new_parent_size))
+                if text != share_text(share(size, old_parent_size)):
+                    tree.set(sib, "percent", text)
         anc = parent_iid
         while anc:
             self._refresh_row(anc)
-            anc = self.tree.parent(anc)
+            anc = tree.parent(anc)
 
         if self.root_node:
             self.status_var.set(
