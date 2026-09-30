@@ -2,9 +2,9 @@
 
 Storage Scanner runs entirely on your machine. It has no telemetry, no
 crash reporting, no analytics, no ads, and no account or login of any
-kind. The only network request it ever makes is an optional, anonymous
-check for a newer version — see **Update check** below for exactly what
-that does and doesn't do.
+kind. The only network request it ever makes is an anonymous check for a
+newer version, which you can turn off — see **Update check** below for
+exactly what that does and doesn't do.
 
 ## What it reads
 
@@ -52,9 +52,10 @@ record of what's been removed and where it went.
 
 ## Update check
 
-On launch, Storage Scanner makes one anonymous `GET` request to GitHub's
-public release API to see if a newer version exists — at most once every
-24 hours (tracked locally; not on every single launch). That request:
+On launch, a released build of Storage Scanner makes one anonymous `GET`
+request to GitHub's public release API to see if a newer version exists —
+at most once every 24 hours (tracked locally; not on every single launch).
+That request:
 
 - sends nothing about you, your files, your system, or how you use the
   app — it's an unauthenticated request to a public endpoint, identical to
@@ -65,9 +66,13 @@ public release API to see if a newer version exists — at most once every
 - fails silently (no notice, no error) if you're offline or GitHub is
   unreachable.
 
-Running from source rather than a downloaded release never triggers this
-at all — see `storage_scanner/update_check.py` and `storage_scanner/version.py`
-for exactly how.
+To turn it off, untick Tools ▸ Settings ▸ **Check for Updates on Launch**,
+or set the environment variable `STORAGE_SCANNER_NO_UPDATE_CHECK=1` (useful
+for managed installs and scheduled scans). A run that isn't a release —
+from source, or a build of the main branch — never makes the request at
+all; see `storage_scanner/update_check.py` and `storage_scanner/version.py`
+for exactly how. A Data build checks the list of releases for the newest
+Data build instead.
 
 ## What it does not do
 

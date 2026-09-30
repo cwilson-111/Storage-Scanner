@@ -40,7 +40,7 @@ from storage_scanner.ui.onboarding_window import OnboardingMixin
 from storage_scanner.ui.scan_progress_panel import ScanProgressMixin
 from storage_scanner.ui.search_window import SearchMixin
 from storage_scanner.ui.treemap_window import TreemapMixin
-from storage_scanner.update_check import RELEASES_PAGE_URL, check_for_update
+from storage_scanner.update_check import check_for_update, release_page_url
 
 # How long closing waits for a history save that's still running. A save
 # of a 20,000-folder scan takes about 0.05 s (benchmarks/scale.py); this is
@@ -165,7 +165,7 @@ class StorageScannerApp(
         self._update_banner = banner
 
         def open_release_page():
-            webbrowser.open(RELEASES_PAGE_URL)
+            webbrowser.open(release_page_url(newer_tag))
 
         def dismiss():
             banner.destroy()

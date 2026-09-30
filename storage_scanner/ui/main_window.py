@@ -31,7 +31,7 @@ from tkinter import (
 )
 
 from history import get_app_metadata, set_app_metadata, set_budget
-from storage_scanner import history_retention, turbo_scan
+from storage_scanner import history_retention, turbo_scan, update_check
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import (
@@ -184,6 +184,16 @@ class MainWindowMixin:
                 variable=self.turbo_scan_var,
                 command=self._on_toggle_turbo_scan,
             )
+        self.update_check_var = BooleanVar(
+            value=get_app_metadata(update_check.ENABLED_KEY, "1") != "0"
+        )
+        settings_menu.add_checkbutton(
+            label="Check for Updates on Launch",
+            variable=self.update_check_var,
+            command=lambda: set_app_metadata(
+                update_check.ENABLED_KEY, "1" if self.update_check_var.get() else "0"
+            ),
+        )
         # How long every saved scan is kept before older history thins out
         # (storage_scanner.history_retention); applied at the next save.
         self.history_keep_all_var = StringVar(

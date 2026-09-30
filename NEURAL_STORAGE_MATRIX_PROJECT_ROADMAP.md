@@ -748,7 +748,7 @@ or the path has a `%`.**
   older than the running app; escape `%` for cron and Task Scheduler.
 - Size: S.
 
-**P2-10. The update check and PRIVACY.md disagree.**
+**P2-10. The update check and PRIVACY.md disagree — ✅ done (2026-09-29)**
 - Why: PRIVACY.md line 5 calls the check "optional", but there is no
   setting. Line 60 says running from source never checks, but
   `check_for_update` (`update_check.py:90-97`) records the time and fetches
@@ -760,6 +760,20 @@ or the path has a `%`.**
   the version doesn't parse; fix the text; the Data build checks
   `/releases` for the newest `data-v` tag.
 - Size: S.
+- Done: `update_check.check_for_update` makes no request (and records no
+  time) when the running version isn't a release tag, or when the check is
+  off: Tools ▸ Settings ▸ "Check for Updates on Launch"
+  (`update_check_enabled` in app_metadata) or `STORAGE_SCANNER_NO_UPDATE_CHECK`.
+  A Data build (`data-vX.Y.Z`) reads `/releases` and compares with the
+  newest `data-v` tag; the notice links to the new tag's page. PRIVACY.md
+  says all of this.
+- Verified: `tests/test_update_check.py` (no request from "0.0.0-dev" or
+  "main"; none when off by setting or environment; a Data build told about
+  the newest Data build; the newest `data-v` tag picked by version, drafts
+  and malformed tags skipped). In the real app, unticking the menu item
+  stored "0" and turned the check off; ticking it turned it back on.
+- Not done: the Data build's own copy of the code arrives with the next
+  merge into `data`.
 
 **P2-11. Toast notifications: why none ever appeared here.**
 - Why: notifications are turned off for this whole account
