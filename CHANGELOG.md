@@ -15,9 +15,6 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ## Unreleased
 
-<!-- Integration: the other P1 items finished alongside these (see the
-roadmap's "P1 — next release") are added here as they're merged. -->
-
 ### Safer deletes
 
 - Every window that deletes now goes through one delete service.
@@ -42,12 +39,49 @@ roadmap's "P1 — next release") are added here as they're merged. -->
   and every other open window. A copy is deleted as a duplicate only if
   another copy of its group is still on disk, and an item inside a folder
   that's also in the Cart is counted once.
+- A file changed since it was listed (a different size or modified time) is
+  refused. A folder from Cleanup Recommendations saved in an earlier
+  session needs a rescan before it can be deleted.
+- Starting a scan closes the Search, Duplicate Files and Cleanup
+  Recommendations windows, and nothing listed from a replaced scan can be
+  deleted.
+
+### Turbo Scan
+
+- NTFS-compressed, sparse and Compact OS files show their real On Disk
+  size (a compressed file read 16× too big, a 512 GiB sparse disk image
+  512 GiB instead of about 3 GiB).
+- OneDrive folders are scanned like any folder instead of showing as empty
+  links.
+- A scan of a junction, symbolic link or mount point uses Compatible Scan,
+  which follows it, instead of showing an empty folder.
+- Changes made while Turbo Scan reads the whole volume show up in the next
+  scan.
+- The elevated helper no longer fails at random when the app reads its
+  progress (about 1 in 100 progress updates ended the scan and fell back to
+  Compatible Scan), and when it does fail, the app log says why.
+
+### Main tree
+
+- Sorting a folder of 35,000 files takes about 0.1 s instead of 13 s or
+  more, and deleting a row from it no longer redraws every row.
 
 ### Growth History
 
 - A noisy history no longer breaks the forecast: with no upper bound it
   shows "at least N days" (it raised a TypeError before), and the window
   opens only after the forecast and anomalies are worked out.
+- The forecast counts down the drive's free space at the path's growth
+  rate. It used to compare the path's size with the drive's capacity, so a
+  drive with sparse files, like `C:\`, read "already full" with hundreds of
+  gigabytes free. Each scan now also saves its on-disk size and the drive's
+  used and free space.
+- "Remove this scan" (Scans tab) deletes a scan that doesn't belong in the
+  history.
+- A damaged history file no longer stops the app from starting: it's moved
+  aside and a new history started, and you're told where it went. A history
+  from a newer version is read but never changed, and the history is copied
+  before an upgrade changes its layout.
 
 ### Command line
 

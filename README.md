@@ -373,11 +373,12 @@ The full plan, with what's done and what's next, is in
 [NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
 
 **Next: the improvement backlog** ("Improvement backlog (review
-2026-09-26)" near the top of the roadmap). The delete-safety fixes (P0)
-are done; next come code signing, Turbo Scan correctness and real-hardware
-verification, then showing what changed since the last scan in the main
-tree and treemap. The scale work (bounded history, a compact in-memory
-tree) is done.
+2026-09-26)" near the top of the roadmap). The delete-safety fixes (P0) and
+the next-release fixes (P1), including Turbo Scan's size and link
+handling, are done, except two: checking Turbo Scan on real hardware and
+code signing. After those comes showing what changed since the last scan
+in the main tree and treemap. The scale work (bounded history, a compact
+in-memory tree) is done.
 
 **Later, on real demand: enterprise monitoring for computers and
 databases** (Phase 5 in the roadmap). The desktop app stays free and
