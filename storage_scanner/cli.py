@@ -97,9 +97,15 @@ def run_cli(argv):
     if args.save_history:
         # Imported here: history.py creates its app-data folder at import
         # time, which a plain `--cli` export has no reason to do.
+        from history import open_history_db
         from storage_scanner.scan_history import record_scan
 
         try:
+            # A damaged history is moved aside and a new one started, so a
+            # scheduled scan doesn't fail on it every run from now on.
+            notice = open_history_db()
+            if notice:
+                print(notice, file=sys.stderr)
             recorded = record_scan(node)
         except Exception as exc:  # noqa: BLE001 - report to the caller
             print(f"Could not save scan history: {exc}", file=sys.stderr)

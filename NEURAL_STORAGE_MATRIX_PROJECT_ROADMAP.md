@@ -284,7 +284,8 @@ done (2026-09-26)**
   (main's raises TypeError on it).
 - Not done: P2-6's error dialog.
 
-**P1-5. The forecast says the drive is already full when it isn't.**
+**P1-5. The forecast says the drive is already full when it isn't — ✅ done
+(2026-09-29)**
 - Why: `forecasting.py:131` compares the scanned path's logical total (the
   sum of file sizes) with drive capacity. This machine's last `C:\` scan
   totals 2,254,686,413,442 bytes against a 2,047,346,946,048-byte drive
@@ -296,8 +297,27 @@ done (2026-09-26)**
   reaching 0 at the path's on-disk growth rate.
 - Size: M (new `scans` columns). Verify: a copy of the real database gives a
   sensible range.
+- Done: schema version 4 adds `scans.allocated_size`, `drive_used` and
+  `drive_free` (`history_schema._add_scan_space_columns`; NULL on older
+  scans), filled by `scan_history.record_scan` from `shutil.disk_usage`.
+  `forecasting.forecast_days_until_full(history, free_bytes)` fits the
+  path's growth rate (on-disk sizes once three scans have them, file sizes
+  until then) and counts down the drive's free space, never the path's
+  size against capacity. Unknown free space says so (`free_space_unknown`);
+  a disconnected drive uses the free space its newest scan recorded, dated.
+- Verified: Growth History for `c:\` in the real app on a copy of this
+  machine's database (schema 2, 15 scans): main shows "drive is already
+  full or over capacity"; this branch shows "296.1 GB free, used up in at
+  least 4 days … (low confidence, 15 scans over 14 days, R²=0.01)", and
+  after removing the two synthetic 94 GB scans (P1-12) "~150–623 days …
+  1.2 GB/day in file sizes (low confidence, 13 scans, R²=0.20)".
+  `tests/test_forecasting.py` covers the sparse-inflated `C:\` case, the
+  on-disk vs file-size rate, and unknown and zero free space.
+- Not done: this machine's existing scans have no on-disk sizes, so its
+  rate stays on file sizes until three new scans are saved.
 
-**P1-6. A damaged or newer history database stops the app from starting.**
+**P1-6. A damaged or newer history database stops the app from starting —
+✅ done (2026-09-29)**
 - Why: `app.py:81` calls `init_history_db()` unguarded. A junk file raises
   "file is not a database" and the window never opens. v1.8.0's code against
   today's schema-2 database fails at startup with "no such column:
@@ -308,6 +328,21 @@ done (2026-09-26)**
   knows; copy the file before migrating.
 - Size: S. Verify: tests with a junk file and a `schema_version` 3
   database.
+- Done: `history.open_history_db()` (called by the app and `--cli`) moves a
+  file SQLite can't read (SQLITE_NOTADB/CORRUPT only; a locked or full disk
+  still raises) aside as `storage_history.damaged-<time>.db` with its
+  `-wal`/`-shm` (`storage_scanner/history_files.py`), starts a new history
+  and returns a message the app shows once. A `schema_version` above the
+  code's raises `NewerDatabaseError` before anything is changed, and every
+  write connection checks it again (`_connect_for_write`), so the newer
+  database is read but never written. Before a migration the file is
+  copied with SQLite's backup API to `storage_history.v<N>-backup-<time>.db`.
+- Verified: `tests/test_history_recovery.py`: junk file and a wrecked
+  schema page (moved aside, new history works, next start says nothing), a
+  stale `-wal` not read into the new history, a locked database left alone,
+  a newer database read but not written, a version 3 database backed up
+  before migrating, a new one not. The real-app run above on a copy of the
+  schema-2 database left `storage_history.v2-backup-<time>.db` beside it.
 
 **P1-7. The main tree freezes on a column click or a delete in a big
 folder — ✅ done (2026-09-29)**
@@ -475,7 +510,13 @@ real history — ✅ done (2026-09-26)**
 - Done: `conftest.py` sandboxes those variables and refuses a real DB or log
   path; `scale.py` children and `scan.py` log to a temp folder.
 - Verified: real log and DB mtimes unchanged by pytest + `scale.py --check`.
-- Not done: "Remove this scan" in Growth History.
+- Done (2026-09-29): Growth History has a Scans tab
+  (`ui/history_scans.py`) with "Remove this scan" (button, Delete key, row
+  menu); `history.delete_scan` removes the scan, its folder rows and paths
+  nothing else uses.
+- Verified: removing the two 94 GB `c:\` scans from a copy of this
+  machine's database in the real window (15 → 13 scans, none of 94 GB
+  left); `tests/test_history.py::test_removing_a_scan_deletes_only_its_rows`.
 
 **P1-13. Re-check files before deleting from lists that can be stale — ✅
 done (2026-09-29)**

@@ -403,3 +403,38 @@ def test_folder_growth_limit_breaks_ties_by_path(tmp_path, monkeypatch):
     rows = history.get_folder_growth(newer, older, limit=3)
 
     assert [row[0] for row in rows] == ["C:/Example/c", "C:/Example/a", "C:/Example/b"]
+
+
+def _rows(db_path, sql):
+    conn = sqlite3.connect(db_path)
+    try:
+        return sorted(conn.execute(sql))
+    finally:
+        conn.close()
+
+
+def test_removing_a_scan_deletes_only_its_rows(tmp_path, monkeypatch):
+    """Growth History's "Remove this scan": the scan, its folder rows and
+    the folder paths only it had go; the scans around it and every path
+    they still use stay, and they still compare with each other."""
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+    first = _save({"C:/Example/kept": 100, "C:/Example/shared": 50})
+    junk = _save({"C:/Example/shared": 94_000, "C:/Example/only-junk": 1})
+    last = _save({"C:/Example/kept": 120, "C:/Example/shared": 60})
+
+    assert history.delete_scan(junk) is True
+
+    assert sorted(row[0] for row in history.list_scans_for_path("C:/Example")) == [first, last]
+    assert _rows(db_path, "SELECT DISTINCT scan_id FROM folder_snapshots") == [(first,), (last,)]
+    assert _rows(db_path, "SELECT path FROM folder_paths") == [
+        ("C:/Example/kept",),
+        ("C:/Example/shared",),
+    ]
+    assert history.get_previous_scan_id("C:/Example", last) == first
+    assert [row[:4] for row in history.get_folder_growth(last, first)] == [
+        ("C:/Example/kept", 100, 120, 20),
+        ("C:/Example/shared", 50, 60, 10),
+    ]
+    assert history.delete_scan(junk) is False

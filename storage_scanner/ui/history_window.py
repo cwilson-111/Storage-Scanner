@@ -21,8 +21,11 @@ from tkinter import (
 )
 
 from history import (
+    delete_scan,
     get_folder_growth,
+    get_forecast_history,
     get_growth_summary,
+    get_latest_drive_free,
     get_latest_scan_id,
     get_latest_scan_snapshot,
     get_most_recent_scan_path,
@@ -36,9 +39,15 @@ from storage_scanner.forecasting import forecast_days_until_full, format_forecas
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
-from storage_scanner.scan_history import collect_folder_sizes, normalize_scan_path, record_scan
+from storage_scanner.scan_history import (
+    collect_folder_sizes,
+    drive_space,
+    normalize_scan_path,
+    record_scan,
+)
 from storage_scanner.scan_progress_model import FINISHED
 from storage_scanner.settings import COLORS, FONT_BOLD
+from storage_scanner.ui.history_scans import build_scans_tab
 
 
 class HistoryMixin:
@@ -112,21 +121,74 @@ class HistoryMixin:
             return "—"
         return f"{value:+.1f}%"
 
-    def _format_forecast(self, forecast):
+    def _format_forecast(self, forecast, free_as_of=""):
         """Render a Forecast namedtuple as one line — a range and an
         explicit confidence level, never a single number presented as
-        certain (per the roadmap's own caution about forecasting)."""
+        certain (per the roadmap's own caution about forecasting).
+        `free_as_of` says when the free space was measured, if not now."""
         if forecast.status == "insufficient_data":
             return f"Forecast: not enough history yet " f"({forecast.data_points}/3 scans needed)"
         if forecast.status == "not_growing":
             return "Forecast: not growing — no fill date to estimate"
+        if forecast.status == "free_space_unknown":
+            return "Forecast: can't read this drive's free space (is it connected?)"
         if forecast.days_estimate == 0:
-            return "Forecast: drive is already full or over capacity"
+            return f"Forecast: the drive has no free space left{free_as_of}"
+        growth = human_size(forecast.bytes_per_day) + "/day"
+        if not forecast.on_disk:
+            growth += " in file sizes"
         return (
-            f"Forecast: full in {format_forecast_range(forecast)} "
+            f"Forecast: {human_size(forecast.free_bytes)} free{free_as_of}, used up in "
+            f"{format_forecast_range(forecast)} if this path keeps growing {growth} "
             f"({forecast.confidence} confidence, {forecast.data_points} scans "
             f"over {forecast.span_days:,.0f} days, R²={forecast.r_squared:.2f})"
         )
+
+    def _free_space_for_forecast(self, display_path, scan_path):
+        """(free bytes, as-of text) for the forecast: the drive's free space
+        now, or, when that can't be read (drive not connected, folder gone),
+        what the newest scan of this path recorded, dated. (None, "") if
+        neither is known."""
+        space = drive_space(display_path)
+        if space is not None:
+            return space.free, ""
+        latest = get_latest_drive_free(scan_path)
+        if latest is None:
+            return None, ""
+        created_at, free = latest
+        return free, f" at the scan of {created_at.split('T')[0]}"
+
+    def _remove_scan(self, scan_path, scan_id, date_text):
+        """Growth History's "Remove this scan": delete one saved scan of
+        scan_path after asking, then show the window again without it."""
+        win = self._growth_win
+        if not messagebox.askyesno(
+            "Remove this scan",
+            f"Remove the scan of {date_text} from the history of {scan_path}?\n\n"
+            "Its sizes are deleted from the history for good. Nothing on disk changes.",
+            parent=win,
+        ):
+            return
+        try:
+            delete_scan(scan_id)
+        except Exception as exc:
+            logger.exception("Removing scan %s from history failed", scan_id)
+            messagebox.showerror("Remove this scan", f"Couldn't remove it: {exc}", parent=win)
+            return
+
+        if scan_id in (self.last_scan_id, self.last_previous_scan_id):
+            # This session's comparison lost a side: compare the newest two
+            # scans that are left instead.
+            newest = get_latest_scan_id(scan_path)
+            previous = get_previous_scan_id(scan_path, newest) if newest else None
+            self.last_scan_id, self.last_previous_scan_id = newest, previous
+            self.last_growth_rows = get_folder_growth(newest, previous) if previous else []
+
+        self.status_var.set(f"Removed the scan of {date_text} from the history of {scan_path}.")
+        if get_latest_scan_id(scan_path) is None:
+            win.destroy()
+            return
+        self.show_growth_history()
 
     def _likely_folder_for_anomaly(
         self, scan_path, anomaly, created_ats_in_order, scan_ids_by_created_at
@@ -349,11 +411,11 @@ class HistoryMixin:
 
         # Everything the window shows is worked out before it's created, so
         # a failure here can't leave an empty window behind.
-        drive_capacity = self._get_drive_capacity_bytes(display_path)
-        full_history = get_scan_history(scan_path, limit=200)
+        free_bytes, free_as_of = self._free_space_for_forecast(display_path, scan_path)
         forecast_text = self._format_forecast(
-            forecast_days_until_full(full_history, drive_capacity)
+            forecast_days_until_full(get_forecast_history(scan_path), free_bytes), free_as_of
         )
+        full_history = get_scan_history(scan_path, limit=200)
         anomaly_list = detect_size_anomalies(full_history)
         created_ats_in_order = [row[0] for row in full_history]
         scan_ids_by_created_at = get_scan_ids_by_created_at(scan_path, limit=200)
@@ -386,6 +448,7 @@ class HistoryMixin:
             win,
             padding=(10, 8),
             text=f"Growth history for {display_path}  —  {size_text}  |  {forecast_text}",
+            wraplength=940,
         ).pack(side=TOP, fill=X)
 
         self._build_snapshot_picker(win, scan_path, scan_choices, newer_id, older_id)
@@ -396,14 +459,21 @@ class HistoryMixin:
         summary_frame = ttk.Frame(notebook, padding=10)
         details_frame = ttk.Frame(notebook, padding=10)
         anomalies_frame = ttk.Frame(notebook, padding=10)
+        scans_frame = ttk.Frame(notebook, padding=10)
         notebook.add(summary_frame, text="Summary")
         notebook.add(details_frame, text="Growth Details")
         notebook.add(
             anomalies_frame,
             text=f"Anomalies ({len(anomaly_list)})" if anomaly_list else "Anomalies",
         )
+        notebook.add(scans_frame, text=f"Scans ({len(scan_choices)})")
         self._build_anomalies_tab(
             anomalies_frame, anomaly_list, len(full_history), folder_by_anomaly
+        )
+        build_scans_tab(
+            scans_frame,
+            scan_choices,
+            lambda scan_id, date_text: self._remove_scan(scan_path, scan_id, date_text),
         )
 
         overview = ttk.LabelFrame(summary_frame, text="Overview", padding=10)

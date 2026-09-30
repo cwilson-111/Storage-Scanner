@@ -57,7 +57,6 @@ from storage_scanner.platform_support import (
     TRASH_NAME,
     resource_path,
 )
-from storage_scanner.scan_history import drive_capacity_bytes
 from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
@@ -478,12 +477,6 @@ class MainWindowMixin:
                 "Elevation was cancelled or not accepted. Still running "
                 "with normal permissions.",
             )
-
-    def _get_drive_capacity_bytes(self, path):
-        """
-        Returns total capacity of the drive containing the scanned path.
-        """
-        return drive_capacity_bytes(path)
 
     # -- Scan lifecycle ---------------------------------------------------- #
     def _on_toggle_turbo_scan(self):
