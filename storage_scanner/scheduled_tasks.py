@@ -13,12 +13,18 @@ import json
 import os
 import re
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from storage_scanner.schedule import TASK_NAME_PREFIX, WEEKDAY_ELEMENTS, ScheduledScan
+from storage_scanner.schedule import (
+    TASK_NAME_PREFIX,
+    WEEKDAY_ELEMENTS,
+    ScheduledScan,
+    app_launch_args,
+)
 
 TASK_XML_NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 # Task Scheduler's LastTaskResult codes that aren't a program's exit code.
@@ -91,20 +97,42 @@ class RegisteredTask:
             return f"Failed (0x{self.last_result:08X})"
         return f"Failed (exit code {self.last_result})"
 
-    def problems(self, path_exists=os.path.exists):
+    def problems(self, path_exists=os.path.exists, current_launch=None):
         """Reasons this task won't do what the Schedule window promises.
-        All but the first are fixed by selecting it and saving it again."""
+        All but the first are fixed by selecting it and saving it again.
+        `current_launch` is how this copy of the app would be started
+        (schedule.app_launch_args); by default only a packaged app checks
+        it, since a source checkout has no single "copy" to compare."""
         if self.definition.scheduled is None:
             return ["not a scan this app created; remove it or fix it in Task Scheduler"]
 
         found = []
         if not all(path_exists(path) for path in self.definition.launch):
             found.append("the app has moved since this was saved")
+        elif _runs_another_copy(self.definition.launch, current_launch):
+            found.append(
+                f"runs another copy of the app ({self.definition.launch[0]}), " "maybe an older one"
+            )
         if not self.definition.notifies:
             found.append("saved before over-budget notifications existed")
         if self.state == "Disabled":
             found.append("disabled in Task Scheduler")
         return found
+
+
+def _runs_another_copy(launch, current_launch):
+    """True when a task starts a different copy of the app than this one: a
+    new version downloaded beside the old leaves every task on the old exe,
+    which can't write a history the new one has upgraded (P1-6)."""
+    if current_launch is None:
+        if not getattr(sys, "frozen", False):
+            return False
+        current_launch = app_launch_args()
+
+    def key(paths):
+        return tuple(os.path.normcase(os.path.realpath(path)) for path in paths)
+
+    return bool(launch) and key(launch) != key(current_launch)
 
 
 def split_windows_args(text):

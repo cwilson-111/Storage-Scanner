@@ -198,3 +198,13 @@ def test_list_windows_tasks_reports_unreadable_output(monkeypatch):
 
     assert tasks is None
     assert "Unreadable" in error
+
+
+def test_a_task_on_another_copy_of_the_app_is_flagged():
+    task = parse_task_listing(json.dumps([_row("t", _task_xml(ScheduledScan(path=r"C:\Data")))]))[0]
+    new_copy = [r"C:\Users\me\Downloads\StorageScanner (1).exe"]
+
+    assert any("another copy" in p for p in task.problems(lambda _p: True, current_launch=new_copy))
+    assert not any(
+        "another copy" in p for p in task.problems(lambda _p: True, current_launch=[EXE])
+    )

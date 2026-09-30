@@ -748,7 +748,7 @@ databases:
   result was handled, `start_scan()` (what F5 calls) started nothing.
 
 **P2-9. Scheduled scans break quietly when the exe moves, runs from a ZIP,
-or the path has a `%`.**
+or the path has a `%` — ✅ done (2026-09-29)**
 - Why: a task keeps the exe path it was saved with. Running the exe from
   inside the ZIP gives a path under `Temp\Temp1_StorageScanner-portable.zip`
   that disappears. Downloading a new version beside the old one leaves tasks
@@ -762,6 +762,17 @@ or the path has a `%`.**
 - Do: refuse to schedule from a temp or ZIP path; flag tasks whose exe is
   older than the running app; escape `%` for cron and Task Scheduler.
 - Size: S.
+- Done: `schedule.scan_command` refuses (ValueError, shown in the Schedule
+  window) when this copy of the app runs from under the temp folder or
+  inside a `.zip` (`launch_location_problem`). `scheduled_tasks.problems`
+  flags a task that starts a different copy of the packaged app ("runs
+  another copy of the app (…), maybe an older one"). `cron_line` escapes
+  `%` as `\%`. Task Scheduler has no escape for `%NAME%`, so
+  `ScheduledScan.validate` refuses a Windows path containing `%NAME%` for a
+  real environment variable and says what it would become.
+- Verified: tests for each (`test_schedule.py`, `test_scheduled_tasks.py`);
+  the real Schedule Scans window showed "Task Scheduler would replace
+  %USERNAME% in this path with danet…" for `C:\data\%USERNAME%\stuff`.
 
 **P2-10. The update check and PRIVACY.md disagree — ✅ done (2026-09-29)**
 - Why: PRIVACY.md line 5 calls the check "optional", but there is no

@@ -294,3 +294,35 @@ def test_cron_line_shell_quotes_paths_with_spaces():
     ]
 
     assert shlex.split(schedule.cron_line(scheduled, command=command))[5:] == command
+
+
+def test_percent_signs_are_escaped_for_cron():
+    """P2-9: cron turns % into a newline -- "/home/u/100% done" ran
+    --cli /home/u/100."""
+    line = schedule.cron_line(
+        _scan(path="/home/u/100% done"),
+        command=["/opt/ss/StorageScanner", "--cli", "/home/u/100% done"],
+    )
+
+    assert "100\\% done" in line
+    assert "%" not in line.replace("\\%", "")
+
+
+def test_a_copy_running_from_temp_or_a_zip_is_not_scheduled(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule.tempfile, "gettempdir", lambda: str(tmp_path))
+    in_zip = str(tmp_path / "Temp1_StorageScanner-portable.zip" / "StorageScanner.exe")
+
+    assert "temporary" in schedule.launch_location_problem([in_zip])
+    assert schedule.launch_location_problem([EXE]) is None
+    monkeypatch.setattr(schedule, "app_launch_args", lambda: [in_zip])
+    with pytest.raises(ValueError, match="somewhere permanent"):
+        schedule.scan_command(_scan())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Task Scheduler")
+def test_a_path_task_scheduler_would_expand_is_refused(monkeypatch):
+    monkeypatch.setenv("SS_TEST_VAR", "somewhere else")
+
+    with pytest.raises(ValueError, match="SS_TEST_VAR"):
+        _scan(path=r"C:\data\%SS_TEST_VAR%\stuff").validate()
+    _scan(path=r"C:\data\100% done").validate()  # a lone % is fine

@@ -85,6 +85,17 @@ class ScheduledScan:
         if self.frequency == "weekly" and self.weekday not in WEEKDAYS:
             raise ValueError(f"Day must be one of: {', '.join(WEEKDAYS)}.")
 
+        # Task Scheduler replaces %NAME% in a task's arguments with that
+        # environment variable, and has no way to escape it.
+        if IS_WINDOWS:
+            for name in re.findall(r"%([^%\s]+)%", self.path):
+                if name in os.environ:
+                    raise ValueError(
+                        f"Task Scheduler would replace %{name}% in this path with "
+                        f"{os.environ[name]}, and scan that instead. Rename the folder "
+                        "(or a folder above it) to schedule it."
+                    )
+
     @property
     def hour_minute(self):
         hour, minute = self.time.split(":")
@@ -115,9 +126,34 @@ def app_launch_args(frozen=None, executable=None, script=None):
     return [executable, script]
 
 
+def launch_location_problem(launch_args):
+    """Why a scheduler can't rely on starting the app from `launch_args`,
+    or None: a copy under the temp folder -- including the one Windows
+    runs straight from a ZIP (Temp\\Temp1_StorageScanner-portable.zip) --
+    is deleted sooner or later, and the task then fails every time."""
+    temp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+    for arg in launch_args:
+        path = os.path.normcase(os.path.realpath(arg))
+        if path.startswith(temp + os.sep) or f".zip{os.sep}" in path:
+            return (
+                f"This copy of Storage Scanner is running from {arg}, a temporary "
+                "location (a ZIP opened without extracting it, or a download "
+                "folder that gets cleaned up). A scheduled scan would stop working "
+                "when it's gone: copy the app somewhere permanent, open it from "
+                "there, and schedule the scan again."
+            )
+    return None
+
+
 def scan_command(scheduled, launch_args=None):
-    """The full argv a scheduler runs for one scheduled scan."""
-    launch_args = launch_args if launch_args is not None else app_launch_args()
+    """The full argv a scheduler runs for one scheduled scan. Raises
+    ValueError when this copy of the app runs from somewhere temporary
+    (launch_location_problem)."""
+    if launch_args is None:
+        launch_args = app_launch_args()
+        problem = launch_location_problem(launch_args)
+        if problem:
+            raise ValueError(problem)
     return [
         *launch_args,
         "--cli",
@@ -222,7 +258,10 @@ def cron_line(scheduled, command=None):
         if scheduled.frequency == "daily"
         else str((WEEKDAYS.index(scheduled.weekday) + 1) % 7)  # cron: 0 = Sunday
     )
-    return f"{minute} {hour} * * {day_of_week} {shlex.join(command)}"
+    # cron turns an unescaped % into a newline, cutting the command short
+    # ("/home/u/100% done" ran --cli /home/u/100).
+    command_text = shlex.join(command).replace("%", "\\%")
+    return f"{minute} {hour} * * {day_of_week} {command_text}"
 
 
 def display_command(args):
