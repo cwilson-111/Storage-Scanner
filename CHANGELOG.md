@@ -32,6 +32,8 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 - CSV exports add readable `modified` and `accessed` columns, and names
   starting with `=`, `+`, `-` or `@` can no longer run as spreadsheet
   formulas.
+- A folder with hundreds of thousands of files opens at once: the first
+  1,000 rows show, with a row to show more (250,000 files: 5.4 s → 0.3 s).
 
 ### Growth History
 

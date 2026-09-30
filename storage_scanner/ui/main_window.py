@@ -79,6 +79,9 @@ from storage_scanner.ui.live_tree import PLACEHOLDER_TEXT
 # how it ran. One row of everything outgrew the default window width.
 _SCAN_OUTCOME_FIELDS = ("Unreadable paths", "Result")
 
+# A folder's rows are inserted this many at a time (_insert_page).
+ROWS_PER_PAGE = 1000
+
 # Settings ▸ Keep Every Saved Scan For: (label, stored value).
 _HISTORY_KEEP_ALL_CHOICES = (
     ("7 days", "7"),
@@ -804,6 +807,7 @@ class MainWindowMixin:
         self._live_reset()
         self.tree.delete(*self.tree.get_children())
         self.node_by_iid.clear()
+        self._more_rows.clear()
 
         self.root_node = node
         logger.debug(
@@ -1100,13 +1104,45 @@ class MainWindowMixin:
         elif kids:
             return  # already populated
 
-        ordered = sorted(
+        self._insert_page(parent_iid, node, self._ordered_children(node), 0)
+
+    def _ordered_children(self, node):
+        return sorted(
             node.children,
             key=sort_key_function(self._sort_key, self._folder_change),
             reverse=self._sort_reverse,
         )
-        for index, child in enumerate(ordered):
-            self._insert_node(parent_iid, child, parent_size=node.size or 1, index=index)
+
+    def _insert_page(self, parent_iid, node, ordered, start):
+        """Rows `start`.. of `ordered` (a level in sort order), at most
+        ROWS_PER_PAGE of them, then -- if any are left -- one "N more" row
+        that shows the next page when opened (_show_more_rows). Tk inserts
+        about 17,000 rows a second at 1.75 KB each, so a 250,000-file folder
+        used to take 20 s to open."""
+        end = min(start + ROWS_PER_PAGE, len(ordered))
+        parent_size = node.size or 1
+        for index in range(start, end):
+            self._insert_node(parent_iid, ordered[index], parent_size=parent_size, index=index)
+        rest = ordered[end:]
+        if rest:
+            more_iid = self.tree.insert(
+                parent_iid,
+                END,
+                text=(
+                    f"… {len(rest):,} more ({human_size(sum(n.size for n in rest))}) — "
+                    f"double-click or press Enter to show {min(ROWS_PER_PAGE, len(rest)):,} more"
+                ),
+                tags=("placeholder",),
+            )
+            self._more_rows[more_iid] = parent_iid
+
+    def _show_more_rows(self, more_iid):
+        """Replace a level's "N more" row with its next page of rows."""
+        parent_iid = self._more_rows.pop(more_iid)
+        self.tree.delete(more_iid)
+        node = self.node_by_iid[parent_iid]
+        shown = sum(1 for iid in self.tree.get_children(parent_iid) if iid in self.node_by_iid)
+        self._insert_page(parent_iid, node, self._ordered_children(node), shown)
 
     def _on_open(self, _event):
         iid = self.tree.focus()
@@ -1120,6 +1156,9 @@ class MainWindowMixin:
 
     def _on_double_click(self, _event):
         iid = self.tree.focus()
+        if iid in self._more_rows:
+            self._show_more_rows(iid)
+            return
         node = self.node_by_iid.get(iid)
         if node and not node.is_dir:
             self._open_in_explorer()
@@ -1185,6 +1224,9 @@ class MainWindowMixin:
         tree = self.tree
         node_by_iid = self.node_by_iid
         shown = tree.get_children(parent_iid)
+        if any(iid in self._more_rows for iid in shown):
+            self._rebuild_paged_level(parent_iid, shown)
+            return
         kids = [iid for iid in shown if iid in node_by_iid]
         order = resorted(
             kids, node_by_iid, self._sort_key, self._sort_reverse, change_of=self._folder_change
@@ -1194,6 +1236,29 @@ class MainWindowMixin:
         tree.set_children(parent_iid, *order, *(iid for iid in shown if iid not in node_by_iid))
         was_at = {iid: index for index, iid in enumerate(kids)}
         self._restripe((iid, index) for index, iid in enumerate(order) if (index - was_at[iid]) % 2)
+
+    def _rebuild_paged_level(self, parent_iid, shown):
+        """A level showing only its first pages can't just be reordered: the
+        rows on screen are the top of the old order, not the new one. So it's
+        rebuilt with as many rows as it showed, in the new order (folders
+        opened inside it close)."""
+        node = self.node_by_iid[parent_iid]
+        count = sum(1 for iid in shown if iid in self.node_by_iid)
+        for iid in shown:
+            self._forget_subtree(iid)
+        self.tree.delete(*shown)
+        ordered = self._ordered_children(node)
+        start = 0
+        while True:
+            self._insert_page(parent_iid, node, ordered, start)
+            start += ROWS_PER_PAGE
+            if start >= count:
+                break
+            more = next((i for i, p in self._more_rows.items() if p == parent_iid), None)
+            if more is None:
+                break
+            del self._more_rows[more]
+            self.tree.delete(more)
 
     def _restripe(self, rows):
         """Give each (iid, index) row the even/odd background tag for that
@@ -1255,6 +1320,7 @@ class MainWindowMixin:
         for child in self.tree.get_children(iid):
             self._forget_subtree(child)
         self.node_by_iid.pop(iid, None)
+        self._more_rows.pop(iid, None)
 
     def _remove_main_tree_row(self, iid):
         """Remove a node's row from the main tree after it's been deleted,
@@ -1372,6 +1438,9 @@ class MainWindowMixin:
         """Enter: a folder opens or closes, a file is shown in the file manager."""
         iid = self.tree.focus()
         node = self.node_by_iid.get(iid)
+        if iid in self._more_rows:
+            self._show_more_rows(iid)
+            return "break"
         if node is None:
             return "break"
         if not node.is_dir:

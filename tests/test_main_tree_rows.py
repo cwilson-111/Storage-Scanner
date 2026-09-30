@@ -33,6 +33,7 @@ class _TreeOnly(StorageScannerApp):
         self.root_node = None
         self.scan_thread = None
         self._previous_folder_sizes = {}
+        self._more_rows = {}  # a level's "N more" row -> its parent row
         self.node_by_iid = {}
         self._heat_tags = set()
         self._sort_key = "size"
@@ -233,3 +234,39 @@ def test_the_change_column_shows_growth_since_the_last_scan_and_sorts_by_it(
     folders = [n for n in _names(app, root_iid) if app.node_by_iid[_row(app, root_iid, n)].is_dir]
     assert folders == ["Zed", "sub"]
     _assert_striped(app, root_iid)
+
+
+def test_a_big_level_shows_a_page_then_more_on_request_and_sorts_its_true_top(
+    app, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(main_window, "ROWS_PER_PAGE", 2)
+    _write(tmp_path, TOP_FILES)  # five files: 500, 400, 300, 200, 100 bytes
+    root_node = scanner.scan(str(tmp_path), queue.Queue(), threading.Event())
+    root_iid = app._insert_node("", root_node, parent_size=root_node.size)
+    app._populate_children(root_iid, root_node)
+
+    rows = app.tree.get_children(root_iid)
+    shown = [
+        app.node_by_iid[i].name for i in app.tree.get_children(root_iid) if i in app.node_by_iid
+    ]
+    assert shown == ["c.txt", "E.txt"]  # biggest first
+    [more] = [iid for iid in rows if iid in app._more_rows]
+    assert "3 more" in app.tree.item(more, "text")
+
+    app.tree.focus(more)
+    app._open_focused()  # Enter on the "more" row
+    assert [
+        app.node_by_iid[i].name for i in app.tree.get_children(root_iid) if i in app.node_by_iid
+    ] == [
+        "c.txt",
+        "E.txt",
+        "b.txt",
+        "d.txt",
+    ]
+
+    app._sort_by("size")  # now smallest first: the page must be the smallest four
+    shown = [
+        app.node_by_iid[i].name for i in app.tree.get_children(root_iid) if i in app.node_by_iid
+    ]
+    assert shown == ["A.txt", "d.txt", "b.txt", "E.txt"]
+    assert any(iid in app._more_rows for iid in app.tree.get_children(root_iid))

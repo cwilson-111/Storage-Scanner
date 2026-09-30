@@ -118,6 +118,7 @@ class LiveTreeMixin:
         self.dup_cancel_event.set()
         self.tree.delete(*self.tree.get_children())
         self.node_by_iid.clear()
+        self._more_rows.clear()
         self.root_node = None
         self.duplicates = None
         self._previous_folder_sizes = {}  # the Change column waits for this scan's save

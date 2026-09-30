@@ -75,6 +75,7 @@ def _app(tk_root):
             self.root_node = None
             self.scan_thread = None
             self._previous_folder_sizes = {}
+            self._more_rows = {}  # a level's "N more" row -> its parent row
             self.node_by_iid = {}
             self._heat_tags = set()
             self._sort_key = "size"
@@ -98,8 +99,6 @@ def measure(n_files):
         app.root_node = folder
         root_iid = app._insert_node("", folder, parent_size=folder.size or 1)
         app.tree.item(root_iid, open=True)
-        app._populate_children(root_iid, folder)
-        tk_root.update()
 
         def timed(action):
             start = time.perf_counter()
@@ -107,7 +106,10 @@ def measure(n_files):
             tk_root.update_idletasks()
             return time.perf_counter() - start
 
+        opened = timed(lambda: app._populate_children(root_iid, folder))
+        tk_root.update()
         return {
+            "open": opened,
             "sort_name": timed(lambda: app._sort_by("name")),
             "sort_size": timed(lambda: app._sort_by("size")),
             "delete_first": timed(

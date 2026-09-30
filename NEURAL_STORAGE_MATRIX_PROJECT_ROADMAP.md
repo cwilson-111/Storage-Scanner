@@ -601,13 +601,28 @@ done (2026-09-29)**
   audit windows, `urllib` and `webbrowser` lazily.
 - Size: S–M. Verify: launch time for both builds.
 
-**P2-2. The tree can't show very large folders.**
+**P2-2. The tree can't show very large folders — ✅ done (2026-09-29)**
 - Why: the finish rebuild of one level takes 2.1 s at 35,000 rows, 6.7 s at
   100,000 and 20.0 s at 250,000, at 1.75 KB of process memory per row,
   against about 120 bytes per file for the tree model itself.
 - Do: insert the first N rows (say 1,000) plus a "N more files (X GB)…" row
   that loads the rest in pages.
 - Size: M. Verify: a 250,000-file folder opens in under 1 s.
+- Done: a finished tree's level is inserted 1,000 rows at a time
+  (`MainWindowMixin._insert_page`, `ROWS_PER_PAGE`), then a "… N more (size)
+  — double-click or press Enter to show 1,000 more" row
+  (`_show_more_rows`). Sorting a level that shows only some pages rebuilds
+  it in the new order with as many rows as it had
+  (`_rebuild_paged_level`), so the rows shown are always the real top.
+- Verified: `benchmarks/main_tree.py` (new "open" timing), before → after:
+  250,000 files open 5.40 → 0.28 s, sort 1.12 → 0.31 s, delete a row
+  1.71 → 0.03 s; 35,000 files open 0.77 → 0.06 s.
+  `tests/test_main_tree_rows.py` checks the first page, the next page on
+  Enter, and that a re-sort shows the new order's top rows.
+- Not done: the live tree during a scan still inserts every row; a "more"
+  row's count isn't updated when a row it stands for is deleted from
+  another window; folders opened inside a paged level close when it's
+  re-sorted.
 
 **P2-3. Folders cost six times what files do, and the benchmark doesn't
 show it.**
