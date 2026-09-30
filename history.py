@@ -884,6 +884,19 @@ def get_orphaned_install_locations():
     return rows
 
 
+def get_installed_install_locations():
+    """The normalized install locations the most recent snapshot saw
+    installed."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT install_location FROM known_install_locations WHERE currently_installed = 1"
+    )
+    rows = [location for (location,) in cur.fetchall()]
+    conn.close()
+    return rows
+
+
 def get_known_install_location_count():
     """Total rows in known_install_locations, regardless of
     currently_installed. 0 means record_install_locations_snapshot has

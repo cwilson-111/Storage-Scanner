@@ -994,13 +994,24 @@ scheduled JSON output before any service, ingest API or console. Size: L.
   handle), and check that result paths are under the requested root.
 - Size: S.
 
-**P3-8. Orphaned-install detection trusts a registry read that can fail.**
+**P3-8. Orphaned-install detection trusts a registry read that can fail —
+✅ done (2026-09-29)**
 - Why: if a registry hive can't be read, every install location seen before
   counts as orphaned (reproduced with an empty snapshot); a nested install
   location (`Vendor\ProductB`) flags its parent folder.
 - Do: skip the category when far fewer apps come back than last time;
   ignore folders that contain an installed app.
 - Size: S.
+- Done: `cleanup_recommendations.registry_read_looks_short` (under half of
+  the apps the last snapshot saw installed, of at least 5): the read isn't
+  recorded, no orphan rows are shown, and the summary says detection was
+  skipped. `find_orphaned_install_folders` never flags a folder that
+  contains a still-installed app's location
+  (`history.get_installed_install_locations`).
+- Verified: tests for both; the real Cleanup Recommendations window over a
+  sandbox history that knew 1,000 installed apps, against this machine's
+  real read of 56: "orphaned-install detection skipped: the installed-apps
+  list came back incomplete", and the 1,000 rows were left as they were.
 
 **P3-9. Accessibility.**
 - Why: `ttk.Treeview` exposes nothing to Windows screen readers.

@@ -193,7 +193,15 @@ def keeper_reason(keeper, nodes):
     return "Tiebreak (shortest path) among otherwise-identical copies."
 
 
-def find_orphaned_install_folders(root_node, orphaned_locations):
+def registry_read_looks_short(apps_read, previously_installed):
+    """True when a read of the uninstall registry returned far fewer apps
+    than the last snapshot knew installed (under half, of at least 5): a
+    hive that couldn't be read, not a mass uninstall. Recording such a read
+    would mark every missing app's folder as orphaned."""
+    return previously_installed >= 5 and apps_read * 2 < previously_installed
+
+
+def find_orphaned_install_folders(root_node, orphaned_locations, installed_locations=()):
     """Flag directories that exactly match a location this app has
     previously seen registered as some app's InstallLocation, where that
     app is no longer installed (per history.get_orphaned_install_locations
@@ -213,13 +221,21 @@ def find_orphaned_install_folders(root_node, orphaned_locations):
     matched InstallLocation is solid *registry* evidence the owning app
     is gone, but says nothing about whether the folder still holds real
     user data (save files, exported settings) worth keeping regardless.
+    A folder that holds a still-installed app's location (an uninstalled
+    `Vendor\\ProductA` whose `Vendor\\ProductB` remains) is never flagged:
+    deleting it would take the installed app with it. `installed_locations`
+    are normalized like `orphaned_locations`.
     """
+    installed_prefixes = [location + os.sep for location in installed_locations]
     recommendations = []
     stack = [root_node] if root_node.is_dir else []
     while stack:
         node = stack.pop()
         normalized = os.path.normcase(os.path.normpath(node.path))
-        if normalized in orphaned_locations:
+        holds_installed = any(
+            prefix.startswith(normalized + os.sep) for prefix in installed_prefixes
+        )
+        if normalized in orphaned_locations and not holds_installed:
             recommendations.append(
                 Recommendation(
                     node=node,

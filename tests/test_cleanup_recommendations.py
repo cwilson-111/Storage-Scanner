@@ -385,3 +385,27 @@ def test_drop_nested_under_with_no_containers_is_a_noop():
     ]
 
     assert _drop_nested_under(recs, set()) == recs
+
+
+def test_a_folder_holding_a_still_installed_app_is_not_flagged():
+    """P3-8: Vendor\\ProductA uninstalled, Vendor\\ProductB still installed;
+    Vendor itself was once ProductA's InstallLocation."""
+    root = Node("/root", "root")
+    vendor = _dir(root, "Vendor")
+    vendor.size = 9000
+    product_b = _dir(vendor, "ProductB")
+
+    recs = find_orphaned_install_folders(
+        root, {_normalized(vendor.path)}, [_normalized(product_b.path)]
+    )
+
+    assert recs == []
+
+
+def test_a_registry_read_far_shorter_than_last_time_is_not_trusted():
+    looks_short = cleanup_recommendations.registry_read_looks_short
+
+    assert looks_short(0, 120)  # a hive that couldn't be read
+    assert looks_short(59, 120)
+    assert not looks_short(60, 120)  # half: a big uninstall, still believed
+    assert not looks_short(0, 4)  # too few known to judge

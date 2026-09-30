@@ -11,6 +11,7 @@ import threading
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, StringVar, Toplevel, X, messagebox, ttk
 
 from history import (
+    get_installed_install_locations,
     get_known_install_location_count,
     get_orphaned_install_locations,
     record_install_locations_snapshot,
@@ -26,6 +27,7 @@ from storage_scanner.cleanup_recommendations import (
     build_duplicate_recommendations,
     find_orphaned_install_folders,
     find_protected_and_review_candidates,
+    registry_read_looks_short,
 )
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
@@ -173,26 +175,41 @@ class CleanupMixin:
             """Windows-only: read the uninstall registry, update this
             app's own persistent snapshot of install locations, and flag
             any folder matching a location whose owning app is no longer
-            installed. ([], False) on any other platform. The second
-            value is True only on the very first snapshot ever taken for
-            this install of the app (nothing to compare against yet) --
-            see history.py's known_install_locations docstring for why
-            that first-run gap is the accepted tradeoff for staying
-            exact-match-only, never a fuzzy/name-based heuristic.
+            installed. ([], "") on any other platform. The second value is
+            a note for the summary: on the very first snapshot ever taken
+            (nothing to compare against yet -- see history.py's
+            known_install_locations docstring for why that first-run gap is
+            the accepted tradeoff for staying exact-match-only), or when
+            the registry read came back short and was ignored.
             """
             if not IS_WINDOWS:
-                return [], False
+                return [], ""
             from storage_scanner.installed_apps import get_candidate_installed_apps
 
             is_first_run = get_known_install_location_count() == 0
             apps = get_candidate_installed_apps()
+            previously_installed = len(get_installed_install_locations())
+            if registry_read_looks_short(len(apps), previously_installed):
+                logger.warning(
+                    "Uninstall registry read returned %d apps against %d last time; "
+                    "skipping orphaned-install detection",
+                    len(apps),
+                    previously_installed,
+                )
+                return [], short_read_suffix
             record_install_locations_snapshot(apps)
             orphaned_locations = {loc for loc, *_rest in get_orphaned_install_locations()}
-            orphan_recs = find_orphaned_install_folders(self.root_node, orphaned_locations)
-            return orphan_recs, is_first_run
+            orphan_recs = find_orphaned_install_folders(
+                self.root_node, orphaned_locations, get_installed_install_locations()
+            )
+            return orphan_recs, first_run_suffix if is_first_run else ""
 
         first_run_suffix = (
             "  (orphaned-install detection is still learning this machine's installed apps)"
+        )
+        short_read_suffix = (
+            "  (orphaned-install detection skipped: the installed-apps list came back "
+            "incomplete)"
         )
 
         if not live:
@@ -233,14 +250,13 @@ class CleanupMixin:
             cancel_event = threading.Event()
 
             if cached_duplicates is not None and self._duplicates_scan_root is self.root_node:
-                orphan_recs, is_first_run = compute_orphan_recommendations()
+                orphan_recs, orphan_note = compute_orphan_recommendations()
                 all_recs = merge_with_orphans(
                     metadata_recs, build_duplicate_recommendations(cached_duplicates), orphan_recs
                 )
                 populate(all_recs)
                 suffix = "  (duplicate results reused from Find Duplicate Files)"
-                if is_first_run:
-                    suffix += first_run_suffix
+                suffix += orphan_note
                 summarize(all_recs, suffix=suffix)
                 cleanup_cache.save_recommendations(display_scan_path, all_recs)
                 win.protocol("WM_DELETE_WINDOW", win.destroy)
@@ -250,8 +266,8 @@ class CleanupMixin:
                 def worker():
                     try:
                         groups = self._find_duplicate_files(cancel_event=cancel_event)
-                        orphan_recs, is_first_run = compute_orphan_recommendations()
-                        result_q.put(("done", (groups, orphan_recs, is_first_run)))
+                        orphan_recs, orphan_note = compute_orphan_recommendations()
+                        result_q.put(("done", (groups, orphan_recs, orphan_note)))
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Duplicate scan for cleanup recommendations failed")
                         result_q.put(("error", str(exc)))
@@ -266,14 +282,14 @@ class CleanupMixin:
                         win.after(150, poll)
                         return
                     if kind == "done":
-                        groups, orphan_recs, is_first_run = payload
+                        groups, orphan_recs, orphan_note = payload
                         self.duplicates = groups
                         self._duplicates_scan_root = self.root_node
                         all_recs = merge_with_orphans(
                             metadata_recs, build_duplicate_recommendations(groups), orphan_recs
                         )
                         populate(all_recs)
-                        summarize(all_recs, suffix=first_run_suffix if is_first_run else "")
+                        summarize(all_recs, suffix=orphan_note)
                         cleanup_cache.save_recommendations(display_scan_path, all_recs)
                     else:
                         summarize(metadata_recs, suffix=f"  (duplicate scan failed: {payload})")
