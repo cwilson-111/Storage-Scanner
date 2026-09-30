@@ -1088,12 +1088,23 @@ done (2026-09-29)**
   count accessibility in any future UI-toolkit decision.
 - Size: M.
 
-**P3-10. A cheap route to bug reports.**
+**P3-10. A cheap route to bug reports — ✅ done (2026-09-29)**
 - Why: no outside issue has ever been filed, crash-report opt-in (item 9) is
   not started, and there are no issue templates or `SECURITY.md`.
 - Do: a "Copy diagnostic info" button, issue templates, and `SECURITY.md`
   before anything automatic.
 - Size: S.
+- Done: Tools ▸ Help ▸ "Copy Diagnostic Info" (`storage_scanner/
+  diagnostics.py`: version, OS, Python, packaged or source, elevation,
+  Turbo and update-check settings, history schema/scan counts/size, cache
+  size, log level; no file or folder names) and "Report a Problem…" (opens
+  GitHub's new-issue chooser). Issue forms in `.github/ISSUE_TEMPLATE/`
+  (bug report asks for the diagnostic info; log lines optional with a
+  privacy note; idea form), and `SECURITY.md`.
+- Verified: in the real app the Help menu copied the text above to the
+  clipboard, without the user name or any path; the issue-form YAML parses.
+- Not done: GitHub's private vulnerability reporting, which SECURITY.md
+  points to, has to be turned on in the repository's settings (owner only).
 
 **P3-11. Dead code and stale instructions — ✅ done (2026-09-29)**
 - Why: `history.py:759-823` (`format_bytes`, `create_usage_history_chart`,

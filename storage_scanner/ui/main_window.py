@@ -10,6 +10,7 @@ import os
 import queue
 import subprocess
 import threading
+import webbrowser
 from tkinter import (
     BOTH,
     BOTTOM,
@@ -31,7 +32,13 @@ from tkinter import (
 )
 
 from history import get_app_metadata, get_folder_sizes, set_app_metadata, set_budget
-from storage_scanner import history_retention, turbo_cache, turbo_scan, update_check
+from storage_scanner import (
+    diagnostics,
+    history_retention,
+    turbo_cache,
+    turbo_scan,
+    update_check,
+)
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.drive_info import is_ntfs_fixed_drive
 from storage_scanner.file_ops import (
@@ -223,6 +230,11 @@ class MainWindowMixin:
         # tells the user it can be reopened from here.
         help_menu = Menu(self.tools_menu, tearoff=0)
         help_menu.add_command(label="Getting Started…", command=self.show_onboarding)
+        help_menu.add_separator()
+        help_menu.add_command(label="Copy Diagnostic Info", command=self._copy_diagnostic_info)
+        help_menu.add_command(
+            label="Report a Problem…", command=lambda: webbrowser.open(diagnostics.ISSUES_URL)
+        )
         self.tools_menu.add_cascade(label="Help", menu=help_menu)
 
         self.top_count_var = StringVar(value="25")
@@ -500,6 +512,14 @@ class MainWindowMixin:
     # -- Scan lifecycle ---------------------------------------------------- #
     def _on_toggle_turbo_scan(self):
         set_app_metadata("turbo_scan_enabled", "1" if self.turbo_scan_var.get() else "0")
+
+    def _copy_diagnostic_info(self):
+        """Help ▸ Copy Diagnostic Info (storage_scanner/diagnostics.py)."""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(diagnostics.diagnostic_text())
+        self.status_var.set(
+            "Copied diagnostic info (no file or folder names) — paste it into a bug report."
+        )
 
     def _clear_turbo_cache(self):
         """Settings ▸ Clear Turbo Scan Cache: say how big it is, and delete

@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in Storage Scanner doesn't work, or shows something wrong.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic info
+      description: >-
+        In the app: Tools ▸ Help ▸ Copy Diagnostic Info, then paste it here.
+        It lists the version, OS and settings, and no file or folder names.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines (optional)
+      description: >-
+        If a dialog said "details are in the log", Open Log Folder shows it.
+        The log names files and folders you scanned, so paste only the lines
+        you're comfortable sharing, around the time it happened.
+      render: text
