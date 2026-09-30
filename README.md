@@ -240,7 +240,13 @@ packages were bundled.
   detection and budgets all include it. `--notify` (with `--save-history`)
   shows a desktop notification if the folder is over its budget; if it
   can't (e.g. Windows notifications are turned off), it says why on stderr
-  and in the app log, and the exit code is unchanged.
+  and in the app log, and the exit code is unchanged. The Windows download
+  is a windowed program: typed into cmd.exe or PowerShell it writes to that
+  console, but an interactive prompt doesn't wait for it, so use
+  `start /wait` (cmd.exe) or pipe it (`| Out-Host`, PowerShell) to wait for
+  it and get its exit code. With no console and no `--output FILE` (Task
+  Scheduler, a shortcut), JSON or CSV output has nowhere to go: it exits 1
+  and says so in the app log, where its other messages go too.
 - **Scheduled scans** — Tools ▸ History & Trust ▸ Schedule Scans… scans a
   folder daily or weekly and saves each run to scan history, so growth
   tracking keeps working without you remembering to rescan. On Windows it
@@ -306,7 +312,9 @@ land in `dist/`.
 
 Releases are also built automatically by GitHub Actions — push a tag like
 `v1.0.0` and `StorageScanner.exe`, `StorageScanner.dmg`, and
-`StorageScanner-linux-x86_64.tar.gz` are all attached to the release.
+`StorageScanner-linux-x86_64.tar.gz` are all attached to the release, with
+that version's section of [`CHANGELOG.md`](CHANGELOG.md) as the release
+notes (the release fails if there isn't one).
 
 ## Running the test suite
 
@@ -315,16 +323,21 @@ pip install -r requirements-dev.txt
 pytest tests/          # also enforces the coverage floor
 ruff check .           # lint + import order
 black --check .        # formatting (drop --check to apply)
-mypy storage_scanner/  # type checking
+mypy storage_scanner/ history.py  # type checking
 ```
 
 All four read their settings from `pyproject.toml`, and CI runs the same
-four commands as the `test` job every release build depends on, plus
+four commands as the `test` job every release build depends on, on every
+push and pull request to `main`, plus
 `python benchmarks/scale.py --check`, which fails the build if memory per
 file, history size per scan, the scans and bytes two years of daily scans
 leave behind, the SQLite work to save and compare a 20,000-folder scan,
 Turbo cache size per record, or the records a folder rescan loads get more
 than 15% worse than `benchmarks/baseline.json`.
+
+`pip install pre-commit` then `pre-commit install` runs the ruff and black
+checks on every commit, pinned to the versions CI uses
+(`.pre-commit-config.yaml`).
 
 ### Benchmarking the scanner
 

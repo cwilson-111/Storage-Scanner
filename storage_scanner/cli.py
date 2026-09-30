@@ -17,6 +17,7 @@ import queue
 import sys
 import threading
 
+from storage_scanner.cli_streams import connect_std_streams
 from storage_scanner.export import FORMATS, export_to_file, write_csv, write_json
 from storage_scanner.scanner import scan
 
@@ -59,8 +60,20 @@ def build_arg_parser():
 
 def run_cli(argv):
     """Parse CLI arguments and run the scan. Returns a process exit code."""
+    # Before parsing, so --help and usage errors reach the console too.
+    connect_std_streams()
     parser = build_arg_parser()
     args = parser.parse_args(argv)  # exits(2) itself on --help / bad usage
+
+    if args.format != "none" and not args.output and sys.stdout is None:
+        # No console and nothing redirected: say so (stderr is the app log
+        # by now) before spending a whole scan on output nobody can read.
+        print(
+            f"Nowhere to write the {args.format} output: there's no console and "
+            "standard output isn't redirected. Use --output FILE.",
+            file=sys.stderr,
+        )
+        return EXIT_SCAN_ERROR
 
     if not os.path.exists(args.path):
         print(f"Path does not exist: {args.path}", file=sys.stderr)
@@ -123,6 +136,11 @@ def run_cli(argv):
             print(f"Could not write output file: {exc}", file=sys.stderr)
             return EXIT_SCAN_ERROR
     else:
+        if args.format == "csv" and hasattr(sys.stdout, "reconfigure"):
+            # csv ends each row with \r\n itself; a text-mode stdout on
+            # Windows turns that \n into \r\n again, and a CSV reader counts
+            # every resulting \r\r\n as an extra, empty row.
+            sys.stdout.reconfigure(newline="")
         write = write_json if args.format == "json" else write_csv
         write(node, sys.stdout)
 

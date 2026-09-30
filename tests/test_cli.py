@@ -1,6 +1,8 @@
 import csv
 import io
 import json
+import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner import cli_streams
 from storage_scanner.cli import EXIT_OK, EXIT_SCAN_ERROR, run_cli
 
 
@@ -61,6 +64,75 @@ def test_csv_output_to_stdout(tmp_path, capsys):
     assert "a.txt" in names
     assert "b.txt" in names
     assert "sub" in names
+
+
+def test_csv_on_a_real_stdout_pipe_ends_each_row_once(tmp_path):
+    # capsys never translates newlines, so only a real process shows what a
+    # Windows text-mode stdout did to csv's own \r\n: \r\r\n, which a CSV
+    # reader counts as an extra empty row after every real one.
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.txt").write_text("world!")
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "Storage-Scanner.py"), "--cli", str(tmp_path)]
+        + ["--format", "csv"],
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == EXIT_OK, result.stderr
+    assert b"\r\r\n" not in result.stdout
+    rows = list(csv.reader(io.StringIO(result.stdout.decode(errors="replace"), newline="")))
+    assert len(rows) == 5  # header, the folder, a.txt, sub, sub/b.txt
+
+
+def _no_standard_handles(monkeypatch, console=None, stdout=None):
+    """What a windowed exe gets: no stdout/stderr unless the caller
+    redirected them, and `console` as the starting shell's console."""
+    monkeypatch.setattr(cli_streams, "_open_parent_console", lambda: console)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", None)
+
+
+def test_no_console_and_no_stdout_fails_and_says_why_in_the_log(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="storage_scanner")
+    _no_standard_handles(monkeypatch)
+    (tmp_path / "a.txt").write_text("hello")
+
+    code = run_cli([str(tmp_path)])
+
+    assert code == EXIT_SCAN_ERROR
+    assert "Nowhere to write the json output" in caplog.text
+
+
+def test_scheduled_scan_without_a_console_still_succeeds_and_logs_its_summary(
+    tmp_path, monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO, logger="storage_scanner")
+    _no_standard_handles(monkeypatch)
+    (tmp_path / "a.txt").write_text("hello")
+
+    code = run_cli([str(tmp_path), "--format", "none"])
+
+    assert code == EXIT_OK
+    assert f"Scanned {tmp_path}" in caplog.text
+
+
+def test_redirected_stdout_stays_pure_json_when_stderr_has_no_handle(tmp_path, monkeypatch):
+    # `StorageScanner.exe --cli X > out.json` from cmd.exe: stdout is the
+    # file, stderr is None, and print(file=None) used to put the summary
+    # into the file ahead of the JSON.
+    redirected, console = io.StringIO(), io.StringIO()
+    _no_standard_handles(monkeypatch, console=console, stdout=redirected)
+    (tmp_path / "a.txt").write_text("hello")
+
+    code = run_cli([str(tmp_path)])
+
+    assert code == EXIT_OK
+    assert json.loads(redirected.getvalue())["file_count"] == 1
+    assert "Scanned" in console.getvalue()
 
 
 def test_output_to_file(tmp_path, capsys):

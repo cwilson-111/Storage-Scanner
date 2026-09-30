@@ -345,7 +345,8 @@ folder — ✅ done (2026-09-29)**
   (`delete_dialogs._remove_deleted_from_tree`); the heat colour of
   siblings still isn't recomputed after a delete (it never was).
 
-**P1-8. `--cli` in the released exe crashes when typed in a console.**
+**P1-8. `--cli` in the released exe crashes when typed in a console — ✅
+done (2026-09-29)**
 - Why: the exe is built `--windowed` (`build.yml:87`), so `sys.stdout` is
   None unless output is redirected, and `cli.py:127` then raises
   "'NoneType' object has no attribute 'write'" (reproduced with `pythonw`
@@ -357,6 +358,29 @@ folder — ✅ done (2026-09-29)**
   a small console build; fail with a message when there's nowhere to write;
   write CSV with `newline=""`.
 - Size: S. Verify: run the exe from cmd.exe and PowerShell.
+- Done: `run_cli` first calls `cli_streams.connect_std_streams`, which
+  points a missing stdout/stderr at the starting shell's console
+  (`AttachConsole` on the parent, or on the grandparent when the parent is
+  the same exe: the one-file exe runs the app in a child of itself,
+  measured). Redirected streams are kept. With no console, stderr's lines
+  go to the app log, and JSON/CSV bound for stdout exits 1 before scanning
+  ("Nowhere to write … Use --output FILE"). CSV on stdout uses
+  `newline=""`. Also fixed: with only stdout redirected (`> out.json`),
+  `print(file=None)` wrote the summary into the JSON file.
+- Verified: an exe built from this branch (local PyInstaller 6.21
+  `--onefile --windowed`, not the CI build) and `pythonw` (installed and
+  venv), run in real cmd.exe and PowerShell consoles (windowless; the screen
+  buffer read back): JSON, CSV, the summary and "Path does not exist" show
+  up; `start /wait` sets ERRORLEVEL 0/1, `| Out-Host` sets `$LASTEXITCODE`
+  0; `> out.json` is valid JSON. Before: nothing shown, ERRORLEVEL 1, an
+  AttributeError in the log. Piped CSV: 6 rows, no `\r\r\n` (12 before).
+  No handles and no console: JSON exits 1 with the log line, `--format
+  none` exits 0. Four new tests in `tests/test_cli.py` fail on the old
+  `cli.py`.
+- Not done: an interactive prompt doesn't wait for a windowed exe
+  (PowerShell measured: output after the prompt, `$LASTEXITCODE` empty;
+  interactive cmd.exe [inference]), so the README says to use `start /wait`
+  or `| Out-Host`; only a console build would change that.
 
 **P1-9. Sign the Windows build; it no longer needs a purchased
 certificate.**
@@ -373,15 +397,33 @@ certificate.**
 - Size: M (identity validation). Verify: `Get-AuthenticodeSignature` says
   Valid on the release assets.
 
-**P1-10. Release notes, a CHANGELOG, and fewer, bigger releases.**
+**P1-10. Release notes, a CHANGELOG, and fewer, bigger releases — ✅ done
+(2026-09-29)**
 - Why: every GitHub release body since v1.04 is empty; the notes exist only
   in tag messages. The update banner links to a page with no text.
 - Do: `CHANGELOG.md` with a section per version, used as the release body
   (`body_path` in the release step, or `generate_release_notes: true` at
   least), and batch changes into releases.
 - Size: S. Verify: the next release page has notes.
+- Done: `CHANGELOG.md`, a section per tag from v1.04 to v1.11.0 (and
+  data-v1.4.6) copied from the tag messages (a lightweight tag's commit
+  message; merge-commit tags say there are no notes), plus `## Unreleased`
+  with P0-1…P0-5, P1-4 and P1-12; the other P1 items get added when merged.
+  `release_notes.py <tag>` prints that section; the new `release` job in
+  `build.yml` passes it as `body_path` and fails if it's missing or empty.
+- Verified: `release_notes.py v1.11.0 --output dist/release-notes.md` (the
+  workflow's command, in a temp copy) wrote the v1.11.0 section; v1.12.0
+  exited 1, "no '## v1.12.0' section", nothing written. A script checked
+  every section against its tag's text: 35 tags, no mismatch.
+  `tests/test_release_notes.py` covers v1.1.0 vs v1.10.0, `###`
+  subheadings, missing vs empty.
+- Not done: "the next release page has notes" shows only at the next tag.
+  Batching releases is a practice, not code. `build-data.yml`'s data-v*
+  pre-releases still have no notes (tags on the `data` branch use that
+  branch's copy of the workflow).
 
-**P1-11. CI: test pull requests, least privilege, cover `history.py`.**
+**P1-11. CI: test pull requests, least privilege, cover `history.py` — ✅
+done (2026-09-29)**
 - Why: `build.yml` runs only on pushes to main and tags (lines 7-11), so
   pull requests, Dependabot's included, are never tested. `contents: write`
   at workflow level (lines 13-14) gives the test job a write token. mypy
@@ -393,6 +435,23 @@ certificate.**
   on release jobs; include `history.py` in mypy and coverage (or move it,
   P2-14); a pre-commit config running ruff and black.
 - Size: S. Verify: a PR shows the test job.
+- Done: `pull_request` into main; `contents: read` for the workflow and
+  `contents: write` only on a new tag-only `release` job, which runs after
+  all three builds, downloads their artifacts (`actions/download-artifact`,
+  SHA-pinned v8) and publishes them (the build jobs no longer do, so a
+  platform whose build fails no longer lets the others ship alone). mypy
+  checks `storage_scanner/ history.py`; `--cov=history` is in addopts.
+  `.pre-commit-config.yaml` runs ruff-check 0.16.9 and black 26.5.1, the
+  newest releases (what CI installs today), pinned by SHA.
+- Verified: `build.yml` parses with PyYAML and every `uses:` is a SHA;
+  `mypy history.py` had 0 errors on main already, and `mypy
+  storage_scanner/ history.py` is clean; coverage with `history.py` 56.1%
+  (`history.py` 79%) against 55% without, floor 49 kept. `pre-commit run
+  --all-files` passed in a temp venv, and ruff-check failed a probe file on
+  F821.
+- Not done: "a PR shows the test job" waits for this branch to be pushed.
+  `build-data.yml` still has write access at workflow level (one job that
+  builds and publishes, run from the `data` branch).
 
 **P1-12. Benchmarks write into the real app log, and test data sits in the
 real history — ✅ done (2026-09-26)**
