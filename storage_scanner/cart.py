@@ -25,8 +25,12 @@ class CartManager:
     def __init__(self):
         self._nodes = {}  # Node -> source_label
         self._sampled = set()  # Nodes that are sampled duplicates
+        self._duplicates = set()  # Nodes queued as a copy of a duplicate group
 
-    def add(self, node, source_label, is_sampled=False):
+    def add(self, node, source_label, is_sampled=False, as_duplicate=False):
+        """Queue `node`. `as_duplicate`: it was queued as a redundant copy,
+        so it's only deleted while another copy of its group still exists
+        (see delete_service)."""
         if node is None:
             return
         self._nodes[node] = source_label
@@ -34,14 +38,29 @@ class CartManager:
             self._sampled.add(node)
         else:
             self._sampled.discard(node)
+        if as_duplicate:
+            self._duplicates.add(node)
+        else:
+            self._duplicates.discard(node)
 
     def remove(self, node):
         self._nodes.pop(node, None)
         self._sampled.discard(node)
+        self._duplicates.discard(node)
+
+    def remove_deleted(self, deleted):
+        """Drop every item `deleted` (a delete_service.DeletedSet) covers --
+        deleted from any window, or inside a folder that was. Returns True
+        if anything was dropped."""
+        gone = [node for node in self._nodes if deleted.covers(node)]
+        for node in gone:
+            self.remove(node)
+        return bool(gone)
 
     def clear(self):
         self._nodes.clear()
         self._sampled.clear()
+        self._duplicates.clear()
 
     def __len__(self):
         return len(self._nodes)
@@ -49,8 +68,13 @@ class CartManager:
     def __contains__(self, node):
         return node in self._nodes
 
+    def is_duplicate_item(self, node):
+        return node in self._duplicates
+
     def total_bytes(self):
-        return sum(node.size for node in self._nodes)
+        """What executing the cart would reclaim: an item inside a queued
+        folder is already counted in the folder's size."""
+        return sum(node.size for node, _label in self.resolve_effective_items())
 
     def count_sampled_in_effective_items(self):
         """Count how many items in effective (non-nested) items are sampled."""

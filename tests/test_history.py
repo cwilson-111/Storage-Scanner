@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import history
+from storage_scanner.delete_outcome import DELETED_PERMANENTLY, FAILED, RECYCLED
 
 
 def test_get_latest_scan_id_returns_most_recent_scan(tmp_path, monkeypatch):
@@ -174,7 +175,16 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         path="/Users/me/dup.bin",
         is_dir=False,
         size_bytes=1234,
-        success=True,
+        outcome=RECYCLED,
+    )
+    history.record_audit_entry(
+        source="Cleanup Cart (Main tree)",
+        action="recycle",
+        path="Q:\\big.iso",
+        is_dir=False,
+        size_bytes=50,
+        outcome=DELETED_PERMANENTLY,
+        error_message="Confirmed, because the Recycle Bin can't hold it (subst drive).",
     )
     history.record_audit_entry(
         source="Main tree",
@@ -182,28 +192,27 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         path="/Users/me/locked",
         is_dir=True,
         size_bytes=999,
-        success=False,
+        outcome=FAILED,
         error_message="It may be in use, protected, or require admin rights.",
     )
 
     rows = history.get_audit_log()
 
-    assert len(rows) == 2
+    assert len(rows) == 3
     # Most recent first.
-    created_at, source, action, path, is_dir, size_bytes, success, error_message = rows[0]
+    created_at, source, action, path, is_dir, size_bytes, success, message, outcome = rows[0]
     assert source == "Main tree"
     assert action == "recycle"
     assert path == "/Users/me/locked"
     assert is_dir == 1
     assert size_bytes == 999
-    assert success == 0
-    assert "protected" in error_message
+    assert (success, outcome) == (0, FAILED)
+    assert "protected" in message
 
-    second = rows[1]
-    assert second[1] == "Duplicate Files"
-    assert second[5] == 1234
-    assert second[6] == 1
-    assert second[7] is None
+    # A permanent delete is gone (success) but is never reported as recycled.
+    assert (rows[1][6], rows[1][8]) == (1, DELETED_PERMANENTLY)
+    assert rows[2][1] == "Duplicate Files"
+    assert rows[2][5:] == (1234, 1, None, RECYCLED)
 
 
 def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
@@ -218,7 +227,7 @@ def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
             path=f"/tmp/f{i}.bin",
             is_dir=False,
             size_bytes=i,
-            success=True,
+            outcome=RECYCLED,
         )
 
     assert len(history.get_audit_log(limit=3)) == 3

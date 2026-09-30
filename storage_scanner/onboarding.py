@@ -7,16 +7,19 @@ lives in storage_scanner/ui/onboarding_window.py.
 Every sentence below describes what the current code actually does on that
 platform — keep it that way when behavior changes:
 
-- Deletion: file_ops.recycle() (Recycle Bin via SHFileOperationW with
-  FOF_ALLOWUNDO on Windows; Finder on macOS; `gio trash` or a manual XDG
-  Trash move on Linux), always reached through audit.recycle_and_log().
+- Deletion: delete_service.DeleteService, the only way anything is deleted:
+  delete_guard's refusals, then recycle_windows (Recycle Bin via
+  SHFileOperationW, after bin_blockers' checks) on Windows, file_ops.recycle
+  (Finder on macOS; `gio trash` or a manual XDG Trash move on Linux)
+  elsewhere.
 - Permissions: scanner._scan_one()/_rollup() and main_window's ⚠ rows and
   inaccessible-paths banner; main_window._request_elevation().
 - Cloud placeholders: scanner.is_cloud_placeholder_attrs() only ever sees
   Windows file attributes, so placeholders are only recognized there;
   DuplicatesMixin._find_duplicate_files skips them.
 - Protected locations: settings.DEFAULT_DUPLICATE_EXCLUDES, via
-  cleanup_recommendations.is_protected_path().
+  cleanup_recommendations.is_protected_path(); and for every delete,
+  delete_guard.refusal_reason().
 """
 
 from history import get_app_metadata, set_app_metadata
@@ -57,9 +60,10 @@ def mark_onboarding_seen():
 def _safe_deletion(platform):
     if platform == WINDOWS:
         where = (
-            "Delete sends files and folders to the Recycle Bin instead of erasing them, "
-            "though Windows erases outright anything its Recycle Bin can't hold, such as "
-            "items on most network drives."
+            "Delete sends files and folders to the Recycle Bin instead of erasing them. "
+            "Some things can't go there, such as items on network, removable or subst "
+            "drives, or paths of about 260 characters or more; for those the app says why "
+            "and asks before deleting permanently."
         )
     elif platform == MACOS:
         where = (
@@ -74,8 +78,8 @@ def _safe_deletion(platform):
     return (
         where + " Cleanup Recommendations only suggest: nothing is removed until you "
         "select it and confirm. Every delete is recorded in the Audit Log (Tools ▸ "
-        "History & Trust), and a duplicate group's keeper copy can't be deleted from "
-        "Find Duplicate Files."
+        "History & Trust) with what actually happened, and a duplicate copy is only "
+        "deleted while another copy of it is still on disk."
     )
 
 
@@ -146,8 +150,10 @@ def _protected_locations(platform):
     return (
         f"System and app-managed locations, such as {examples}, are skipped by Find "
         "Duplicate Files. Cleanup Recommendations lists files there as Protected and "
-        "won't delete or archive them. Delete in the main tree and in Search & Filter "
-        "doesn't check this list, so look twice before removing anything there."
+        "won't delete or archive them. No window deletes a drive, the folder you "
+        "scanned, or a system or profile folder itself (Windows, Program Files, your "
+        "user folder, Documents, Downloads and the like), though what's inside them "
+        "can still be deleted, so look twice before removing anything there."
     )
 
 

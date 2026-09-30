@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from storage_scanner import history_retention, history_schema
+from storage_scanner.delete_outcome import is_removed
 
 APP_NAME = "NeuralStorageMatrix"
 
@@ -536,14 +537,15 @@ def get_scan_ids_by_created_at(scan_path, limit=30):
     return rows
 
 
-def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_message=None):
-    """Record one deletion/recycle action to the audit ledger.
+def record_audit_entry(source, action, path, is_dir, size_bytes, outcome, error_message=None):
+    """Record one delete request's outcome to the audit ledger.
 
-    This is the durable record of "what did this app remove, when, and
-    from where" — every deletion path in the app (main tree, Search &
-    Filter, Duplicate Files, Cleanup Recommendations) writes here via
-    storage_scanner.audit.recycle_and_log, regardless of which window
-    triggered it.
+    This is the durable record of "what did this app remove, when, from
+    where, and where did it go" — every delete in the app (main tree,
+    Search & Filter, Duplicate Files, Cleanup Recommendations, the Cleanup
+    Cart) writes here via storage_scanner.delete_service, including the
+    ones it refused. `outcome` is a storage_scanner.delete_outcome value;
+    `success` is kept as "the item is gone" for anything that reads it.
     """
     conn = _connect()
     cur = conn.cursor()
@@ -553,8 +555,8 @@ def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_
     cur.execute(
         """
         INSERT INTO audit_log
-        (created_at, source, action, path, is_dir, size_bytes, success, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (created_at, source, action, path, is_dir, size_bytes, success, error_message, outcome)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             created_at,
@@ -563,8 +565,9 @@ def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_
             path,
             int(bool(is_dir)),
             int(size_bytes),
-            int(bool(success)),
+            int(is_removed(outcome)),
             error_message,
+            outcome,
         ),
     )
 
@@ -576,15 +579,19 @@ def record_audit_entry(source, action, path, is_dir, size_bytes, success, error_
 
 
 def get_audit_log(limit=500):
-    """Every recorded audit entry, most recent first."""
+    """Every recorded audit entry, most recent first: (created_at, source,
+    action, path, is_dir, size_bytes, success, error_message, outcome)."""
     conn = _connect()
     cur = conn.cursor()
 
+    # A row with no outcome was written by an older version of the app into
+    # an already-migrated database; read it the way the migration would.
     cur.execute(
-        """
-        SELECT created_at, source, action, path, is_dir, size_bytes, success, error_message
+        f"""
+        SELECT created_at, source, action, path, is_dir, size_bytes, success, error_message,
+               COALESCE(outcome, {history_schema.LEGACY_OUTCOME_SQL})
         FROM audit_log
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT ?
     """,
         (limit,),

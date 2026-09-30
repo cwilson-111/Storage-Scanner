@@ -1,8 +1,8 @@
-"""Tests for DuplicatesMixin._remove_from_duplicate_cache: keeping
-self.duplicates (the cached "Find Duplicate Files" result reused by
-Cleanup Recommendations) consistent after a file or folder is deleted
-through any window, so a later reopen never recommends deleting something
-that's already gone.
+"""Tests for duplicate_finder.prune_groups: keeping the cached "Find Duplicate
+Files" result (reused by Cleanup Recommendations and the delete service's
+last-copy check) consistent after a file or folder is deleted through any
+window, so a later reopen never recommends deleting something that's
+already gone, or a lone survivor as "a duplicate".
 """
 
 import sys
@@ -11,87 +11,59 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner.delete_service import DeletedSet
+from storage_scanner.duplicate_finder import prune_groups
 from storage_scanner.models import FileNode, Node, detached_file
-from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
 
 def _node(path, size=100):
     return detached_file(path, size=size)
 
 
-def _app_with_duplicates(duplicates):
-    app = DuplicatesMixin()
-    app.duplicates = duplicates
-    return app
-
-
 def test_deleting_one_copy_from_a_three_way_group_leaves_the_group_intact():
     a, b, c = _node("/a"), _node("/b"), _node("/c")
-    app = _app_with_duplicates([(100, "digest1", [a, b, c])])
 
-    app._remove_from_duplicate_cache(a)
+    groups = prune_groups([(100, "digest1", [a, b, c])], DeletedSet([a]))
 
-    assert len(app.duplicates) == 1
-    _size, _digest, nodes = app.duplicates[0]
+    assert len(groups) == 1
+    _size, _digest, nodes = groups[0]
     assert set(nodes) == {b, c}
 
 
 def test_deleting_one_copy_from_a_two_way_group_drops_the_whole_group():
     a, b = _node("/a"), _node("/b")
-    app = _app_with_duplicates([(100, "digest1", [a, b])])
-
-    app._remove_from_duplicate_cache(a)
 
     # Only one copy remains -- it's no longer a duplicate of anything, so
     # the group must be dropped entirely, not shrunk to a single-item group.
-    assert app.duplicates == []
+    assert prune_groups([(100, "digest1", [a, b])], DeletedSet([a])) == []
 
 
 def test_deleting_an_unrelated_node_leaves_other_groups_untouched():
     a, b = _node("/a"), _node("/b")
     x, y = _node("/x"), _node("/y")
-    app = _app_with_duplicates([(100, "digest1", [a, b]), (200, "digest2", [x, y])])
 
-    app._remove_from_duplicate_cache(_node("/unrelated"))
+    groups = prune_groups(
+        [(100, "digest1", [a, b]), (200, "digest2", [x, y])], DeletedSet([_node("/unrelated")])
+    )
 
-    assert len(app.duplicates) == 2
+    assert len(groups) == 2
 
 
 def test_deleting_a_folder_removes_every_duplicate_file_nested_inside_it():
     folder = Node("/root/sub", "sub")
     inside_a = FileNode(folder, folder.add_file("a", 100))
-    inside_b = _node("/root/sub/b")
+    inside_b = _node("/root/sub/deeper/b")  # a different view, same folder on disk
     outside_c = _node("/root/other/c")
+    sibling_d = _node("/root/sub2/d")  # shares the folder's name as a prefix only
 
-    app = _app_with_duplicates(
+    groups = prune_groups(
         [
-            (100, "digest1", [inside_a, inside_b]),
-            (200, "digest2", [outside_c, _node("/root/other/d")]),
-        ]
+            (100, "digest1", [inside_a, inside_b, _node("/root/other/e")]),
+            (200, "digest2", [outside_c, sibling_d]),
+        ],
+        DeletedSet([folder]),
     )
 
-    app._remove_from_duplicate_cache(folder)
-
-    # inside_a's group had only inside_a + inside_b -- removing inside_a
-    # drops it to one copy, so the whole group is gone. The unrelated
-    # second group must be untouched.
-    assert len(app.duplicates) == 1
-    _size, _digest, nodes = app.duplicates[0]
-    assert outside_c in nodes
-
-
-def test_noop_when_there_are_no_cached_duplicates_yet():
-    app = DuplicatesMixin()
-    app.duplicates = None
-
-    app._remove_from_duplicate_cache(_node("/a"))  # must not raise
-
-    assert app.duplicates is None
-
-
-def test_noop_when_cached_duplicates_is_an_empty_list():
-    app = _app_with_duplicates([])
-
-    app._remove_from_duplicate_cache(_node("/a"))
-
-    assert app.duplicates == []
+    # The first group lost both copies under the folder, leaving one: gone.
+    # The second is untouched: /root/sub2 isn't inside /root/sub.
+    assert groups == [(200, "digest2", [outside_c, sibling_d])]

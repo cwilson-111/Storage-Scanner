@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 import history
 from storage_scanner import history_schema
+from storage_scanner.delete_outcome import FAILED, UNVERIFIED
 
 # The version 1 DDL exactly as init_history_db() created it.
 V1_TABLES = (
@@ -198,7 +199,9 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
     assert "c:\\orphan" not in {path for (path,) in _query(v1_db, "SELECT path FROM folder_paths")}
 
     assert history.list_budgets() == [(1, "c:\\data", 5000, "2026-01-01T00:00:00")]
-    assert len(history.get_audit_log()) == 1
+    # A version 1 row only knew the delete call returned success -- which a
+    # silent permanent delete also did -- so it can't claim "recycled".
+    assert [row[6:] for row in history.get_audit_log()] == [(1, None, UNVERIFIED)]
     assert _query(v1_db, "SELECT COUNT(*) FROM known_install_locations") == [(1,)]
     if with_app_metadata:
         assert history.get_app_metadata("turbo_scan_enabled") == "1"
@@ -212,6 +215,41 @@ def test_a_migrated_database_is_left_alone_by_every_later_start(v1_db):
     history.init_history_db()
 
     assert _everything(v1_db) == migrated
+
+
+def test_a_version_2_audit_log_gets_outcomes_that_never_claim_recycled(v1_db):
+    history.init_history_db()
+    conn = sqlite3.connect(v1_db)
+    conn.execute("DROP TABLE audit_log")
+    conn.execute(V1_TABLES[2])  # version 2's audit_log was version 1's
+    conn.executemany(
+        "INSERT INTO audit_log VALUES (?, ?, 'Main tree', 'recycle', ?, 0, 10, ?, ?)",
+        [
+            (1, "2026-09-01T00:00:00", "Q:\\gone.txt", 1, None),
+            (2, "2026-09-02T00:00:00", "C:\\locked.txt", 0, "Recycle/Trash operation failed"),
+        ],
+    )
+    conn.execute("UPDATE app_metadata SET value = '2' WHERE key = 'schema_version'")
+    conn.commit()
+    conn.close()
+
+    history.init_history_db()
+
+    assert history.get_app_metadata("schema_version") == "3"
+    assert [(row[3], row[6], row[8]) for row in history.get_audit_log()] == [
+        ("C:\\locked.txt", 0, FAILED),
+        ("Q:\\gone.txt", 1, UNVERIFIED),
+    ]
+    # A row an older copy of the app writes afterwards, with no outcome, reads
+    # the same way.
+    conn = sqlite3.connect(v1_db)
+    conn.execute(
+        "INSERT INTO audit_log (created_at, source, action, path, is_dir, size_bytes, success)"
+        " VALUES ('2026-09-03T00:00:00', 'Main tree', 'recycle', 'C:\\x', 0, 1, 1)"
+    )
+    conn.commit()
+    conn.close()
+    assert history.get_audit_log()[0][8] == UNVERIFIED
 
 
 def test_scans_saved_after_migrating_compare_with_migrated_ones(v1_db):

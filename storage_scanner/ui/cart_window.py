@@ -22,29 +22,11 @@ from tkinter import (
     ttk,
 )
 
-from storage_scanner import audit
-from storage_scanner.audit import recycle_and_log
+from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS
-
-
-def _cart_failure_reason(node):
-    """A specific reason a cart item couldn't be deleted, when one is
-    knowable, falling back to the same generic message every other
-    delete-confirmation dialog in the app already shows.
-
-    Cart items can sit queued for a long time before "Execute Deletions"
-    runs, which makes audit.check_stale's TOCTOU refusal far more likely
-    to fire here than anywhere else — worth naming specifically rather
-    than lumping it into "could not delete" like a permissions/in-use
-    failure.
-    """
-    stale_message = audit.check_stale(node)
-    if stale_message is not None:
-        return stale_message
-    return "Could not delete — it may be in use, protected, or require admin rights."
 
 
 class CartMixin:
@@ -198,39 +180,24 @@ class CartMixin:
                 parent=win,
             ):
                 return
-            # Built once per batch: which cart nodes still have a live row
-            # in the main tree (main_window._remove_main_tree_row's ancestor
-            # rollup/refresh only applies there) vs. only in the scanned
-            # model (search_window._remove_search_result_from_tree).
-            iid_for_node = {v: k for k, v in self.node_by_iid.items()}
-
-            deleted = 0
-            failures = []  # (path, reason)
-
-            for node, source_label in effective:
-                if recycle_and_log(node, source=f"Cleanup Cart ({source_label})"):
-                    deleted += 1
-                    self._remove_from_duplicate_cache(node)
-                    main_iid = iid_for_node.get(node)
-                    if main_iid is not None and self.tree.exists(main_iid):
-                        self._remove_main_tree_row(main_iid)
-                    else:
-                        self._remove_search_result_from_tree(node)
-                else:
-                    failures.append((node.path, _cart_failure_reason(node)))
+            # Every item goes through the delete service, which records each
+            # outcome, says why anything wasn't deleted, and takes whatever
+            # was removed (and anything inside a removed folder) out of the
+            # cart and every open window.
+            requests = [
+                DeleteRequest(
+                    node,
+                    f"Cleanup Cart ({source_label})",
+                    as_duplicate=self.cart.is_duplicate_item(node),
+                )
+                for node, source_label in effective
+            ]
+            self._delete_nodes(requests, parent=win)
+            # Refused or failed items leave the cart too: each was reported.
+            for node, _label in effective:
                 self.cart.remove(node)
-
             populate()
             self._refresh_cart_indicator()
-            self.status_var.set(f"Deleted {deleted:,} item(s) to {TRASH_NAME}.")
-
-            if failures:
-                detail = "\n\n".join(f"{path}\n  {reason}" for path, reason in failures[:10])
-                messagebox.showerror(
-                    "Storage Scanner",
-                    "Some items could not be deleted:\n\n" + detail,
-                    parent=win,
-                )
 
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
         button_bar.pack(side=BOTTOM, fill=X)

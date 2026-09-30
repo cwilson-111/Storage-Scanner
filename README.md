@@ -180,10 +180,15 @@ packages were bundled.
   archive is written and verified. Works best on text/logs/uncompressed
   documents — already-compressed formats (video, photos, PDFs) won't
   shrink much, and the UI tells you that before you commit.
-- **Deletes go to the Recycle Bin/Trash** — except that on Windows, items
-  the Recycle Bin can't hold (files on subst or network drives, paths over
-  260 characters) are currently deleted permanently. The fix is tracked as
-  P0-1 in the roadmap.
+- **Deletes go to the Recycle Bin/Trash** — and when the Windows Recycle
+  Bin can't hold something (subst, network or removable drives, paths over
+  260 characters, a bin that's turned off or too small), the app says why
+  and deletes nothing unless you confirm a permanent delete. Drive roots,
+  the scanned folder itself, and system and profile folders are refused;
+  a folder of 10 GB or 50,000 files needs its name typed to confirm. Every
+  window deletes through one service, so the Cleanup Cart and Duplicates
+  lists drop what another window deleted and never remove the last copy
+  of a duplicate.
 - **Getting Started guide** — shown once on first launch, and reopenable
   from Tools ▸ Help ▸ Getting Started…: what Delete actually does on your OS,
   which folders a scan can't read (and what Run as Admin changes), how
@@ -213,9 +218,10 @@ packages were bundled.
   and comparing two of them takes hundredths of a second (it took over a
   minute). Histories saved by earlier versions are converted automatically
   on first launch.
-- **Audit Log** — every delete/recycle action the app has ever performed,
-  from any window, with date, source, path, size, and result — a durable
-  record of what to go look for in the Recycle Bin/Trash if you need it back.
+- **Audit Log** — every delete the app has attempted, from any window,
+  with date, source, path, size, and what happened: sent to the Recycle
+  Bin/Trash, deleted permanently (after you confirmed it), refused, or
+  failed — so you know what to look for in the Recycle Bin/Trash.
 - **Storage Budgets** — right-click any folder to set a size threshold, and
   get a dismissible alert when it's exceeded — checked right after you scan
   it, and again at launch using the last saved scan, so you can see a
@@ -354,11 +360,11 @@ The full plan, with what's done and what's next, is in
 [NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
 
 **Next: the improvement backlog** ("Improvement backlog (review
-2026-09-26)" near the top of the roadmap). It comes first: delete-safety
-fixes (some deletes on Windows can bypass the Recycle Bin), code signing,
-Turbo Scan correctness and real-hardware verification, then showing what
-changed since the last scan in the main tree and treemap. The scale work
-(bounded history, a compact in-memory tree) is done.
+2026-09-26)" near the top of the roadmap). The delete-safety fixes (P0)
+are done; next come code signing, Turbo Scan correctness and real-hardware
+verification, then showing what changed since the last scan in the main
+tree and treemap. The scale work (bounded history, a compact in-memory
+tree) is done.
 
 **Later, on real demand: enterprise monitoring for computers and
 databases** (Phase 5 in the roadmap). The desktop app stays free and
