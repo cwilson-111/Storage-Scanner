@@ -290,8 +290,9 @@ def get_sampled_duplicates_from_groups(target_nodes, duplicate_groups):
 
     Returns a tuple: (sampled_count, sampled_nodes_set)
     where sampled_count is the number of target_nodes that are in groups
-    larger than 3 * DUPLICATE_HASH_CHUNK_BYTES (meaning only first/middle/last
-    1 MB was compared, not the full content).
+    larger than 3 * DUPLICATE_HASH_CHUNK_BYTES (meaning only the first,
+    middle and last DUPLICATE_HASH_CHUNK_BYTES were compared, not the full
+    content).
     """
     sampled_set = set()
     target_set = set(target_nodes)
@@ -304,6 +305,19 @@ def get_sampled_duplicates_from_groups(target_nodes, duplicate_groups):
                     sampled_set.add(node)
 
     return len(sampled_set), sampled_set
+
+
+def sampled_match_warning(count, noun):
+    """The line a delete's confirmation adds for `count` sampled matches
+    ("item(s)", "file(s)"), or "" for none."""
+    if not count:
+        return ""
+    window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
+    return (
+        f"\n\n⚠ {count} {noun} are from sampled duplicate matches (only the first, "
+        f"middle, and last {window} compared — bytes between the compared windows "
+        "weren't checked)."
+    )
 
 
 def build_duplicate_recommendations(duplicate_groups):

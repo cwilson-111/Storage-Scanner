@@ -1,14 +1,8 @@
-import sqlite3
-from datetime import datetime
-
-try:
-    import matplotlib.pyplot as plt
-except ImportError:  # pragma: no cover - optional runtime dependency
-    plt = None  # type: ignore[assignment]
-
 import logging
 import os
+import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from storage_scanner import history_files, history_retention, history_schema
@@ -674,7 +668,7 @@ def get_scan_ids_by_created_at(scan_path, limit=30):
     """{created_at: scan_id} for the same window get_scan_history(scan_path,
     limit) returns: the newest `limit` scans. A separate lookup rather than
     adding an id column to get_scan_history()'s own row shape, since
-    several existing callers (anomaly_detection.py, the matplotlib chart)
+    several existing callers (anomaly_detection.py, the forecast)
     already unpack its rows positionally and have no use
     for the id. Lets a caller that already has anomaly_detection.Anomaly
     objects (keyed by created_at) map one back to the scan ids whose
@@ -929,70 +923,3 @@ def get_latest_scan_snapshot(scan_path):
     row = cur.fetchone()
     conn.close()
     return row
-
-
-def format_bytes(num):
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if abs(num) < 1024:
-            return f"{num:.2f} {unit}"
-        num /= 1024
-    return f"{num:.2f} PB"
-
-
-def create_usage_history_chart(scan_path, output_file="usage_history.png"):
-    history = get_scan_history(scan_path)
-
-    if not history:
-        print("No history found.")
-        return None
-
-    if plt is None:
-        print("matplotlib is not installed; chart could not be generated.")
-        return None
-
-    dates = []
-    sizes_gb = []
-
-    for created_at, total_size, _file_count, _folder_count in history:
-        dates.append(datetime.fromisoformat(created_at))
-        sizes_gb.append(total_size / (1024**3))
-
-    plt.figure(figsize=(10, 5))
-    plt.plot(dates, sizes_gb, marker="o")
-    plt.title(f"Storage Usage History: {scan_path}")
-    plt.xlabel("Scan Date")
-    plt.ylabel("Used Space (GB)")
-    plt.xticks(rotation=35)
-    plt.tight_layout()
-    plt.savefig(output_file)
-    plt.close()
-
-    return output_file
-
-
-def print_growth_report(current_scan_id, previous_scan_id):
-    growth_rows = get_folder_growth(current_scan_id, previous_scan_id)
-
-    print("\nFolder Growth Report")
-    print("-" * 80)
-
-    for (
-        folder_path,
-        previous_size,
-        current_size,
-        growth_bytes,
-        growth_percent,
-        growth_type,
-        file_count,
-    ) in growth_rows:
-        percent_text = (
-            f"{growth_percent:.2f}%" if growth_percent is not None else "N/A (new folder)"
-        )
-        print(f"{folder_path}")
-        print(f"  Previous: {format_bytes(previous_size)}")
-        print(f"  Current:  {format_bytes(current_size)}")
-        print(f"  Growth:   {format_bytes(growth_bytes)}")
-        print(f"  Percent:   {percent_text}")
-        print(f"  Status:   {growth_type}")
-        print(f"  Files:    {file_count}")
-        print()

@@ -58,4 +58,3 @@ def test_optional_runtime_packages_are_listed_only_when_installed(monkeypatch):
     assert by_name["pyarrow"]["version"] == "9.9.9"
     # Not installed at build time -> must not be claimed as bundled.
     assert "openpyxl" not in by_name
-    assert "matplotlib" not in by_name

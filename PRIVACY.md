@@ -78,9 +78,9 @@ network activity," and exactly what it is limited to.
 ## Verifying this yourself
 
 Storage Scanner needs no third-party runtime dependency for anything above
-(see `sbom.json` attached to each release) — the only exceptions are three
-optional, independently-imported packages (`matplotlib` for growth-history
-charts, `pyarrow`/`openpyxl` for the Data Tools CSV export menu), none of
+(see `sbom.json` attached to each release) — the only exceptions are two
+optional, independently-imported packages (`pyarrow`/`openpyxl`, for the
+Data Tools CSV export menu), none of
 which read, write, or transmit anything beyond the local file you pick in
 their own file dialog. The app is fully open source — every claim above is
 checkable by reading the code, or by running the app inside a

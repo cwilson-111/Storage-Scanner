@@ -74,10 +74,9 @@ records the exact CPython and Tcl/Tk versions embedded in that specific
 build. Core scanning, duplicate detection, and cleanup import no third-party
 runtime package at all.
 
-Three features use an optional third-party package instead, imported only
-when that specific feature runs: `matplotlib` (growth-history charts),
-`pyarrow` (Compress CSV to Parquet), and `openpyxl` (Convert CSV to
-Excel). PyInstaller can only bundle a package that's actually installed in
+Two features use an optional third-party package instead, imported only
+when that specific feature runs: `pyarrow` (Compress CSV to Parquet) and
+`openpyxl` (Convert CSV to Excel). PyInstaller can only bundle a package that's actually installed in
 the build environment when it runs, so the standard release doesn't include
 `pyarrow`/`openpyxl`; the separate Windows-only **Data build**
 (`.github/workflows/build-data.yml`, published as a `data-v…` pre-release)

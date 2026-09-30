@@ -830,7 +830,8 @@ or the path has a `%`.**
   the smoke test.
 - Size: S.
 
-**P2-17. The sampled-duplicate warning hard-codes "1 MB".**
+**P2-17. The sampled-duplicate warning hard-codes "1 MB" — ✅ done
+(2026-09-29)**
 - Why: `ui/cart_window.py:186` and `ui/duplicate_window.py:760` hard-code
   "1 MB", while the same window formats `DUPLICATE_HASH_CHUNK_BYTES`
   elsewhere (`ui/duplicate_window.py:530`). The constant is 1 MiB
@@ -838,6 +839,8 @@ or the path has a `%`.**
   follow-up, confirmed).
 - Do: format `human_size(DUPLICATE_HASH_CHUNK_BYTES)` in both places.
 - Size: S.
+- Done: both confirmations use `cleanup_recommendations.
+  sampled_match_warning`, which formats the constant ("1.0 MB" today).
 
 **P2-18. Show what changed since the last scan in the main tree.**
 - Why: the main tree has Name, Size, On Disk, % of Parent and Files
@@ -924,7 +927,7 @@ scheduled JSON output before any service, ingest API or console. Size: L.
   a last look, remove the stray files, recreate the venv.
 - Size: S.
 
-**P3-3. The `%TEMP%` folder in the repo root.**
+**P3-3. The `%TEMP%` folder in the repo root — ✅ done (2026-09-29)**
 - Why: an empty folder created 2026-09-24 21:22:52 and last changed
   2026-09-25 20:30:05, the same second as commit 6d73e1b. No app code expands
   `%VAR%` strings: every path comes from `tempfile`, LOCALAPPDATA or
@@ -935,6 +938,8 @@ scheduled JSON output before any service, ingest API or console. Size: L.
   dev-shell artifact, not a bug users can hit.
 - Do: delete it; use `$TEMP` or `tempfile` in dev scripts.
 - Size: S.
+- Done: deleted (it had also caught a stray file from a bash command using
+  `%TEMP%` during the v1.12.0 release; `$TEMP` is used now).
 
 **P3-4. The Obsidian project note is out of date.**
 - Why: its overview still describes a single `treesize.py`, its feature list
@@ -950,13 +955,18 @@ scheduled JSON output before any service, ingest API or console. Size: L.
   default.
 - Size: S.
 
-**P3-6. The "journal wrapped" check uses the wrong field.**
+**P3-6. The "journal wrapped" check uses the wrong field — ✅ done
+(2026-09-29)**
 - Why: `turbo_read.py:277` and `usn_journal.py:225` compare the saved
   cursor with `LowestValidUsn` rather than `FirstUsn`, so the "USN journal
   wrapped" reason almost never shows; the journal read fails instead, which
   is still safe.
 - Do: compare with `first_usn`.
 - Size: S.
+- Done: `turbo_read` and `usn_journal.read_journal_changes` (parameter now
+  `first_usn`) compare the saved cursor with FirstUsn.
+- Verified: `tests/test_turbo_read.py`'s wrap case now has FirstUsn above
+  the cursor and LowestValidUsn 0, which the old check let through.
 
 **P3-7. Harden the elevated helper's output file.**
 - Why: the unelevated app picks a path in `%TEMP%` (`file_ops.py:427-429`)
@@ -991,7 +1001,7 @@ scheduled JSON output before any service, ingest API or console. Size: L.
   before anything automatic.
 - Size: S.
 
-**P3-11. Dead code and stale instructions.**
+**P3-11. Dead code and stale instructions — ✅ done (2026-09-29)**
 - Why: `history.py:759-823` (`format_bytes`, `create_usage_history_chart`,
   `print_growth_report`) has no callers, yet it keeps matplotlib listed as
   an optional "growth-history charts" dependency (PRIVACY.md line 74, the
@@ -1001,6 +1011,12 @@ scheduled JSON output before any service, ingest API or console. Size: L.
 - Do: delete the dead code and the matplotlib mentions; update the macOS
   instructions.
 - Size: S.
+- Done: `format_bytes`, `create_usage_history_chart`, `print_growth_report`
+  and the optional matplotlib import are gone from `history.py`; matplotlib
+  is no longer listed in README, PRIVACY, BUILD_PROVENANCE,
+  `requirements-dev.txt` or `make_sbom.py`. README's macOS steps give the
+  Privacy & Security → Open Anyway route for macOS 15 and later [not
+  tested here: no Mac], and Control-click → Open for 14 and earlier.
 
 Checked and fine: scheduled-task XML argument quoting; the elevated
 helper's command line; case-insensitive nesting in the Cart; recycling a

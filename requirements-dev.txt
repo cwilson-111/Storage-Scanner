@@ -1,5 +1,5 @@
 # Build-time only. Storage Scanner itself has no third-party runtime
-# dependencies (matplotlib is optional, used only for growth-history charts).
+# dependencies (the Data build adds pyarrow and openpyxl; see build-data.yml).
 pyinstaller>=6.0
 
 # Only needed to regenerate the app icon via make_icon.py (icon.ico is

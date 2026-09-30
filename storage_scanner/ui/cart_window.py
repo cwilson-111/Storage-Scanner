@@ -22,6 +22,7 @@ from tkinter import (
     ttk,
 )
 
+from storage_scanner.cleanup_recommendations import sampled_match_warning
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
@@ -161,15 +162,8 @@ class CartMixin:
             total = sum(node.size for node, _label in effective)
 
             # Check for sampled duplicates in the cart
-            sampled_count = self.cart.count_sampled_in_effective_items()
-            sampled_warning = (
-                (
-                    f"\n\n⚠ {sampled_count} item(s) are from sampled duplicate matches "
-                    "(only first, middle, and last 1 MB compared — bytes between "
-                    "the compared windows weren't checked)."
-                )
-                if sampled_count
-                else ""
+            sampled_warning = sampled_match_warning(
+                self.cart.count_sampled_in_effective_items(), "item(s)"
             )
 
             if not messagebox.askyesno(

@@ -40,9 +40,12 @@ Applications.
 
 > The app isn't notarized (that needs a paid Apple Developer account — same
 > class of cost blocker as Windows code-signing), so Gatekeeper will refuse
-> to open it the first time with an "unidentified developer" warning.
-> Right-click (or Control-click) the app in Applications → **Open** → confirm
-> **Open** in the dialog. You only need to do this once.
+> to open it the first time with an "unidentified developer" warning. On
+> macOS 15 (Sequoia) and later: open it once and close the warning, then go
+> to System Settings → **Privacy & Security**, scroll to Security and click
+> **Open Anyway** next to Storage Scanner, and confirm. On macOS 14 and
+> earlier: Control-click the app in Applications → **Open** → **Open**. You
+> only need to do this once.
 
 **Linux** — extract `StorageScanner-linux-x86_64.tar.gz`, then run
 `./StorageScanner` (mark it executable first if needed: `chmod +x StorageScanner`).
@@ -280,10 +283,10 @@ packages were bundled.
   for exactly what this does and doesn't send.
 
 Pure Python standard library for everything above — **no required
-third-party runtime dependencies**. Three features are the exceptions,
+third-party runtime dependencies**. Two features are the exceptions,
 each independently optional and only imported when actually used:
-`matplotlib` (growth-history charts), `pyarrow` (Compress CSV to Parquet),
-and `openpyxl` (Convert CSV to Excel). The app runs fully without any of
+`pyarrow` (Compress CSV to Parquet) and `openpyxl` (Convert CSV to
+Excel). The app runs fully without any of
 them installed; those specific menu items just report that the package is
 missing instead.
 

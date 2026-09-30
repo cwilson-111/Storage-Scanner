@@ -25,12 +25,12 @@ from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
-# Optional, lazily-imported runtime packages (see history.py's matplotlib
-# guard and storage_scanner/csv_to_*.py): PyInstaller only bundles one if
+# Optional, lazily-imported runtime packages (the Data build's
+# storage_scanner/csv_to_*.py): PyInstaller only bundles one if
 # it was actually installed in the build environment, so the SBOM lists
 # exactly whichever of these were present -- never a fixed list that could
 # claim a package is in a build it isn't.
-_OPTIONAL_RUNTIME_PACKAGES = ("matplotlib", "pyarrow", "openpyxl")
+_OPTIONAL_RUNTIME_PACKAGES = ("pyarrow", "openpyxl")
 
 
 def _pkg(name):

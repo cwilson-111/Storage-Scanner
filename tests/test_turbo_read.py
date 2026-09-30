@@ -89,7 +89,7 @@ def _valid_cache(monkeypatch, dirty=(), new_next_usn=500):
     monkeypatch.setattr(
         turbo_read.usn_journal,
         "read_journal_changes",
-        lambda handle, journal_id, start_usn, lowest_valid_usn=None: (list(dirty), new_next_usn),
+        lambda handle, journal_id, start_usn, first_usn=None: (list(dirty), new_next_usn),
     )
 
 
@@ -185,7 +185,7 @@ def test_a_cache_for_a_different_record_size_is_not_used(monkeypatch):
     [
         (dataclasses.replace(JOURNAL, journal_id=999), "USN journal was recreated"),
         (
-            dataclasses.replace(JOURNAL, first_usn=150, lowest_valid_usn=600),
+            dataclasses.replace(JOURNAL, first_usn=600, lowest_valid_usn=0),
             "USN journal wrapped since last scan",
         ),
     ],
@@ -378,7 +378,7 @@ def test_cancelling_mid_incremental_refresh_raises_instead_of_reading_in_full(mo
     monkeypatch.setattr(turbo_read.turbo_cache, "get_cached_volume", lambda s: CACHED_VOLUME)
     monkeypatch.setattr(turbo_read.usn_journal, "query_journal", lambda handle: JOURNAL)
 
-    def fake_read_journal_changes(handle, journal_id, next_usn, lowest_valid_usn=None):
+    def fake_read_journal_changes(handle, journal_id, next_usn, first_usn=None):
         cancel_event.set()  # user hits Cancel while applying the change set
         return [usn_journal.DirtyRecord(record_number=7, reason=0x1)], 501
 

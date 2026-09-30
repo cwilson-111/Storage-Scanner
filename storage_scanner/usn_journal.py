@@ -198,7 +198,7 @@ def ensure_journal(handle):
     return query_journal(handle)
 
 
-def read_journal_changes(handle, journal_id, start_usn, lowest_valid_usn=None):
+def read_journal_changes(handle, journal_id, start_usn, first_usn=None):
     """Read every change recorded since `start_usn`, repeatedly issuing
     FSCTL_READ_USN_JOURNAL until caught up to the journal's current head.
 
@@ -212,20 +212,22 @@ def read_journal_changes(handle, journal_id, start_usn, lowest_valid_usn=None):
     `journal_id` was captured), which the underlying FSCTL call itself
     rejects rather than this function detecting it separately.
 
-    `lowest_valid_usn`, if given, is checked against `start_usn` before
-    any journal I/O: if the journal has wrapped/been purged past
-    `start_usn`, silently reading from here on would only see records
-    that survived the purge, missing every change in the gap, with
-    nothing to signal that a full rescan is actually needed instead. The
-    caller (turbo_read._try_incremental_scan) already checks this
-    itself from its own freshly-queried JournalState before calling here
-    -- this is a second, self-contained check so the function can't
-    silently misbehave for some future caller that forgets to.
+    `first_usn` (the journal's FirstUsn: the oldest record it still holds),
+    if given, is checked against `start_usn` before any journal I/O: if
+    the journal has wrapped/been purged past `start_usn`, silently reading
+    from here on would only see records that survived the purge, missing
+    every change in the gap, with nothing to signal that a full rescan is
+    actually needed instead. (LowestValidUsn is not that: it's where this
+    journal instance began, which a purge doesn't move.) The caller
+    (turbo_read._try_incremental_scan) already checks this itself from its
+    own freshly-queried JournalState before calling here -- this is a
+    second, self-contained check so the function can't silently misbehave
+    for some future caller that forgets to.
     """
-    if lowest_valid_usn is not None and start_usn < lowest_valid_usn:
+    if first_usn is not None and start_usn < first_usn:
         raise UsnJournalError(
-            f"start_usn ({start_usn}) is below the journal's lowest_valid_usn "
-            f"({lowest_valid_usn}) -- the journal has wrapped past this cursor"
+            f"start_usn ({start_usn}) is below the journal's FirstUsn "
+            f"({first_usn}) -- the journal has wrapped past this cursor"
         )
 
     dirty_by_record = {}

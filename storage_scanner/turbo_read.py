@@ -297,7 +297,7 @@ def _try_incremental_scan(
     state = usn_journal.query_journal(handle)  # raises UsnJournalError if no journal exists
     if state.journal_id != cached["usn_journal_id"]:
         raise _CacheOutdated("USN journal was recreated")
-    if cached["next_usn"] < state.lowest_valid_usn:
+    if cached["next_usn"] < state.first_usn:
         raise _CacheOutdated("USN journal wrapped since last scan")
 
     _post(progress_q, PHASE_READING_JOURNAL)
@@ -305,7 +305,7 @@ def _try_incremental_scan(
         handle,
         state.journal_id,
         cached["next_usn"],
-        lowest_valid_usn=state.lowest_valid_usn,
+        first_usn=state.first_usn,
     )
 
     total = len(dirty)

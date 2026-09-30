@@ -30,6 +30,7 @@ from storage_scanner.cleanup_recommendations import (
     is_sampled_duplicate,
     keeper_reason,
     pick_keeper,
+    sampled_match_warning,
 )
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.duplicate_finder import find_duplicate_files, settle_group
@@ -420,13 +421,7 @@ class DuplicatesMixin:
             return copies, len(selected) - len(copies)
 
         def sampled_warning(count):
-            return (
-                f"\n\n⚠ {count} file(s) are from sampled matches "
-                "(only first, middle, and last 1 MB compared — bytes between "
-                "the compared windows weren't checked)."
-                if count
-                else ""
-            )
+            return sampled_match_warning(count, "file(s)")
 
         def delete_selected_duplicates():
             targets, skipped_keepers = selected_copies()

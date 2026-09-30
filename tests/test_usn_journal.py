@@ -320,7 +320,7 @@ def test_read_journal_changes_raises_on_journal_id_mismatch(monkeypatch):
         read_journal_changes(_FAKE_HANDLE, journal_id=999, start_usn=100)
 
 
-def test_read_journal_changes_raises_when_start_usn_is_below_lowest_valid(monkeypatch):
+def test_read_journal_changes_raises_when_start_usn_is_below_first_usn(monkeypatch):
     """Defense in depth: even though the sole caller (turbo_read.
     _try_incremental_scan) already checks this itself before calling
     in, read_journal_changes must refuse a start_usn the journal has
@@ -334,10 +334,10 @@ def test_read_journal_changes_raises_when_start_usn_is_below_lowest_valid(monkey
     _patch(monkeypatch, kernel32)
 
     with pytest.raises(UsnJournalError):
-        read_journal_changes(_FAKE_HANDLE, journal_id=1, start_usn=100, lowest_valid_usn=200)
+        read_journal_changes(_FAKE_HANDLE, journal_id=1, start_usn=100, first_usn=200)
 
 
-def test_read_journal_changes_proceeds_when_start_usn_is_at_or_above_lowest_valid(monkeypatch):
+def test_read_journal_changes_proceeds_when_start_usn_is_at_or_above_first_usn(monkeypatch):
     kernel32 = _FakeUsnKernel32(journal_id=1, read_responses=[_read_response(next_usn=300)])
     _patch(monkeypatch, kernel32)
 
@@ -345,7 +345,7 @@ def test_read_journal_changes_proceeds_when_start_usn_is_at_or_above_lowest_vali
         _FAKE_HANDLE,
         journal_id=1,
         start_usn=200,
-        lowest_valid_usn=200,
+        first_usn=200,
     )
 
     assert dirty == []
