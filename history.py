@@ -884,6 +884,24 @@ def get_orphaned_install_locations():
     return rows
 
 
+def get_folder_sizes(scan_id):
+    """{normalized folder path: size} for one saved scan: the folders of
+    MIN_FOLDER_SIZE_FOR_HISTORY or more it kept. The main tree's Change
+    column compares with these."""
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT p.path, s.size_bytes
+        FROM folder_snapshots s
+        JOIN folder_paths p ON p.id = s.path_id
+        WHERE s.scan_id = ?
+    """,
+        (scan_id,),
+    ).fetchall()
+    conn.close()
+    return {os.path.normcase(os.path.normpath(path)): size for path, size in rows}
+
+
 def get_installed_install_locations():
     """The normalized install locations the most recent snapshot saw
     installed."""

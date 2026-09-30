@@ -30,7 +30,7 @@ from tkinter import (
     ttk,
 )
 
-from history import get_app_metadata, set_app_metadata, set_budget
+from history import get_app_metadata, get_folder_sizes, set_app_metadata, set_budget
 from storage_scanner import history_retention, turbo_scan, update_check
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.drive_info import is_ntfs_fixed_drive
@@ -41,6 +41,7 @@ from storage_scanner.file_ops import (
 )
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import (
+    change_text,
     node_display,
     resorted,
     share,
@@ -57,6 +58,7 @@ from storage_scanner.platform_support import (
     TRASH_NAME,
     resource_path,
 )
+from storage_scanner.scan_history import MIN_FOLDER_SIZE_FOR_HISTORY
 from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.search import parse_size
@@ -244,7 +246,7 @@ class MainWindowMixin:
         container = ttk.Frame(self.root, padding=(8, 4))
         container.pack(side=TOP, fill=BOTH, expand=True)
 
-        columns = ("size", "alloc", "percent", "items")
+        columns = ("size", "alloc", "percent", "items", "change")
         self.tree = ttk.Treeview(
             container, columns=columns, show="tree headings", selectmode="browse"
         )
@@ -256,6 +258,7 @@ class MainWindowMixin:
         self.tree.heading("alloc", text="On Disk", command=lambda: self._sort_by("size"))
         self.tree.heading("percent", text="% of Parent", command=lambda: self._sort_by("size"))
         self.tree.heading("items", text="Files", command=lambda: self._sort_by("items"))
+        self.tree.heading("change", text="Change", command=lambda: self._sort_by("change"))
         self._update_heading_arrows()
 
         self.tree.column("#0", width=440, anchor=W, stretch=True)
@@ -263,6 +266,9 @@ class MainWindowMixin:
         self.tree.column("alloc", width=110, anchor=E, stretch=False)
         self.tree.column("percent", width=200, anchor=W, stretch=False)
         self.tree.column("items", width=90, anchor=E, stretch=False)
+        # Growth since the last saved scan of this path (P2-18); filled in
+        # once this scan's history is saved (_show_changes).
+        self.tree.column("change", width=150, anchor=E, stretch=False)
 
         vsb = ttk.Scrollbar(container, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(container, orient="horizontal", command=self.tree.xview)
@@ -1017,7 +1023,7 @@ class MainWindowMixin:
             parent_iid,
             END,
             text=display.text,
-            values=display.values,
+            values=(*display.values, self._change_cell(node)),
             tags=self._row_tags(display, index),
         )
         self.node_by_iid[iid] = node
@@ -1034,7 +1040,9 @@ class MainWindowMixin:
             return  # already populated
 
         ordered = sorted(
-            node.children, key=sort_key_function(self._sort_key), reverse=self._sort_reverse
+            node.children,
+            key=sort_key_function(self._sort_key, self._folder_change),
+            reverse=self._sort_reverse,
         )
         for index, child in enumerate(ordered):
             self._insert_node(parent_iid, child, parent_size=node.size or 1, index=index)
@@ -1063,6 +1071,7 @@ class MainWindowMixin:
         "alloc": "On Disk",
         "percent": "% of Parent",
         "items": "Files",
+        "change": "Change",
     }
 
     def _sort_by(self, key):
@@ -1079,9 +1088,12 @@ class MainWindowMixin:
     def _update_heading_arrows(self):
         arrow = " ▼" if self._sort_reverse else " ▲"
         # The percent column is driven by the size sort, so it shares the mark.
-        active_cols = {"size": ("size", "alloc", "percent"), "name": ("#0",), "items": ("items",)}[
-            self._sort_key
-        ]
+        active_cols = {
+            "size": ("size", "alloc", "percent"),
+            "name": ("#0",),
+            "items": ("items",),
+            "change": ("change",),
+        }[self._sort_key]
         for col, base in self._HEADINGS.items():
             text = base + (arrow if col in active_cols else "")
             self.tree.heading(col, text=text)
@@ -1112,7 +1124,9 @@ class MainWindowMixin:
         node_by_iid = self.node_by_iid
         shown = tree.get_children(parent_iid)
         kids = [iid for iid in shown if iid in node_by_iid]
-        order = resorted(kids, node_by_iid, self._sort_key, self._sort_reverse)
+        order = resorted(
+            kids, node_by_iid, self._sort_key, self._sort_reverse, change_of=self._folder_change
+        )
         if order == kids:
             return
         tree.set_children(parent_iid, *order, *(iid for iid in shown if iid not in node_by_iid))
@@ -1141,7 +1155,37 @@ class MainWindowMixin:
             return
         parent_node = self.node_by_iid.get(self.tree.parent(iid))
         parent_size = (parent_node.size if parent_node else node.size) or 1
-        self.tree.item(iid, values=node_display(node, parent_size).values)
+        self.tree.item(
+            iid, values=(*node_display(node, parent_size).values, self._change_cell(node))
+        )
+
+    # -- Change since the last scan (P2-18) -------------------------------- #
+    def _previous_size(self, node):
+        return self._previous_folder_sizes.get(os.path.normcase(os.path.normpath(node.path)))
+
+    def _folder_change(self, node):
+        """A folder's growth since the previous saved scan, or None when
+        that isn't known (a file, no previous scan, or a folder that scan
+        didn't keep)."""
+        if not node.is_dir or not self._previous_folder_sizes:
+            return None
+        previous = self._previous_size(node)
+        return None if previous is None else node.size - previous
+
+    def _change_cell(self, node):
+        if not node.is_dir or not self._previous_folder_sizes:
+            return ""
+        return change_text(node.size, self._previous_size(node), MIN_FOLDER_SIZE_FOR_HISTORY)
+
+    def _show_changes(self, previous_scan_id):
+        """Fill the Change column against `previous_scan_id` (the scan saved
+        before the one on screen), and re-sort if that's the sort key."""
+        self._previous_folder_sizes = get_folder_sizes(previous_scan_id)
+        for iid, node in self.node_by_iid.items():
+            if node.is_dir and self.tree.exists(iid):
+                self.tree.set(iid, "change", self._change_cell(node))
+        if self._sort_key == "change":
+            self._resort_tree()
 
     # -- Constraints Functions --------------------------------------------- #
     def _forget_subtree(self, iid):

@@ -74,6 +74,7 @@ def _app(tk_root):
             self.root = root
             self.root_node = None
             self.scan_thread = None
+            self._previous_folder_sizes = {}
             self.node_by_iid = {}
             self._heat_tags = set()
             self._sort_key = "size"

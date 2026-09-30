@@ -73,6 +73,9 @@ class HistoryMixin:
 
         if previous_scan_id:
             self.status_var.set(f"Scan complete. History saved. Growth rows: {len(growth_rows):,}")
+            # Unless another scan has already replaced the tree this was for.
+            if not self._scan_running() and self.root_node is not None:
+                self._show_changes(previous_scan_id)
         else:
             self.status_var.set(
                 "Scan complete. History saved. Scan the same path again to calculate growth."

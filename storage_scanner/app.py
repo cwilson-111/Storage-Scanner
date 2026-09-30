@@ -88,10 +88,13 @@ class StorageScannerApp(
         # the scan's result (see LiveTreeMixin._scan_running).
         self._scan_active = False
         self._history_thread = None  # the running history save, if any
+        # {normalized folder path: size} from the scan saved before the one
+        # on screen: the main tree's Change column (MainWindowMixin._show_changes).
+        self._previous_folder_sizes = {}
         self.root_node = None
         self.node_by_iid = {}  # treeview iid -> Node
         self._heat_tags = set()  # quantized heat tags configured so far
-        self._sort_key = "size"  # "name" | "size" | "items"
+        self._sort_key = "size"  # "name" | "size" | "items" | "change"
         self._sort_reverse = True  # sizes default biggest-first
 
         history_warning = _open_history()

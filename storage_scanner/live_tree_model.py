@@ -94,20 +94,39 @@ def node_display(node, parent_size):
     return row_display(node, node.size, node.alloc_size, node.file_count, parent_size)
 
 
-def sort_key_function(key):
+def sort_key_function(key, change_of=None):
     """The key a level's rows sort by for a heading's sort key ("name",
-    "size" or "items"); sizes and counts read a folder's running totals
-    while a scan is still filling them in."""
+    "size", "items" or "change"); sizes and counts read a folder's running
+    totals while a scan is still filling them in. "change" needs
+    `change_of(node)`, a folder's growth since the last scan or None (not
+    known), which sorts as no change."""
     if key == "name":
         return lambda node: node.name.lower()
     if key == "items":
         return lambda node: node.file_count
+    if key == "change" and change_of is not None:
+        return lambda node: change_of(node) or 0
     return lambda node: node.size
 
 
-def resorted(order, node_of, key, reverse):
+def resorted(order, node_of, key, reverse, change_of=None):
     """`order` (a level's row ids, as shown) sorted by `key`. Rows that
     compare equal keep the order they're shown in, so a level full of
     still-empty folders doesn't reshuffle on every pass."""
-    sort_key = sort_key_function(key)
+    sort_key = sort_key_function(key, change_of)
     return sorted(order, key=lambda iid: sort_key(node_of[iid]), reverse=reverse)
+
+
+def change_text(size, previous_size, tracked_size):
+    """A folder's Change column: its growth since the last scan, "" when
+    there's nothing to say. `previous_size` is None when the last scan kept
+    no row for it -- history keeps only folders of `tracked_size` or more,
+    so a folder that big now either appeared or crossed that size."""
+    if previous_size is None:
+        return "new / <50 MB" if size >= tracked_size else ""
+    delta = size - previous_size
+    if delta == 0:
+        return "no change"
+    sign = "+" if delta > 0 else "−"
+    percent = f" ({sign}{abs(delta) / previous_size * 100:.1f}%)" if previous_size else ""
+    return f"{sign}{human_size(abs(delta))}{percent}"

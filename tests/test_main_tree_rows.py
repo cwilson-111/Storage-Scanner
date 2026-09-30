@@ -15,6 +15,7 @@ from storage_scanner.app import StorageScannerApp
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import node_display
 from storage_scanner.settings import apply_theme
+from storage_scanner.ui import main_window
 
 # name -> size in bytes. Names differ in case so the name sort is seen to
 # ignore it; every size differs so the size sort has one right answer.
@@ -31,6 +32,7 @@ class _TreeOnly(StorageScannerApp):
         self.root = root
         self.root_node = None
         self.scan_thread = None
+        self._previous_folder_sizes = {}
         self.node_by_iid = {}
         self._heat_tags = set()
         self._sort_key = "size"
@@ -207,4 +209,27 @@ def test_a_deleted_row_leaves_the_rest_in_order_restriped_with_fresh_shares(app,
     # A later click sorts what's left.
     app._sort_by("size")
     assert _names(app, root_iid) == ["Zed", "E.txt", "b.txt", "d.txt", "sub"]
+    _assert_striped(app, root_iid)
+
+
+def test_the_change_column_shows_growth_since_the_last_scan_and_sorts_by_it(
+    app, scanned, monkeypatch
+):
+    root_iid = scanned
+    sub, zed = (app.node_by_iid[_row(app, root_iid, name)] for name in ("sub", "Zed"))
+    previous = {
+        os.path.normcase(os.path.normpath(sub.path)): sub.size + 500,  # shrank by 500 B
+        os.path.normcase(os.path.normpath(zed.path)): max(zed.size - 2048, 1),  # grew
+    }
+    monkeypatch.setattr(main_window, "get_folder_sizes", lambda scan_id: previous)
+
+    app._show_changes(previous_scan_id=1)
+
+    assert app.tree.set(_row(app, root_iid, "sub"), "change").startswith("−500 B")
+    assert app.tree.set(_row(app, root_iid, "Zed"), "change").startswith("+")
+    # Files and folders the last scan didn't keep (all under 50 MB) say nothing.
+    assert app.tree.set(root_iid, "change") == ""
+    app._sort_by("change")
+    folders = [n for n in _names(app, root_iid) if app.node_by_iid[_row(app, root_iid, n)].is_dir]
+    assert folders == ["Zed", "sub"]
     _assert_striped(app, root_iid)

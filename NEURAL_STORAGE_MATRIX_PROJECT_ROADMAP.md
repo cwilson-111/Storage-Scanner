@@ -869,7 +869,8 @@ or the path has a `%`.**
 - Done: both confirmations use `cleanup_recommendations.
   sampled_match_warning`, which formats the constant ("1.0 MB" today).
 
-**P2-18. Show what changed since the last scan in the main tree.**
+**P2-18. Show what changed since the last scan in the main tree — column ✅
+done (2026-09-29); filter and treemap colour not yet.**
 - Why: the main tree has Name, Size, On Disk, % of Parent and Files
   (`ui/main_window.py:239-243`). Growth against the previous scan exists
   only inside Growth History, and it's the thing TreeSize Free and WizTree
@@ -878,6 +879,18 @@ or the path has a `%`.**
   `folder_snapshots` for folders over the 50 MB threshold, a "changed only"
   filter, and growth as a treemap colour (P2-19).
 - Size: M. Verify: rescan after adding a file; the column shows it.
+- Done: the main tree has a sortable "Change" column. When this scan's
+  history is saved, `MainWindowMixin._show_changes` loads the previous
+  scan's folder sizes (`history.get_folder_sizes`) and fills every folder
+  row: "+10.0 MB (+16.7%)", "−500 B (…)", "no change", or "new / <50 MB"
+  for a folder of 50 MB or more the last scan didn't keep; files and
+  smaller folders stay blank. Rows opened later get it too, and it's
+  cleared when a new scan starts. Sorting by it uses
+  `live_tree_model.sort_key_function(key, change_of)`.
+- Verified: the real app on its real mainloop: scan a 60 MB folder, add a
+  10 MB file, rescan: the folder and its parent read "+10.0 MB (+16.7%)".
+  `tests/test_main_tree_rows.py` checks the cells and the Change sort.
+- Not done: the "changed only" filter; growth as a treemap colour (P2-19).
 
 **P2-19. Treemap: nested, in the main window, coloured by type, age or
 growth.**

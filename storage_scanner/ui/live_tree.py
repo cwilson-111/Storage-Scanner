@@ -120,6 +120,7 @@ class LiveTreeMixin:
         self.node_by_iid.clear()
         self.root_node = None
         self.duplicates = None
+        self._previous_folder_sizes = {}  # the Change column waits for this scan's save
         self._duplicates_scan_root = None
         self.cart.clear()
         self._refresh_cart_indicator()
