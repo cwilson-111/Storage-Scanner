@@ -48,7 +48,7 @@ def main(drive, target_names):
     for record_number, record in matches:
         print(f"=== record #{record_number} (frn={record.frn}) ===")
         print(f"  is_directory: {record.is_directory}")
-        print(f"  is_reparse_point: {record.is_reparse_point}")
+        print(f"  is_link: {record.is_link}")
         print(f"  logical_size: {record.logical_size:,}")
         print(f"  alloc_size: {record.alloc_size:,}")
         print(f"  names ({len(record.names)}):")

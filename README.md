@@ -180,8 +180,15 @@ packages were bundled.
   archive is written and verified. Works best on text/logs/uncompressed
   documents — already-compressed formats (video, photos, PDFs) won't
   shrink much, and the UI tells you that before you commit.
-- **Everything goes through the Recycle Bin/Trash.** Nothing in this app
-  permanently deletes a file.
+- **Deletes go to the Recycle Bin/Trash** — and when the Windows Recycle
+  Bin can't hold something (subst, network or removable drives, paths over
+  260 characters, a bin that's turned off or too small), the app says why
+  and deletes nothing unless you confirm a permanent delete. Drive roots,
+  the scanned folder itself, and system and profile folders are refused;
+  a folder of 10 GB or 50,000 files needs its name typed to confirm. Every
+  window deletes through one service, so the Cleanup Cart and Duplicates
+  lists drop what another window deleted and never remove the last copy
+  of a duplicate.
 - **Getting Started guide** — shown once on first launch, and reopenable
   from Tools ▸ Help ▸ Getting Started…: what Delete actually does on your OS,
   which folders a scan can't read (and what Run as Admin changes), how
@@ -211,9 +218,10 @@ packages were bundled.
   and comparing two of them takes hundredths of a second (it took over a
   minute). Histories saved by earlier versions are converted automatically
   on first launch.
-- **Audit Log** — every delete/recycle action the app has ever performed,
-  from any window, with date, source, path, size, and result — a durable
-  record of what to go look for in the Recycle Bin/Trash if you need it back.
+- **Audit Log** — every delete the app has attempted, from any window,
+  with date, source, path, size, and what happened: sent to the Recycle
+  Bin/Trash, deleted permanently (after you confirmed it), refused, or
+  failed — so you know what to look for in the Recycle Bin/Trash.
 - **Storage Budgets** — right-click any folder to set a size threshold, and
   get a dismissible alert when it's exceeded — checked right after you scan
   it, and again at launch using the last saved scan, so you can see a
@@ -232,7 +240,13 @@ packages were bundled.
   detection and budgets all include it. `--notify` (with `--save-history`)
   shows a desktop notification if the folder is over its budget; if it
   can't (e.g. Windows notifications are turned off), it says why on stderr
-  and in the app log, and the exit code is unchanged.
+  and in the app log, and the exit code is unchanged. The Windows download
+  is a windowed program: typed into cmd.exe or PowerShell it writes to that
+  console, but an interactive prompt doesn't wait for it, so use
+  `start /wait` (cmd.exe) or pipe it (`| Out-Host`, PowerShell) to wait for
+  it and get its exit code. With no console and no `--output FILE` (Task
+  Scheduler, a shortcut), JSON or CSV output has nowhere to go: it exits 1
+  and says so in the app log, where its other messages go too.
 - **Scheduled scans** — Tools ▸ History & Trust ▸ Schedule Scans… scans a
   folder daily or weekly and saves each run to scan history, so growth
   tracking keeps working without you remembering to rescan. On Windows it
@@ -298,7 +312,9 @@ land in `dist/`.
 
 Releases are also built automatically by GitHub Actions — push a tag like
 `v1.0.0` and `StorageScanner.exe`, `StorageScanner.dmg`, and
-`StorageScanner-linux-x86_64.tar.gz` are all attached to the release.
+`StorageScanner-linux-x86_64.tar.gz` are all attached to the release, with
+that version's section of [`CHANGELOG.md`](CHANGELOG.md) as the release
+notes (the release fails if there isn't one).
 
 ## Running the test suite
 
@@ -307,16 +323,21 @@ pip install -r requirements-dev.txt
 pytest tests/          # also enforces the coverage floor
 ruff check .           # lint + import order
 black --check .        # formatting (drop --check to apply)
-mypy storage_scanner/  # type checking
+mypy storage_scanner/ history.py  # type checking
 ```
 
 All four read their settings from `pyproject.toml`, and CI runs the same
-four commands as the `test` job every release build depends on, plus
+four commands as the `test` job every release build depends on, on every
+push and pull request to `main`, plus
 `python benchmarks/scale.py --check`, which fails the build if memory per
 file, history size per scan, the scans and bytes two years of daily scans
 leave behind, the SQLite work to save and compare a 20,000-folder scan,
 Turbo cache size per record, or the records a folder rescan loads get more
 than 15% worse than `benchmarks/baseline.json`.
+
+`pip install pre-commit` then `pre-commit install` runs the ruff and black
+checks on every commit, pinned to the versions CI uses
+(`.pre-commit-config.yaml`).
 
 ### Benchmarking the scanner
 
@@ -351,13 +372,17 @@ the test suite (`tests/test_benchmark_scan.py`), so CI gates them too.
 The full plan, with what's done and what's next, is in
 [NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md](NEURAL_STORAGE_MATRIX_PROJECT_ROADMAP.md).
 
-**Next: scale for very large drives.** Scan history now stays bounded and
-compact; next is a smaller in-memory tree, measured by
-`benchmarks/scale.py`.
+**Next: the improvement backlog** ("Improvement backlog (review
+2026-09-26)" near the top of the roadmap). The delete-safety fixes (P0) and
+the next-release fixes (P1), including Turbo Scan's size and link
+handling, are done, except two: checking Turbo Scan on real hardware and
+code signing. After those comes showing what changed since the last scan
+in the main tree and treemap. The scale work (bounded history, a compact
+in-memory tree) is done.
 
-**Then: enterprise monitoring for computers and databases** (Phase 5 in the
-roadmap). The desktop app stays free and local-first; the fleet pieces are
-separate and reuse the same scan engine.
+**Later, on real demand: enterprise monitoring for computers and
+databases** (Phase 5 in the roadmap). The desktop app stays free and
+local-first; the fleet pieces are separate and reuse the same scan engine.
 
 | Step | What it adds |
 |---|---|

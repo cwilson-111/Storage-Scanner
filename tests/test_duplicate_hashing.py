@@ -12,10 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner import duplicate_finder
 from storage_scanner.cleanup_recommendations import is_sampled_duplicate
 from storage_scanner.models import Node
 from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
-from storage_scanner.ui import duplicate_window
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
 
@@ -56,11 +56,10 @@ def test_small_identical_files_are_grouped_and_a_unique_file_is_not(tmp_path):
 
 
 def test_unreadable_file_hashes_to_none(tmp_path):
-    app = DuplicatesMixin()
     missing = str(tmp_path / "does_not_exist.bin")
 
-    assert app._partial_hash_file(missing, 10) is None
-    assert app._middle_hash_file(missing, 10) is None
+    assert duplicate_finder.partial_hash_file(missing, 10) is None
+    assert duplicate_finder.middle_hash_file(missing, 10) is None
 
 
 def test_files_that_changed_size_since_the_scan_are_not_matched(tmp_path, monkeypatch):
@@ -70,7 +69,7 @@ def test_files_that_changed_size_since_the_scan_are_not_matched(tmp_path, monkey
     byte-exact match, so a file whose size no longer matches the scan is
     left out instead."""
     chunk = 4
-    monkeypatch.setattr(duplicate_window, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(duplicate_finder, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
     grown = bytes(5 * chunk)
     app = _make_app(tmp_path, [("a.bin", grown), ("b.bin", _flip(grown, len(grown) // 2))])
     sizes = app.root_node.file_sizes
@@ -86,7 +85,7 @@ def test_any_single_byte_difference_splits_files_up_to_three_chunks(tmp_path, mo
     the middle window has to exactly bridge the gap -- so every single-byte
     difference, at every position and every size, must keep files apart."""
     chunk = 4
-    monkeypatch.setattr(duplicate_window, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(duplicate_finder, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
 
     files = []
     for size in range(1, 3 * chunk + 1):

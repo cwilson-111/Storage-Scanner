@@ -42,7 +42,7 @@ def _record(
     sequence_number=1,
     logical_size=0,
     alloc_size=0,
-    is_reparse_point=False,
+    is_link=False,
     is_cloud_placeholder=False,
     mtime=0.0,
     atime=0.0,
@@ -52,7 +52,7 @@ def _record(
         frn=_frn(record_number, sequence_number),
         is_directory=is_directory,
         file_attributes=file_attributes,
-        is_reparse_point=is_reparse_point,
+        is_link=is_link,
         is_cloud_placeholder=is_cloud_placeholder,
         mtime=mtime,
         atime=atime,
@@ -102,12 +102,22 @@ def test_init_cache_db_is_idempotent_and_creates_all_tables(tmp_path, monkeypatc
     assert {"cached_volumes", "cached_records", "cached_names"} <= tables
 
 
-@pytest.mark.parametrize("old_column", ["record_blob", "record_json"])
-def test_init_cache_db_wipes_an_older_single_value_cache(tmp_path, monkeypatch, old_column):
-    # A real on-disk cache from an older version: one pickle (record_blob) or
-    # JSON (record_json) value per record. It must be wiped entirely --
-    # volumes row included -- so the next scan does one clean full read
-    # instead of trusting a volume row with no readable records behind it.
+@pytest.mark.parametrize(
+    "old_columns",
+    [
+        "record_blob BLOB NOT NULL DEFAULT x'00'",
+        "record_json BLOB NOT NULL DEFAULT x'00'",
+        # The columnar layout before is_link: its is_reparse_point rows made
+        # OneDrive folders links, and its alloc_size of a compressed or
+        # sparse file was the allocated, not the compressed, size.
+        "is_reparse_point INTEGER NOT NULL DEFAULT 0, logical_size INTEGER NOT NULL DEFAULT 0",
+    ],
+)
+def test_init_cache_db_wipes_an_older_cache_layout(tmp_path, monkeypatch, old_columns):
+    # A real on-disk cache from an older version. It must be wiped entirely
+    # -- volumes row included -- so the next scan does one clean full read
+    # instead of trusting a volume row whose records are unreadable or
+    # wrong (an incremental scan re-reads only the records that changed).
     db_path = tmp_path / "turbo_scan_cache.db"
     monkeypatch.setattr(turbo_cache, "DB_NAME", db_path)
     conn = sqlite3.connect(db_path)
@@ -126,11 +136,14 @@ def test_init_cache_db_wipes_an_older_single_value_cache(tmp_path, monkeypatch, 
     conn.execute(f"""
         CREATE TABLE cached_records (
             volume_serial INTEGER NOT NULL, record_number INTEGER NOT NULL,
-            frn INTEGER NOT NULL, {old_column} BLOB NOT NULL,
+            frn INTEGER NOT NULL, {old_columns},
             PRIMARY KEY (volume_serial, record_number)
         )
     """)
-    conn.execute("INSERT INTO cached_records VALUES (?, 5, ?, x'00')", (VOLUME_SERIAL, ROOT_FRN))
+    conn.execute(
+        "INSERT INTO cached_records (volume_serial, record_number, frn) VALUES (?, 5, ?)",
+        (VOLUME_SERIAL, ROOT_FRN),
+    )
     conn.commit()
     conn.close()
 
@@ -166,12 +179,17 @@ def test_save_full_scan_then_load_round_trips_every_field(tmp_path, monkeypatch)
             logical_size=100,
             alloc_size=4096,
         ),
-        _record(  # a genuine cloud placeholder -- also a reparse point
+        _record(  # a genuine cloud placeholder -- a reparse point, not a link
             12,
             names=[_name(_frn(10), "placeholder.bin")],
-            is_reparse_point=True,
             is_cloud_placeholder=True,
             file_attributes=0x400 | 0x1000,
+        ),
+        _record(  # a symbolic link to a file
+            13,
+            names=[_name(ROOT_FRN, "shortcut")],
+            is_link=True,
+            file_attributes=0x400,
         ),
     ]
 
@@ -206,18 +224,24 @@ def test_a_folder_rescan_loads_only_that_folder(tmp_path, monkeypatch):
     assert loaded[_frn(11)].names == [_name(_frn(10), "a.txt")]
 
 
-def test_a_reparse_point_is_followed_only_when_it_is_the_folder_asked_for(tmp_path, monkeypatch):
+def test_a_scan_expands_a_onedrive_folder_but_never_a_link(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
     _save(
         [
             _root(),
-            _record(10, is_directory=True, is_reparse_point=True, names=[_name(ROOT_FRN, "Link")]),
+            _record(10, is_directory=True, is_link=True, names=[_name(ROOT_FRN, "Link")]),
             _record(11, names=[_name(_frn(10), "inside.txt")]),
+            _record(
+                20, is_directory=True, file_attributes=0x431, names=[_name(ROOT_FRN, "OneDrive")]
+            ),
+            _record(21, names=[_name(_frn(20), "synced.txt")]),
         ]
     )
 
-    assert _frn(11) not in _load()  # a junction met during a scan stays a leaf
-    assert _frn(11) in _load("Link")  # but scanning the junction itself follows it
+    loaded = _load()
+
+    assert _frn(11) not in loaded  # a junction met during a scan stays a leaf
+    assert _frn(21) in loaded  # a OneDrive folder (reparse, not a link) is walked
 
 
 def test_find_record_by_path_matches_case_insensitively_and_returns_disk_spelling(
@@ -246,7 +270,7 @@ def test_find_record_by_path_refuses_missing_names_and_paths_through_files_or_li
         [
             _root(),
             _record(10, names=[_name(ROOT_FRN, "file.txt")]),
-            _record(11, is_directory=True, is_reparse_point=True, names=[_name(ROOT_FRN, "Link")]),
+            _record(11, is_directory=True, is_link=True, names=[_name(ROOT_FRN, "Link")]),
             _record(12, names=[_name(_frn(11), "inside.txt")]),
         ]
     )

@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import history
+from storage_scanner.delete_outcome import DELETED_PERMANENTLY, FAILED, RECYCLED
 
 
 def test_get_latest_scan_id_returns_most_recent_scan(tmp_path, monkeypatch):
@@ -174,7 +175,16 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         path="/Users/me/dup.bin",
         is_dir=False,
         size_bytes=1234,
-        success=True,
+        outcome=RECYCLED,
+    )
+    history.record_audit_entry(
+        source="Cleanup Cart (Main tree)",
+        action="recycle",
+        path="Q:\\big.iso",
+        is_dir=False,
+        size_bytes=50,
+        outcome=DELETED_PERMANENTLY,
+        error_message="Confirmed, because the Recycle Bin can't hold it (subst drive).",
     )
     history.record_audit_entry(
         source="Main tree",
@@ -182,28 +192,27 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         path="/Users/me/locked",
         is_dir=True,
         size_bytes=999,
-        success=False,
+        outcome=FAILED,
         error_message="It may be in use, protected, or require admin rights.",
     )
 
     rows = history.get_audit_log()
 
-    assert len(rows) == 2
+    assert len(rows) == 3
     # Most recent first.
-    created_at, source, action, path, is_dir, size_bytes, success, error_message = rows[0]
+    created_at, source, action, path, is_dir, size_bytes, success, message, outcome = rows[0]
     assert source == "Main tree"
     assert action == "recycle"
     assert path == "/Users/me/locked"
     assert is_dir == 1
     assert size_bytes == 999
-    assert success == 0
-    assert "protected" in error_message
+    assert (success, outcome) == (0, FAILED)
+    assert "protected" in message
 
-    second = rows[1]
-    assert second[1] == "Duplicate Files"
-    assert second[5] == 1234
-    assert second[6] == 1
-    assert second[7] is None
+    # A permanent delete is gone (success) but is never reported as recycled.
+    assert (rows[1][6], rows[1][8]) == (1, DELETED_PERMANENTLY)
+    assert rows[2][1] == "Duplicate Files"
+    assert rows[2][5:] == (1234, 1, None, RECYCLED)
 
 
 def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
@@ -218,7 +227,7 @@ def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
             path=f"/tmp/f{i}.bin",
             is_dir=False,
             size_bytes=i,
-            success=True,
+            outcome=RECYCLED,
         )
 
     assert len(history.get_audit_log(limit=3)) == 3
@@ -394,3 +403,38 @@ def test_folder_growth_limit_breaks_ties_by_path(tmp_path, monkeypatch):
     rows = history.get_folder_growth(newer, older, limit=3)
 
     assert [row[0] for row in rows] == ["C:/Example/c", "C:/Example/a", "C:/Example/b"]
+
+
+def _rows(db_path, sql):
+    conn = sqlite3.connect(db_path)
+    try:
+        return sorted(conn.execute(sql))
+    finally:
+        conn.close()
+
+
+def test_removing_a_scan_deletes_only_its_rows(tmp_path, monkeypatch):
+    """Growth History's "Remove this scan": the scan, its folder rows and
+    the folder paths only it had go; the scans around it and every path
+    they still use stay, and they still compare with each other."""
+    db_path = tmp_path / "storage_history.db"
+    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    history.init_history_db()
+    first = _save({"C:/Example/kept": 100, "C:/Example/shared": 50})
+    junk = _save({"C:/Example/shared": 94_000, "C:/Example/only-junk": 1})
+    last = _save({"C:/Example/kept": 120, "C:/Example/shared": 60})
+
+    assert history.delete_scan(junk) is True
+
+    assert sorted(row[0] for row in history.list_scans_for_path("C:/Example")) == [first, last]
+    assert _rows(db_path, "SELECT DISTINCT scan_id FROM folder_snapshots") == [(first,), (last,)]
+    assert _rows(db_path, "SELECT path FROM folder_paths") == [
+        ("C:/Example/kept",),
+        ("C:/Example/shared",),
+    ]
+    assert history.get_previous_scan_id("C:/Example", last) == first
+    assert [row[:4] for row in history.get_folder_growth(last, first)] == [
+        ("C:/Example/kept", 100, 120, 20),
+        ("C:/Example/shared", 50, 60, 10),
+    ]
+    assert history.delete_scan(junk) is False

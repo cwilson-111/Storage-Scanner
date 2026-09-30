@@ -42,7 +42,7 @@ _RECORD_FIELDS = (
     "frn",
     "is_directory",
     "file_attributes",
-    "is_reparse_point",
+    "is_link",
     "is_cloud_placeholder",
     "mtime",
     "atime",
@@ -69,15 +69,18 @@ def init_cache_db():
 
     cur.execute("PRAGMA table_info(cached_records)")
     existing_columns = {row[1] for row in cur.fetchall()}
-    if existing_columns and "logical_size" not in existing_columns:
+    if existing_columns and "is_link" not in existing_columns:
         # An older layout: one opaque JSON (record_json, before 2026-09-17)
-        # or pickle (record_blob, before 2026-09-24) value per record, which
-        # this version neither reads nor wants to keep -- loading any of it
-        # meant deserializing the whole volume on every rescan. Wiping all
-        # three tables forces exactly one full rescan on the next call:
-        # correct, just not cached yet. Dropping only cached_records would
-        # leave a cached_volumes row that still passes the record_size
-        # check, pointing at an empty record set.
+        # or pickle (record_blob, before 2026-09-24) value per record, or
+        # columns with an is_reparse_point flag (before 2026-09-29) that
+        # can't tell a OneDrive folder from a junction, stored alongside
+        # the allocated rather than the compressed size of compressed and
+        # sparse files. None of it is worth keeping: an incremental scan
+        # re-reads only changed records, so old rows would stay wrong.
+        # Wiping all three tables forces exactly one full rescan on the
+        # next call: correct, just not cached yet. Dropping only
+        # cached_records would leave a cached_volumes row that still
+        # passes the record_size check, pointing at an empty record set.
         cur.execute("DROP TABLE IF EXISTS cached_names")
         cur.execute("DROP TABLE cached_records")
         cur.execute("DROP TABLE IF EXISTS cached_volumes")
@@ -103,7 +106,7 @@ def init_cache_db():
             frn                   INTEGER NOT NULL,
             is_directory          INTEGER NOT NULL,
             file_attributes       INTEGER NOT NULL,
-            is_reparse_point      INTEGER NOT NULL,
+            is_link               INTEGER NOT NULL,
             is_cloud_placeholder  INTEGER NOT NULL,
             mtime                 REAL NOT NULL,
             atime                 REAL NOT NULL,
@@ -169,7 +172,7 @@ def _record_row(volume_serial, record):
         record.frn,
         int(record.is_directory),
         record.file_attributes,
-        int(record.is_reparse_point),
+        int(record.is_link),
         int(record.is_cloud_placeholder),
         record.mtime,
         record.atime,
@@ -193,12 +196,12 @@ def _name_rows(volume_serial, records):
 
 def _record_from_row(row, names=None):
     """A ParsedRecord from the _RECORD_COLUMNS values in `row`."""
-    frn, is_dir, attrs, is_reparse, is_cloud, mtime, atime, size, alloc = row
+    frn, is_dir, attrs, is_link, is_cloud, mtime, atime, size, alloc = row
     return ParsedRecord(
         frn=frn,
         is_directory=bool(is_dir),
         file_attributes=attrs,
-        is_reparse_point=bool(is_reparse),
+        is_link=bool(is_link),
         is_cloud_placeholder=bool(is_cloud),
         mtime=mtime,
         atime=atime,
@@ -211,7 +214,7 @@ def _record_from_row(row, names=None):
 _INSERT_RECORD = """
     INSERT OR REPLACE INTO cached_records
         (volume_serial, record_number, frn, is_directory, file_attributes,
-         is_reparse_point, is_cloud_placeholder, mtime, atime, logical_size, alloc_size)
+         is_link, is_cloud_placeholder, mtime, atime, logical_size, alloc_size)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 _INSERT_NAME = """
@@ -338,8 +341,8 @@ def find_record_by_path(volume_serial, root_frn, parts):
     names, comparing each the way turbo_read.find_subtree_node does
     (os.path.normcase). Returns (ParsedRecord without names, the on-disk
     spelling of each component), or None if any component is missing --
-    or sits inside a reparse point, which a scan never expands (only the
-    requested folder itself is followed, see mft_scan._make_node).
+    or sits inside a link, which a scan never expands (see
+    mft_scan._is_folder).
 
     Raises TurboCacheCorruptError if the database is damaged."""
 
@@ -356,7 +359,7 @@ def find_record_by_path(volume_serial, root_frn, parts):
         actual_parts = []
 
         for index, part in enumerate(parts):
-            if index and not (record.is_directory and not record.is_reparse_point):
+            if index and not (record.is_directory and not record.is_link):
                 return None  # a file or an unexpanded link has no children
             cur.execute(
                 f"SELECT n.name, {_R_RECORD_COLUMNS} "
@@ -377,9 +380,9 @@ def find_record_by_path(volume_serial, root_frn, parts):
     return _reading(query)
 
 
-# Every folder a scan of the target would expand -- the target itself, even
-# a reparse point (the requested root is always followed), then every
-# directory below it that isn't one -- and every name directly inside them.
+# Every folder a scan of the target would expand -- the target itself, then
+# every directory below it that isn't a link -- and every name directly
+# inside them.
 # UNION (not UNION ALL) makes a corrupt parent loop terminate. CROSS JOIN
 # pins SQLite's join order so each expanded folder drives a primary-key
 # lookup of its own children; left to itself, the planner scanned every
@@ -396,7 +399,7 @@ _SUBTREE_QUERY = f"""
         CROSS JOIN cached_records r
         WHERE n.volume_serial = :volume AND n.parent_frn = e.frn
           AND r.volume_serial = :volume AND r.record_number = n.record_number
-          AND r.is_directory = 1 AND r.is_reparse_point = 0
+          AND r.is_directory = 1 AND r.is_link = 0
     )
     SELECT n.record_number, n.parent_frn, n.name, n.namespace,
            {_R_RECORD_COLUMNS}

@@ -19,6 +19,7 @@ sequential/random-access volume reader.
 import stat as _stat
 import struct
 from dataclasses import dataclass, field
+from typing import Optional
 
 from storage_scanner.scanner import is_cloud_placeholder_attrs
 
@@ -48,7 +49,30 @@ _ATTR_STANDARD_INFORMATION = 0x10
 _ATTR_ATTRIBUTE_LIST = 0x20
 _ATTR_FILE_NAME = 0x30
 _ATTR_DATA = 0x80
+_ATTR_REPARSE_POINT = 0xC0
 _ATTR_END_MARKER = 0xFFFFFFFF
+
+# -- Attribute flags (the common header's Flags field) ---------------------- #
+# A compressed or sparse non-resident attribute carries one more 8-byte
+# field right after the non-resident header: the clusters it really
+# occupies on disk. AllocatedSize still counts every cluster of its range,
+# including the ones compression saved and the holes of a sparse file.
+_ATTR_FLAG_COMPRESSION_MASK = 0x00FF
+_ATTR_FLAG_SPARSE = 0x8000
+_COMPRESSED_SIZE_OFFSET = _ATTR_COMMON_SIZE + _ATTR_NONRESIDENT_SIZE  # 64
+
+# -- Reparse tags (the first 4 bytes of $REPARSE_POINT) --------------------- #
+# The Cloud Files API's tags (OneDrive Files On-Demand and other sync
+# engines): IO_REPARSE_TAG_CLOUD and its variants _CLOUD_1.._CLOUD_F,
+# which differ only in bits 12-15, plus the older IO_REPARSE_TAG_ONEDRIVE.
+_REPARSE_TAG_CLOUD = 0x9000001A
+_REPARSE_TAG_CLOUD_MASK = 0xFFFF0FFF
+_REPARSE_TAG_ONEDRIVE = 0x80000021
+# Windows Overlay Filter compression (Compact OS, `compact /exe`): the
+# unnamed $DATA is sparse and empty, and the compressed bytes live in a
+# named $DATA stream instead.
+_REPARSE_TAG_WOF = 0x80000017
+_WOF_STREAM_NAME = "WofCompressedData"
 
 # -- $STANDARD_INFORMATION (resident): only the fixed, always-present ------ #
 # -- creation/modified/changed/accessed FILETIMEs + FileAttributes matter -- #
@@ -107,15 +131,25 @@ class ParsedRecord:
 
     `logical_size`/`alloc_size` are this record's own file data only (0 for
     directories) -- mirroring storage_scanner.models.Node before rollup, not
-    after. `names` always has at least one entry (a record with none isn't
+    after. `alloc_size` is what the data really occupies on disk, as
+    GetCompressedFileSizeW reports it for the Compatible engine: less than
+    the logical size for a compressed, sparse or Compact OS-compressed file.
+    `names` always has at least one entry (a record with none isn't
     linked into any directory and is treated as unparseable -- see
     parse_base_record).
+
+    `is_link` marks a reparse point that stands for another path -- a
+    junction, symbolic link or mount point -- which a scan never follows
+    below its root. A cloud-sync reparse point (OneDrive Files On-Demand)
+    isn't one: that folder holds its own local files, and the cloud filter
+    hides its reparse bit from ordinary callers, so the Compatible engine
+    walks it like any folder.
     """
 
     frn: int
     is_directory: bool
     file_attributes: int
-    is_reparse_point: bool
+    is_link: bool
     is_cloud_placeholder: bool
     mtime: float
     atime: float
@@ -131,12 +165,26 @@ class _RawAttribute:
     non_resident: bool
     is_named: bool = False  # True for a named stream (e.g. an alternate
     # data stream) rather than the primary attribute
+    name: str = ""  # decoded for a named $DATA stream only
     value: bytes = b""
     allocated_size: int = 0
     real_size: int = 0
     initialized_size: int = 0
+    compressed_size: Optional[int] = None  # compressed or sparse only
     data_runs: bytes = b""  # non-resident only; still encoded, never
     # decoded here -- see decode_data_runs
+
+    def on_disk_size(self):
+        """Bytes this attribute's value really occupies on disk."""
+        if not self.non_resident:
+            # Resident data lives inside the MFT record itself -- there's
+            # no separate cluster allocation, so this is just its length
+            # (matching how tiny/resident files show up through the
+            # fallback engine's GetCompressedFileSizeW path).
+            return len(self.value)
+        if self.compressed_size is not None:
+            return self.compressed_size
+        return self.allocated_size
 
 
 @dataclass
@@ -235,8 +283,8 @@ def _iter_attributes(fixed, header):
     Each attribute's own `length` field (not a hardcoded header size) is
     the stride to the next one -- this is what keeps the walk correct
     regardless of a non-resident attribute's optional trailing
-    CompressedSize field (present only when CompressionUnit != 0), since
-    that field is never read as part of computing the next offset.
+    CompressedSize field (present only when it's compressed or sparse),
+    since that field is never read as part of computing the next offset.
     """
     offset = header["first_attribute_offset"]
     end = min(header["bytes_in_use"], len(fixed))
@@ -246,12 +294,18 @@ def _iter_attributes(fixed, header):
             break
         if offset + _ATTR_COMMON_SIZE > end:
             break
-        _type, length, non_resident, name_length, _name_offset, _flags, attribute_id = (
+        _type, length, non_resident, name_length, name_offset, flags, attribute_id = (
             struct.unpack_from(_ATTR_COMMON_FORMAT, fixed, offset)
         )
         if length == 0 or offset + length > end:
             break  # corrupt -- stop walking defensively rather than loop/overrun
         is_named = name_length != 0
+        name = ""
+        if is_named and attr_type == _ATTR_DATA:
+            name_start = offset + name_offset
+            name = fixed[name_start : name_start + name_length * 2].decode(
+                "utf-16-le", errors="replace"
+            )
 
         if non_resident:
             nrh_off = offset + _ATTR_COMMON_SIZE
@@ -266,6 +320,16 @@ def _iter_attributes(fixed, header):
                     real_size,
                     initialized_size,
                 ) = struct.unpack_from(_ATTR_NONRESIDENT_FORMAT, fixed, nrh_off)
+                compressed_size = None
+                size_end = _COMPRESSED_SIZE_OFFSET + 8
+                if (
+                    flags & (_ATTR_FLAG_COMPRESSION_MASK | _ATTR_FLAG_SPARSE)
+                    and size_end <= length
+                    and (not data_runs_offset or data_runs_offset >= size_end)
+                ):
+                    compressed_size = struct.unpack_from(
+                        "<Q", fixed, offset + _COMPRESSED_SIZE_OFFSET
+                    )[0]
                 # The run-list bytes are never decoded here (see module
                 # docstring) -- only sliced out, using the attribute's own
                 # documented data_runs_offset field (not assumed from the
@@ -282,9 +346,11 @@ def _iter_attributes(fixed, header):
                     attribute_id=attribute_id,
                     non_resident=True,
                     is_named=is_named,
+                    name=name,
                     allocated_size=allocated_size,
                     real_size=real_size,
                     initialized_size=initialized_size,
+                    compressed_size=compressed_size,
                     data_runs=data_runs,
                 )
         else:
@@ -300,6 +366,7 @@ def _iter_attributes(fixed, header):
                     attribute_id=attribute_id,
                     non_resident=False,
                     is_named=is_named,
+                    name=name,
                     value=value,
                 )
 
@@ -349,17 +416,18 @@ def _dedup_file_names(names):
     return list(by_parent.values())
 
 
-def _read_nonresident_attribute_list(raw_attr, record_source):
-    """Reassemble a non-resident $ATTRIBUTE_LIST's real bytes by reading its
-    own data runs' clusters straight off the volume, or None if that isn't
+def _read_nonresident_value(raw_attr, record_source):
+    """Reassemble a non-resident attribute's real bytes (an $ATTRIBUTE_LIST
+    or a $REPARSE_POINT that didn't fit in its record) by reading its own
+    data runs' clusters straight off the volume, or None if that isn't
     possible (a record_source that can't do raw cluster reads -- e.g. the
     lightweight record_at-only fakes some tests use -- an empty/undecodable
     run list, or a failed read), all treated as best-effort, never an error.
 
     Assumes no run is sparse (offset_size == 0), which decode_data_runs
-    silently drops -- true of every $ATTRIBUTE_LIST seen in practice, since
-    sparse is a $DATA-stream-only NTFS feature, but would misalign/truncate
-    the reassembled bytes if it ever weren't.
+    silently drops -- true of both attributes in practice, since sparse is
+    a $DATA-stream-only NTFS feature, but would misalign/truncate the
+    reassembled bytes if it ever weren't.
     """
     read_clusters = getattr(record_source, "read_clusters", None)
     if read_clusters is None or not raw_attr.data_runs:
@@ -382,12 +450,12 @@ def _parse_attribute_list(raw_attr, record_source):
     A resident list is parsed directly out of the record. A non-resident
     one (needed once a heavily hard-linked file/directory -- common in
     WinSxS/GAC-style system areas -- has too many $FILE_NAME/other entries
-    to fit inline) is reassembled via _read_nonresident_attribute_list;
-    if that fails, this returns [] ("no extra attributes resolvable"),
-    same as always, never an error.
+    to fit inline) is reassembled via _read_nonresident_value; if that
+    fails, this returns [] ("no extra attributes resolvable"), same as
+    always, never an error.
     """
     if raw_attr.non_resident:
-        value = _read_nonresident_attribute_list(raw_attr, record_source)
+        value = _read_nonresident_value(raw_attr, record_source)
         if value is None:
             return []
     else:
@@ -412,6 +480,22 @@ def _parse_attribute_list(raw_attr, record_source):
         )
         offset += entry_length
     return entries
+
+
+def _reparse_tag(raw_attr, record_source):
+    """The reparse tag at the start of a $REPARSE_POINT's value, or 0 when
+    it can't be read (the caller then treats the record as a link, the
+    safe default -- see ParsedRecord)."""
+    if raw_attr is None:
+        return 0
+    value = raw_attr.value
+    if raw_attr.non_resident:
+        value = _read_nonresident_value(raw_attr, record_source) or b""
+    return struct.unpack_from("<I", value)[0] if len(value) >= 4 else 0
+
+
+def _is_cloud_tag(tag):
+    return (tag & _REPARSE_TAG_CLOUD_MASK) == _REPARSE_TAG_CLOUD or tag == _REPARSE_TAG_ONEDRIVE
 
 
 def parse_base_record(record_number, record_source):
@@ -479,6 +563,8 @@ def parse_base_record(record_number, record_source):
     std_info = None
     names = []
     data_attr = None
+    wof_attr = None
+    reparse_attr = None
     for attr in attrs:
         if attr.attr_type == _ATTR_STANDARD_INFORMATION and std_info is None:
             std_info = _parse_standard_information(attr.value)
@@ -489,8 +575,13 @@ def parse_base_record(record_number, record_source):
         elif attr.attr_type == _ATTR_DATA and not attr.is_named and data_attr is None:
             # A file can have named $DATA attributes too (alternate data
             # streams), but v1 only tracks the primary unnamed stream --
-            # ADS support is explicitly out of scope for now.
+            # ADS support is explicitly out of scope for now. The one
+            # exception is Compact OS's stream, below.
             data_attr = attr
+        elif attr.attr_type == _ATTR_DATA and attr.name == _WOF_STREAM_NAME:
+            wof_attr = attr
+        elif attr.attr_type == _ATTR_REPARSE_POINT and reparse_attr is None:
+            reparse_attr = attr
 
     if std_info is None:
         return None
@@ -499,26 +590,26 @@ def parse_base_record(record_number, record_source):
     if not names:
         return None
 
+    file_attributes = std_info["file_attributes"]
+    is_reparse_point = bool(file_attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
+    tag = _reparse_tag(reparse_attr, record_source) if is_reparse_point else 0
+
     if data_attr is None:
         logical_size = 0
         alloc_size = 0
-    elif data_attr.non_resident:
-        logical_size = data_attr.real_size
-        alloc_size = data_attr.allocated_size
     else:
-        # Resident data lives inside the MFT record itself -- there's no
-        # separate on-disk cluster allocation to report, so allocated size
-        # is just the logical size (matching how tiny/resident files show
-        # up through the fallback engine's GetCompressedFileSizeW path).
-        logical_size = len(data_attr.value)
-        alloc_size = logical_size
+        logical_size = data_attr.real_size if data_attr.non_resident else len(data_attr.value)
+        alloc_size = data_attr.on_disk_size()
+    if tag == _REPARSE_TAG_WOF and wof_attr is not None:
+        # The unnamed stream is sparse and holds nothing; the compressed
+        # stream is what the file occupies on disk.
+        alloc_size += wof_attr.on_disk_size()
 
-    file_attributes = std_info["file_attributes"]
     return ParsedRecord(
         frn=_pack_frn(header["sequence_number"], record_number),
         is_directory=bool(header["flags"] & _RECORD_FLAG_IS_DIRECTORY),
         file_attributes=file_attributes,
-        is_reparse_point=bool(file_attributes & _FILE_ATTRIBUTE_REPARSE_POINT),
+        is_link=is_reparse_point and not _is_cloud_tag(tag),
         is_cloud_placeholder=is_cloud_placeholder_attrs(file_attributes),
         mtime=std_info["mtime"],
         atime=std_info["atime"],
@@ -534,9 +625,10 @@ def get_nonresident_data_runs_bytes(record_bytes, attr_type=_ATTR_DATA, sector_s
     there's no such attribute (missing, resident, or named).
 
     This is the one place run-list bytes are exposed at all -- everything
-    else in this module (parse_base_record included) only ever reads a
-    non-resident attribute's AllocatedSize/RealSize/InitializedSize header
-    fields, never its runs, because sizing never needs them. The sole
+    else in this module (parse_base_record included) sizes a non-resident
+    attribute from its header fields (AllocatedSize/RealSize/
+    CompressedSize), never its runs, and decodes runs only to read a
+    spilled-out $ATTRIBUTE_LIST or $REPARSE_POINT. The sole
     consumer of this function is storage_scanner.mft_volume, which needs
     the $MFT's own record #0 $DATA runs to find every physical extent of a
     (possibly fragmented) $MFT -- decoding those bytes into (length, LCN)

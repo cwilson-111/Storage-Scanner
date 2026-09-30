@@ -16,6 +16,8 @@ elevated helper (mft_scan_cli.py). It reports which path it took
 (MftRead), for the scan-details strip.
 """
 
+import os
+import stat
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -25,12 +27,17 @@ from storage_scanner import mft_volume, scanner
 from storage_scanner.drive_info import get_volume_root, is_ntfs_fixed_drive
 from storage_scanner.file_ops import run_elevated_scan_windows
 from storage_scanner.logging_setup import logger
+from storage_scanner.mft_scan import LinkedFolderError
 from storage_scanner.platform_support import IS_ROOT, IS_WINDOWS
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.turbo_read import MftRead, scan_subtree_using_cache
 
 ENGINE_TURBO = "turbo"
 ENGINE_COMPATIBLE = "compatible"
+
+# Set in every reparse tag that stands for another path (a junction or
+# mount point, a symbolic link) -- Windows' IsReparseTagNameSurrogate.
+_NAME_SURROGATE_BIT = 0x20000000
 
 
 @dataclass
@@ -95,6 +102,36 @@ def choose_engine(path, turbo_enabled):
     return ENGINE_TURBO
 
 
+def _linked_path_reason(path):
+    """Why Turbo Scan can't read `path` -- because it is, or lies inside, a
+    junction, symbolic link or mount point -- or None if it can.
+
+    Turbo Scan finds a folder by walking names down the volume's MFT, and a
+    link's own record there is always empty: its contents are the target's
+    records, maybe on another volume (see mft_scan.refuse_linked_folder,
+    which catches the same case at the record level). Checked here, before
+    anything else, so such a scan goes straight to the Compatible engine
+    instead of asking for elevation and reading the whole MFT only to fall
+    back. Each component is lstat'ed rather than comparing realpath(),
+    which also differs for an 8.3 short name. A OneDrive folder isn't a
+    name surrogate (and its reparse bit is hidden here anyway), so it stays
+    eligible.
+    """
+    current, rest = os.path.splitdrive(os.path.abspath(path))
+    current += os.sep
+    for part in rest.split(os.sep):
+        if not part:
+            continue
+        current = os.path.join(current, part)
+        try:
+            st = os.lstat(current)
+        except OSError:
+            return None  # Turbo Scan reports a path it can't find itself
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) & _NAME_SURROGATE_BIT:
+            return str(LinkedFolderError(current))
+    return None
+
+
 def _run_turbo_in_process(path, progress_q, cancel_event):
     """Already elevated: read the volume and build the tree in this same
     process, skipping the subprocess bridge entirely. Returns (Node, MftRead)."""
@@ -145,15 +182,18 @@ def scan_with_best_engine(path, progress_q, cancel_event, workers=None, turbo_en
     anything. Turbo Scan aborts its whole attempt rather than ever
     returning a partial tree on error: a visible, harmless fallback is
     safer than silently presenting an incomplete scan as if it were
-    complete.
+    complete. A path through a junction, symbolic link or mount point
+    falls back before Turbo Scan starts (see _linked_path_reason).
     """
     if turbo_enabled is None:
         turbo_enabled = get_app_metadata("turbo_scan_enabled", "0") == "1"
 
     engine = choose_engine(path, turbo_enabled)
-    fallback_reason = None
+    fallback_reason = _linked_path_reason(path) if engine == ENGINE_TURBO else None
+    if fallback_reason is not None:
+        logger.info("Turbo Scan can't read %r, using Compatible Scan: %s", path, fallback_reason)
 
-    if engine == ENGINE_TURBO:
+    if engine == ENGINE_TURBO and fallback_reason is None:
         start = time.perf_counter()
         try:
             root_node, mft_read = _attempt_turbo_scan(path, progress_q, cancel_event)

@@ -28,9 +28,11 @@ your machine.
 - **Diagnostic logs** (for troubleshooting crashes, since a windowed build
   has no console to print to): a rotating log file under `logs/` in that
   same app-data folder.
-- **Deletion audit log**: every file the app has sent to the Recycle
-  Bin/Trash — when, from where, and how big — stored in that same SQLite
-  database and viewable in the app's own Audit Log window.
+- **Deletion audit log**: every delete the app has attempted — when, from
+  where, how big, and what actually happened (sent to the Recycle
+  Bin/Trash, deleted permanently after you confirmed it, refused, or
+  failed) — stored in that same SQLite database and viewable in the app's
+  own Audit Log window.
 
 All of it stays on your machine. Nothing here is ever uploaded. You can
 delete the whole app-data folder at any time; nothing about the app's
@@ -38,9 +40,15 @@ behavior depends on it persisting.
 
 ## What it deletes
 
-Only files and folders you explicitly select, and always by sending them
-to the Recycle Bin/Trash — never a permanent delete. See the Audit Log
-window (or the ledger above) for a full record of what's been removed.
+Only files and folders you explicitly select. Deletes go to the Recycle
+Bin/Trash. On Windows, before anything is deleted the app checks whether the
+Recycle Bin can hold it (it can't for files on subst, network or removable
+drives, paths over 260 characters, a bin that's turned off, or items bigger
+than the bin); if it can't, nothing happens unless you confirm a permanent
+delete. Drive roots, the folder a scan started from, and system and profile
+folders (Windows, Program Files, your user folder, Documents, Downloads…)
+are never deleted. See the Audit Log window (or the ledger above) for a
+record of what's been removed and where it went.
 
 ## Update check
 

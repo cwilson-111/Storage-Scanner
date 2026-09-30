@@ -202,13 +202,26 @@ def _run_one(name, n_files):
     print(json.dumps(metrics))
 
 
-def run_scenario(name, n_files):
+def sandbox_env(sandbox):
+    """The environment for a scenario subprocess, with its app-data folder
+    (history.APP_DATA_DIR, where the Turbo and cleanup caches live too) and
+    its log inside `sandbox`, never the real ones. The same variables as
+    smoke_test_build.py."""
+    env = dict(os.environ)
+    for name in ("LOCALAPPDATA", "XDG_DATA_HOME", "HOME"):
+        env[name] = os.path.join(sandbox, "appdata")
+    env["STORAGE_SCANNER_LOG_DIR"] = os.path.join(sandbox, "logs")
+    return env
+
+
+def run_scenario(name, n_files, env):
     """Run one scenario in a fresh interpreter; returns its metrics."""
     result = subprocess.run(
         [sys.executable, os.path.abspath(__file__), "--one", name, "--files", str(n_files)],
         capture_output=True,
         text=True,
         cwd=ROOT,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"{name} failed:\n{result.stderr.strip()}")
@@ -276,14 +289,16 @@ def main(argv=None):
 
     print(f"Synthetic volume: {n_files:,} files, {len(layout(n_files)) - 1:,} folders")
     metrics = {}
-    try:
-        for name in IN_MEMORY_SCENARIOS:
-            metrics.update(run_scenario(name, n_files))
-        if args.disk_files:
-            metrics.update(run_scenario("compatible_scan", args.disk_files))
-    except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 2
+    with tempfile.TemporaryDirectory(prefix="storage-scanner-bench-") as sandbox:
+        env = sandbox_env(sandbox)
+        try:
+            for name in IN_MEMORY_SCENARIOS:
+                metrics.update(run_scenario(name, n_files, env))
+            if args.disk_files:
+                metrics.update(run_scenario("compatible_scan", args.disk_files, env))
+        except RuntimeError as exc:
+            print(exc, file=sys.stderr)
+            return 2
 
     baseline = (baseline_doc or {}).get("metrics", {})
     same_size = baseline_doc is not None and baseline_doc.get("files") == n_files

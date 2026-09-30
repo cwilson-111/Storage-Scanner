@@ -47,13 +47,14 @@ def collect_folder_sizes(root_node, min_size=MIN_FOLDER_SIZE_FOR_HISTORY):
     return folder_sizes, folder_count
 
 
-def drive_capacity_bytes(path):
-    """Total capacity of the drive holding path, or 0 if it can't be read."""
+def drive_space(path):
+    """shutil.disk_usage of the drive holding path (total, used and free
+    bytes), or None if it can't be read."""
     try:
-        return shutil.disk_usage(path).total
+        return shutil.disk_usage(path)
     except Exception:
         logger.warning("disk_usage(%r) failed", path, exc_info=True)
-        return 0
+        return None
 
 
 def record_scan(node, growth_limit=50):
@@ -66,13 +67,17 @@ def record_scan(node, growth_limit=50):
     folder_sizes, folder_count = collect_folder_sizes(node)
     scan_path = normalize_scan_path(node.path)
 
+    space = drive_space(node.path)
     scan_id = history.save_scan_snapshot(
         scan_path=scan_path,
         total_size=node.size,
-        drive_capacity=drive_capacity_bytes(node.path),
+        drive_capacity=space.total if space else 0,
         file_count=node.file_count,
         folder_count=folder_count,
         folder_sizes=folder_sizes,
+        allocated_size=node.alloc_size,
+        drive_used=space.used if space else None,
+        drive_free=space.free if space else None,
     )
     previous_scan_id = history.get_previous_scan_id(
         scan_path=scan_path,

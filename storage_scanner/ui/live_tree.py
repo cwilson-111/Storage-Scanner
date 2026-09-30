@@ -101,10 +101,21 @@ class LiveTreeMixin:
             "<<TreeviewClose>>", lambda _e: self._live_open_rows.discard(tree.focus()), add="+"
         )
 
+    # The windows listing (and able to delete) rows of the scanned tree.
+    _TREE_LIST_WINDOWS = ("_search_win", "_duplicates_win", "_cleanup_win")
+
     def _begin_scan_view(self, target):
         """Clear the last scan's tree and everything tied to it, and show
-        the target's row straight away."""
+        the target's row straight away. Search & Filter, Find Duplicate
+        Files and Cleanup Recommendations close, and a duplicate search
+        still running stops: their rows would belong to the tree this scan
+        replaces (the delete service refuses those anyway)."""
         self.cancel_event.clear()
+        for name in self._TREE_LIST_WINDOWS:
+            win = getattr(self, name, None)
+            if win is not None and win.winfo_exists():
+                win.destroy()
+        self.dup_cancel_event.set()
         self.tree.delete(*self.tree.get_children())
         self.node_by_iid.clear()
         self.root_node = None
@@ -123,11 +134,14 @@ class LiveTreeMixin:
             "", END, text=self._live_root_text, values=("…", "…", "", "…"), tags=("dir", "even")
         )
 
+    def _scan_running(self):
+        return self.scan_thread is not None and self.scan_thread.is_alive()
+
     def _refuse_delete_during_scan(self, parent=None):
         """True, after saying so, while a scan is running: its rows are
         still filling in from the folders being read, and a folder deleted
         mid-read would leave the scan's totals for it undefined."""
-        if self.scan_thread is None or not self.scan_thread.is_alive():
+        if not self._scan_running():
             return False
         messagebox.showinfo(
             "Storage Scanner",

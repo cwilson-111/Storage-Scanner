@@ -74,7 +74,8 @@ def test_load_recommendations_is_empty_for_an_unseen_scan_path(tmp_path, monkeyp
 
 def test_save_and_load_round_trips_every_field(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
-    node = _node("C:/Example/big.mp4", "big.mp4", is_dir=False, size=500_000_000)
+    # Its modified time is what check_stale re-checks a cold-start row against.
+    node = detached_file("C:/Example/big.mp4", size=500_000_000, mtime=1_700_000_000.25)
     original = _rec(
         node,
         category=CATEGORY_REVIEW,
@@ -98,6 +99,35 @@ def test_save_and_load_round_trips_every_field(tmp_path, monkeypatch):
     assert rec.node.name == node.name
     assert rec.node.is_dir == node.is_dir
     assert rec.node.size == node.size
+    assert rec.node.mtime == node.mtime
+
+
+def test_a_cache_saved_before_modified_times_were_kept_still_loads(tmp_path, monkeypatch):
+    """Its rows read as "modified time unknown" (0), re-checked by size only."""
+    db_path = tmp_path / "cleanup_cache.db"
+    monkeypatch.setattr(cleanup_cache, "DB_NAME", db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE cached_cleanup_runs (scan_path TEXT PRIMARY KEY, computed_at TEXT NOT NULL);
+        CREATE TABLE cached_recommendations (
+            scan_path TEXT NOT NULL, row_id INTEGER NOT NULL, category TEXT NOT NULL,
+            node_path TEXT NOT NULL, node_name TEXT NOT NULL, node_is_dir INTEGER NOT NULL,
+            node_size INTEGER NOT NULL, reason TEXT NOT NULL, risk TEXT NOT NULL,
+            recoverable_bytes INTEGER NOT NULL, action TEXT NOT NULL,
+            PRIMARY KEY (scan_path, row_id));
+        INSERT INTO cached_cleanup_runs VALUES ('C:/Example', '2026-09-01T10:00:00');
+        INSERT INTO cached_recommendations VALUES
+            ('C:/Example', 0, 'Review', 'C:/Example/a.bin', 'a.bin', 0, 7, 'old', 'Medium', 7, 'x');
+    """)
+    conn.close()
+
+    cleanup_cache.init_cleanup_cache_db()
+    [rec] = cleanup_cache.load_recommendations(SCAN_PATH)
+    cleanup_cache.save_recommendations(SCAN_PATH, [rec])
+    [again] = cleanup_cache.load_recommendations(SCAN_PATH)
+
+    assert (rec.node.path, rec.node.size, rec.node.mtime) == ("C:/Example/a.bin", 7, 0.0)
+    assert (again.node.path, again.node.mtime) == ("C:/Example/a.bin", 0.0)
 
 
 def test_save_recommendations_preserves_original_order(tmp_path, monkeypatch):

@@ -1,16 +1,18 @@
-"""Audit Log window: a durable, read-only record of every delete/recycle
-action the app has performed, across every window that can delete something.
+"""Audit Log window: a durable, read-only record of every delete the app
+was asked to do, across every window that can delete something, and what
+actually happened: recycled, deleted permanently, refused, or failed.
 
 A mixin composed into StorageScannerApp (storage_scanner/app.py). There is
-deliberately no "Undo" button here — see storage_scanner/audit.py's
+deliberately no "Undo" button here — see storage_scanner/delete_service.py's
 docstring for why a one-click restore-from-Trash isn't offered. Recovery
-goes through the OS's own Recycle Bin/Trash (which every deletion in this
-app already routes through); this window tells you what to look for there.
+goes through the OS's own Recycle Bin/Trash; this window tells you what to
+look for there, and which items were never sent there.
 """
 
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, Toplevel, X, ttk
 
 from history import get_audit_log
+from storage_scanner.delete_outcome import DELETED_PERMANENTLY, LABELS, RECYCLED, is_removed
 from storage_scanner.file_ops import open_trash
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
@@ -35,8 +37,10 @@ class AuditMixin:
             logger.debug("Audit Log window iconbitmap failed", exc_info=True)
 
         entries = get_audit_log(limit=500)
-        reclaimed = sum(size for _c, _s, _a, _p, _d, size, success, _e in entries if success)
-        failed_count = sum(1 for row in entries if not row[6])
+        outcomes = [row[8] for row in entries]
+        recycled = sum(row[5] for row in entries if row[8] == RECYCLED)
+        permanent = outcomes.count(DELETED_PERMANENTLY)
+        not_deleted = sum(1 for outcome in outcomes if not is_removed(outcome))
 
         ttk.Label(
             win,
@@ -44,8 +48,9 @@ class AuditMixin:
             style="Accent.TLabel",
             text=(
                 f"{len(entries):,} logged action(s) — "
-                f"{human_size(reclaimed)} sent to {TRASH_NAME}"
-                + (f"  |  {failed_count:,} failed" if failed_count else "")
+                f"{human_size(recycled)} sent to {TRASH_NAME}"
+                + (f"  |  {permanent:,} deleted permanently" if permanent else "")
+                + (f"  |  {not_deleted:,} not deleted" if not_deleted else "")
             ),
         ).pack(side=TOP, fill=X)
 
@@ -54,9 +59,9 @@ class AuditMixin:
             padding=(10, 0, 10, 8),
             foreground=COLORS["muted"],
             text=(
-                f"This is a record of what was deleted, not an undo button — "
-                f"everything here went to {TRASH_NAME}, which is where to "
-                f"restore something from."
+                f"This is a record of what was deleted, not an undo button. Rows marked "
+                f"Recycled went to {TRASH_NAME}, which is where to restore them from; "
+                f"rows marked Deleted permanently can't be restored."
             ),
         ).pack(side=TOP, fill=X)
 
@@ -76,7 +81,7 @@ class AuditMixin:
         tv.column("kind", width=60, anchor="w", stretch=False)
         tv.column("path", width=440, anchor="w", stretch=True)
         tv.column("size", width=90, anchor="e", stretch=False)
-        tv.column("result", width=90, anchor="w", stretch=False)
+        tv.column("result", width=160, anchor="w", stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
@@ -95,9 +100,11 @@ class AuditMixin:
             tv.insert("", END, values=("—", "—", "—", "Nothing has been deleted yet.", "", ""))
         else:
             for index, row in enumerate(entries):
-                created_at, source, _action, path, is_dir, size_bytes, success, error_message = row
+                created_at, source, _action, path, is_dir, size_bytes, _ok, message, outcome = row
                 date_text = created_at.replace("T", " ")
-                result_text = "Recycled" if success else f"Failed: {error_message or 'unknown'}"
+                result_text = LABELS.get(outcome, outcome)
+                if message and outcome != RECYCLED:
+                    result_text = f"{result_text}: {message}"
                 iid = tv.insert(
                     "",
                     END,
@@ -109,7 +116,10 @@ class AuditMixin:
                         human_size(size_bytes),
                         result_text,
                     ),
-                    tags=("failed" if not success else "", "odd" if index % 2 else "even"),
+                    tags=(
+                        "" if outcome == RECYCLED else "failed",
+                        "odd" if index % 2 else "even",
+                    ),
                 )
                 path_by_iid[iid] = path
 

@@ -20,14 +20,15 @@ walked. This whole-volume-vs-requested-subtree scope mismatch was a real
 bug the Turbo Scan validation gate caught on a real machine (files under
 C:\\Windows\\Fonts, also hard-linked into WinSxS, showing up zeroed).
 
-Similarly, build_tree() always treats a reparse point as a leaf, never
-traversed -- correct for one encountered as a *child*, but not for the
-node a caller actually asked to scan (find_subtree_node's result): a
-requested folder that happens to be a junction/symlink should still be
-followed and its real contents shown, matching scanner.scan()'s own root-
-vs-child asymmetry. See reroot_if_reparse_point() for that one-node
-exception, applied by the caller after find_subtree_node(), before
-finalize_subtree().
+Similarly, build_tree() always treats a link (junction, symbolic link,
+mount point -- ParsedRecord.is_link) as a leaf, never traversed. A link
+that is itself the folder a caller asked to scan can't be read from the
+MFT at all: its own directory index is always empty (NTFS refuses to make
+a non-empty folder a junction), and what it shows lives under its target,
+possibly on another volume. refuse_linked_folder() turns that case into an
+error, so the caller falls back to the Compatible engine, which follows a
+linked scan root like any other. A cloud-sync folder (OneDrive) is a
+reparse point too, but not a link: it holds its own files and is walked.
 """
 
 import os
@@ -51,8 +52,8 @@ _FRN_RECORD_NUMBER_MASK = 0x0000FFFFFFFFFFFF
 
 
 def _folder(record, path, name):
-    """The Node for a directory record. A reparse point (junction,
-    symlink) is never one of these below the scan root -- see _is_folder."""
+    """The Node for a directory record. A link (junction, symlink) is
+    never one of these -- see _is_folder."""
     node = Node(path, name)
     node.mtime = record.mtime
     node.atime = record.atime
@@ -64,15 +65,12 @@ def _folder(record, path, name):
 
 
 def _is_folder(record):
-    # A reparse point (junction, symlink, OneDrive cloud-placeholder-style
-    # tag) is never traversed regardless of the record's own directory
-    # flag -- recorded as a file row, exactly like scanner.py's
-    # `is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse`.
-    # BUT only when it's encountered as a *child* during traversal: the
-    # requested scan root itself is followed, like scanner.py's root
-    # handling (`os.path.isdir(path)`) -- see reroot_if_reparse_point for
-    # where this asymmetry actually gets exercised.
-    return record.is_directory and not record.is_reparse_point
+    # A link (junction, symlink, mount point) is never traversed regardless
+    # of the record's own directory flag -- recorded as a file row, exactly
+    # like scanner.py's `is_dir = entry.is_dir(follow_symlinks=False) and
+    # not is_reparse`. A OneDrive folder is walked: its reparse bit isn't a
+    # link's (see ParsedRecord.is_link), and scanner.py never even sees it.
+    return record.is_directory and not record.is_link
 
 
 def _row_flags(record):
@@ -80,7 +78,7 @@ def _row_flags(record):
     # as a normal file, not a link -- matches scanner.py.
     if record.is_cloud_placeholder:
         return FLAG_CLOUD_PLACEHOLDER
-    return FLAG_LINK if record.is_reparse_point else 0
+    return FLAG_LINK if record.is_link else 0
 
 
 def _add_row(folder, record, name):
@@ -94,7 +92,7 @@ def _add_row(folder, record, name):
 def file_node(record, path):
     """The FileNode for a single-file scan target: exactly the row
     build_tree() attaches for `record` under its parent (a link to a file
-    stays a link -- reroot_if_reparse_point only ever follows directories)."""
+    stays a link)."""
     return detached_file(
         path, record.logical_size, record.alloc_size, record.mtime, record.atime, _row_flags(record)
     )
@@ -118,7 +116,7 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     counts hard-link occurrences whose parent was never reached while
     walking down from the root -- its parent record is missing entirely,
     its parent chain loops back on itself without ever reaching the root,
-    or its parent turned out to be a reparse point (never expanded) or an
+    or its parent turned out to be a link (never expanded) or an
     already-visited directory FRN (a cycle/duplicate-linked-directory
     guard -- see below). None of these raise; a caller that gets back a
     nonzero orphan_count can decide for itself whether that's tolerable or
@@ -126,10 +124,10 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
 
     `row_frns` maps a folder Node to [(row index, FRN), ...] for each of
     its file rows whose record has more than one name (a hard link, which
-    finalize_subtree() regroups) or is a reparse point (which
-    reroot_if_reparse_point() may follow) -- the side channel those need,
-    since a row deliberately carries no FRN. Every other row's record has
-    exactly one occurrence, so there's nothing to regroup.
+    finalize_subtree() regroups) or is a link (which refuse_linked_folder()
+    looks up) -- the side channel those need, since a row deliberately
+    carries no FRN. Every other row's record has exactly one occurrence,
+    so there's nothing to regroup.
 
     Returns (None, 0, {}) if no record matches `root_record_number` or it
     isn't a real directory -- both mean there's nothing trustworthy to
@@ -159,8 +157,8 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
     root_name = (
         root_path if root_path.endswith(os.sep) else (os.path.basename(root_path) or root_path)
     )
-    # The requested root is followed even if it's a reparse point, and is
-    # never flagged as a link -- matching scanner.py's root Node.
+    # The requested root is never flagged as a link -- matching scanner.py's
+    # root Node. (A linked folder never gets here: see refuse_linked_folder.)
     root_node = _folder(root_record, root_path, root_name)
     row_frns = {}
 
@@ -178,7 +176,7 @@ def build_tree(records, root_path, root_record_number=_ROOT_RECORD_NUMBER):
             name = name_attr.name
             if not _is_folder(child_record):
                 index = _add_row(node, child_record, name)
-                if child_record.is_reparse_point or len(child_record.names) > 1:
+                if child_record.is_link or len(child_record.names) > 1:
                     row_frns.setdefault(node, []).append((index, child_record.frn))
                 continue
 
@@ -205,49 +203,39 @@ def _row_frn(row_frns, file_node):
     return None
 
 
-def reroot_if_reparse_point(node, target_path, records, row_frns):
-    """If `node` (whatever find_subtree_node() located) is a reparse point
-    that build_tree() left as an unexpanded file row, rebuild it as a fresh
-    root and return that instead -- matching scanner.scan()'s own root-vs-
-    child asymmetry: a reparse point is only ever an unfollowable leaf
-    when encountered as a *child* during traversal, never when it's the
-    requested scan root itself (scanner.py's root handling just uses
-    os.path.isdir(), which transparently follows a reparse point; only its
-    per-child walk excludes them). Any reparse point *inside* the rebuilt
-    subtree is still correctly left as a leaf -- build_tree()'s normal
-    per-child rule takes back over one level down; only the single
-    outermost node passed in here ever gets the root treatment.
+class LinkedFolderError(RuntimeError):
+    """The folder asked for is a junction, symbolic link or mount point,
+    which Turbo Scan can't read (see refuse_linked_folder)."""
 
-    No-op (returns `node` unchanged) if it isn't actually a reparse point,
-    its FRN can't be resolved, or the underlying record turns out not to
-    be a directory after all (a reparse point can just as easily be a
-    symlink to a *file*, which scanner.py's root handling wouldn't follow
-    as a directory either -- `os.path.isdir()` would be False for it).
+    def __init__(self, path):
+        super().__init__(
+            f"{path} is a junction, symbolic link or mount point; "
+            "Turbo Scan reads only the folder's own MFT records, which for a link are empty"
+        )
 
-    Mutates `row_frns` in place to fold in the rebuilt subtree's rows, so
-    a later finalize_subtree() call on the returned node still resolves
-    hard-link scoping correctly.
+
+def refuse_linked_folder(node, target_path, records, row_frns):
+    """Raise LinkedFolderError if `node` -- whatever find_subtree_node()
+    located for `target_path` -- is a link to a folder, which build_tree()
+    left as an unexpanded file row.
+
+    Such a folder's own directory index is always empty (setting a
+    junction on a non-empty folder fails with error 145), and its contents
+    are records under the target, which may be on another volume. Turbo
+    Scan used to rebuild the link's own record as the root and showed an
+    empty tree where the Compatible engine found the target's files; the
+    caller now falls back to the Compatible engine instead, which follows
+    a linked scan root like any other (`os.path.isdir`).
+
+    A link to a file is left alone: scanner.py doesn't follow that as a
+    folder either.
     """
     if not node.is_link:
-        return node
+        return
     frn = _row_frn(row_frns, node)
-    if frn is None:
-        return node
-    original_record = next((r for r in records if r.frn == frn), None)
-    if original_record is None or not original_record.is_directory:
-        return node
-
-    record_number = frn & _FRN_RECORD_NUMBER_MASK
-    new_root, _orphan_count, new_row_frns = build_tree(
-        records,
-        root_path=target_path,
-        root_record_number=record_number,
-    )
-    if new_root is None:
-        return node
-
-    row_frns.update(new_row_frns)
-    return new_root
+    record = next((r for r in records if r.frn == frn), None) if frn is not None else None
+    if record is not None and record.is_directory:
+        raise LinkedFolderError(target_path)
 
 
 def finalize_subtree(subtree_root, row_frns):

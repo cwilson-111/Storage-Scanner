@@ -1,12 +1,13 @@
 """The Storage Scanner Tkinter application.
 
-StorageScannerApp itself is composed from fourteen mixins, each living in its
+StorageScannerApp itself is composed from fifteen mixins, each living in its
 own file under storage_scanner/ui/ — split out so the toolbar/tree, the tree
 filling in during a scan, the scan progress line, history saving, duplicate
 detection, search/filter, the treemap, cleanup recommendations, the audit
 log, budgets, export and scheduled scans, the largest-files/file-types
-windows, the Cleanup Cart, and the first-run Getting Started guide can each
-be read, changed, and tested without wading through the others.
+windows, the Cleanup Cart, the first-run Getting Started guide, and deleting
+(through storage_scanner/delete_service.py) can each be read, changed, and
+tested without wading through the others.
 """
 
 import os
@@ -14,10 +15,11 @@ import queue
 import sys
 import threading
 import webbrowser
-from tkinter import TOP, Tk, X, ttk
+from tkinter import TOP, Tk, X, messagebox, ttk
 
-from history import init_history_db
+from history import open_history_db
 from storage_scanner.cart import CartManager
+from storage_scanner.history_schema import NewerDatabaseError
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
 from storage_scanner.settings import apply_theme
@@ -26,6 +28,7 @@ from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
 from storage_scanner.ui.cart_window import CartMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
+from storage_scanner.ui.delete_dialogs import DeletionMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
 from storage_scanner.ui.history_window import HistoryMixin
@@ -53,6 +56,7 @@ class StorageScannerApp(
     AutomationMixin,
     CartMixin,
     OnboardingMixin,
+    DeletionMixin,
 ):
     def __init__(self, root, initial_path=None):
         self.root = root
@@ -78,7 +82,12 @@ class StorageScannerApp(
         self._sort_key = "size"  # "name" | "size" | "items"
         self._sort_reverse = True  # sizes default biggest-first
 
-        init_history_db()
+        history_warning = _open_history()
+        if history_warning:
+            self.root.after(
+                0,
+                lambda: messagebox.showwarning("Scan history", history_warning, parent=root),
+            )
         self.last_scan_id = None
         self.last_previous_scan_id = None
         self.last_growth_rows = []
@@ -105,6 +114,10 @@ class StorageScannerApp(
         # replaces self.root_node, since cart entries hold Node references
         # tied to the old tree.
         self.cart = CartManager()
+        # Every delete, from every window, goes through this service
+        # (storage_scanner/delete_service.py); it keeps the cart, the
+        # duplicate cache above and the tree in step afterwards.
+        self._init_deletion()
         self.dup_stats = {
             "files_total": 0,
             "files_checked": 0,
@@ -166,6 +179,24 @@ class StorageScannerApp(
         self.cancel_event.set()
         self.dup_cancel_event.set()
         self.root.destroy()
+
+
+def _open_history():
+    """Open (create, migrate or recover) the scan history for the GUI, and
+    return what the user needs to be told about it, or None. Never raises:
+    the app works without its history, so a file it can't use must not keep
+    the window from opening."""
+    try:
+        return open_history_db()
+    except NewerDatabaseError as exc:
+        logger.warning("%s", exc)
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.exception("Could not open the scan history")
+        return (
+            f"Scan history couldn't be opened ({exc}). Scanning works, but scans "
+            "won't be saved to history until this is fixed. Details are in the log."
+        )
 
 
 def main():

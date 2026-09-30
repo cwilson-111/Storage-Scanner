@@ -1,4 +1,8 @@
-"""Recycle Bin / Trash deletion and elevated-relaunch support."""
+"""macOS/Linux Trash, and elevated-relaunch support.
+
+The Windows Recycle Bin lives in recycle_windows.py; delete_service.py is the
+only caller of either.
+"""
 
 import contextlib
 import ctypes
@@ -14,18 +18,12 @@ from datetime import datetime
 from urllib.parse import quote
 
 from storage_scanner.drive_info import get_volume_root
+from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_LINUX, IS_MACOS
 from storage_scanner.scan_progress import Phase
 
 PHASE_WAITING_FOR_ELEVATION = "Waiting for administrator approval"
 PHASE_LOADING_RESULTS = "Loading the Turbo Scan results"
-
-_FO_DELETE = 3
-_FOF_SILENT = 0x0004
-_FOF_NOCONFIRMATION = 0x0010
-_FOF_ALLOWUNDO = 0x0040  # the bit that routes deletes to the Recycle Bin
-_FOF_NOERRORUI = 0x0400
-_FOF_NORECURSEREPARSE = 0x8000  # don't follow into a junction/symlink's target
 
 _SEE_MASK_NOCLOSEPROCESS = 0x00000040
 _SW_HIDE = 0
@@ -54,37 +52,6 @@ class _SHELLEXECUTEINFOW(ctypes.Structure):
         # neither member is used here
         ("hProcess", wintypes.HANDLE),
     ]
-
-
-class _SHFILEOPSTRUCTW(ctypes.Structure):
-    _fields_ = [
-        ("hwnd", wintypes.HWND),
-        ("wFunc", wintypes.UINT),
-        ("pFrom", wintypes.LPCWSTR),
-        ("pTo", wintypes.LPCWSTR),
-        ("fFlags", ctypes.c_uint16),  # FILEOP_FLAGS is a WORD
-        ("fAnyOperationsAborted", wintypes.BOOL),
-        ("hNameMappings", wintypes.LPVOID),
-        ("lpszProgressTitle", wintypes.LPCWSTR),
-    ]
-
-
-def _recycle_windows(path):
-    """Send a file or folder to the Windows Recycle Bin (so it's recoverable).
-
-    Uses the shell's SHFileOperationW with FOF_ALLOWUNDO — pure stdlib, no
-    extra dependency. `pFrom` must be double-NUL terminated. Returns True on
-    success, False otherwise.
-    """
-    op = _SHFILEOPSTRUCTW()
-    op.hwnd = None
-    op.wFunc = _FO_DELETE
-    op.pFrom = os.path.abspath(path) + "\x00\x00"
-    op.pTo = None
-    op.fFlags = (
-        _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI | _FOF_NORECURSEREPARSE
-    )
-    return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
 
 def _recycle_macos(path):
@@ -182,15 +149,16 @@ def _recycle_linux(path):
 
 
 def recycle(path):
-    """Send a file or folder to the platform Recycle Bin / Trash (recoverable).
+    """Move a file or folder to the macOS or Linux Trash (recoverable).
 
-    Returns True on success, False otherwise.
+    Returns True on success, False otherwise. Windows deletes go through
+    recycle_windows.recycle(), which reports more than success or failure.
     """
     if IS_MACOS:
         return _recycle_macos(path)
     if IS_LINUX:
         return _recycle_linux(path)
-    return _recycle_windows(path)
+    raise RuntimeError("Windows deletes go through recycle_windows (see delete_service)")
 
 
 def open_trash():
@@ -419,8 +387,9 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     already strictly better, even best-effort.)
 
     Returns (True, parsed_dict) on success, (False, error_message) on any
-    failure: elevation declined, the helper exiting non-zero, a missing or
-    unparseable output file, or cancellation.
+    failure: elevation declined, the helper exiting non-zero (with the
+    helper's own error, when it wrote one -- see _helper_failure), a
+    missing or unparseable output file, or cancellation.
     """
     volume_root = get_volume_root(path)
 
@@ -497,7 +466,7 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
             kernel32.CloseHandle(h_process)
 
         if exit_code.value != 0:
-            return False, f"Turbo Scan helper exited with code {exit_code.value}."
+            return False, _helper_failure(output_path, exit_code.value)
 
         # Reading a whole volume's result back (and turbo_scan's
         # dict_to_node after it) takes seconds on a big tree.
@@ -510,8 +479,28 @@ def run_elevated_scan_windows(path, progress_q, cancel_event):
     finally:
         with contextlib.suppress(OSError):
             os.remove(output_path)
-        with contextlib.suppress(OSError):
-            os.remove(progress_path)
+        # The progress writer's temp file too, left behind when its last
+        # swap never got past the reader (see mft_scan_cli._ProgressFileWriter).
+        for leftover in (progress_path, progress_path + ".tmp"):
+            with contextlib.suppress(OSError):
+                os.remove(leftover)
+
+
+def _helper_failure(output_path, exit_code):
+    """The failure message for a helper that exited with `exit_code`: its
+    own error, when it managed to write one to the output file (see
+    mft_scan_cli._write_error), with the traceback logged here -- the
+    helper's stderr is lost under ShellExecuteExW."""
+    message = f"Turbo Scan helper exited with code {exit_code}"
+    try:
+        with open(output_path, encoding="utf-8") as f:
+            envelope = json.load(f)
+        error = envelope["error"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return message + "."
+    if envelope.get("traceback"):
+        logger.warning("Turbo Scan helper failed:\n%s", envelope["traceback"])
+    return f"{message}: {error}"
 
 
 def _post_phase(progress_q, label):

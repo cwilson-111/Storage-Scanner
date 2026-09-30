@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import storage_scanner.file_ops as file_ops
+from storage_scanner import mft_scan_cli
 from storage_scanner.file_ops import run_elevated_scan_windows
 from storage_scanner.scan_progress import Phase
 
@@ -264,6 +265,38 @@ def test_nonzero_exit_code_returns_false_with_a_message(monkeypatch):
 
     assert ok is False
     assert "exited with code 1" in message
+
+
+def test_a_failed_helper_hands_its_own_error_to_the_gui(monkeypatch, tmp_path):
+    # The helper's stderr is lost under ShellExecuteExW; before its error
+    # went into the output file, the log said only "exited with code 1".
+    output_path = tmp_path / "mft_scan_result.json"
+    progress_path = tmp_path / "mft_scan_progress.txt"
+    _patch_mkstemp(monkeypatch, output_path, progress_path)
+
+    def unopenable_volume(drive):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(mft_scan_cli, "open_record_source", unopenable_volume)
+
+    class _FailingHelper(_FakeShellExecuteExW):
+        def __call__(self, info_ref):
+            result = super().__call__(info_ref)
+            argv = ["C:\\", "--subtree", "C:\\Data", "--output", str(output_path)]
+            kernel32.GetExitCodeProcess.exit_code = mft_scan_cli.run_mft_scan(argv)
+            return result
+
+    kernel32 = _FakeKernel32(exit_code=0, wait_results=[0])
+    _patch(monkeypatch, _FailingHelper(succeed=True), kernel32)
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+
+    ok, message = run_elevated_scan_windows("C:\\Data", queue.Queue(), threading.Event())
+
+    assert ok is False
+    assert message == (
+        "Turbo Scan helper exited with code 1: PermissionError: [Errno 13] Access is denied"
+    )
+    assert not output_path.exists()  # still cleaned up
 
 
 def test_missing_output_file_is_a_failure_not_a_crash(monkeypatch):

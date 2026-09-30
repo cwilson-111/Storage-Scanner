@@ -24,8 +24,11 @@ Every release is built by [`.github/workflows/build.yml`](.github/workflows/buil
 as three separate jobs (`build`, `build-macos`, `build-linux`) on GitHub's
 hosted `windows-latest`, `macos-latest`, and `ubuntu-latest` runners
 respectively, each gated on a `test` job (`ruff`, `black --check`, `mypy`,
-and `pytest` with a coverage floor) passing first. The core commands, in
-order:
+and `pytest` with a coverage floor) passing first. Those jobs get a
+read-only token. For a tag, a fourth job, `release`, runs once all three
+have passed: it builds and installs nothing, is the only job allowed to
+write, and publishes their files with that version's `CHANGELOG.md`
+section as the release notes. The core commands, in order:
 
 **Windows:**
 ```
