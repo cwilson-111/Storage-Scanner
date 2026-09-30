@@ -6,6 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.forecasting import forecast_days_until_full
+from storage_scanner.ui.history_window import HistoryMixin
+
+GB = 10**9
 
 BASE = datetime(2024, 1, 1)
 
@@ -81,3 +84,36 @@ def test_thin_or_noisy_data_gets_low_confidence():
     history = _history([(0, 100), (2, 400), (4, 250)])
     forecast = forecast_days_until_full(history, drive_capacity_bytes=100_000)
     assert forecast.confidence == "low"
+
+
+def _noisy_daily_history():
+    """The roadmap's P1-4 case: daily sizes of 100, 80, 120, 85 and 105 GB.
+    Growing overall, but so noisy that the slow end of the slope band isn't."""
+    return _history([(day, size * GB) for day, size in enumerate([100, 80, 120, 85, 105])])
+
+
+def test_noisy_growth_has_a_lower_bound_but_no_upper_bound():
+    forecast = forecast_days_until_full(_noisy_daily_history(), drive_capacity_bytes=500 * GB)
+
+    assert forecast.status == "ok"
+    assert forecast.days_optimistic is None
+    assert 0 < forecast.days_pessimistic <= forecast.days_estimate
+
+
+def test_growth_history_shows_noisy_growth_as_an_open_ended_range():
+    """Growth History's forecast line used to sort [None, int] here and
+    raise TypeError, leaving an empty window."""
+    forecast = forecast_days_until_full(_noisy_daily_history(), drive_capacity_bytes=500 * GB)
+
+    line = HistoryMixin()._format_forecast(forecast)
+
+    assert f"at least {forecast.days_pessimistic:,} days" in line
+
+
+def test_growth_history_shows_a_bounded_range_fewest_days_first():
+    history = _history([(0, 1000), (5, 1300), (10, 1250), (15, 1800), (20, 1700), (25, 2200)])
+    forecast = forecast_days_until_full(history, drive_capacity_bytes=10_000)
+
+    line = HistoryMixin()._format_forecast(forecast)
+
+    assert f"{forecast.days_pessimistic:,}–{forecast.days_optimistic:,} days" in line

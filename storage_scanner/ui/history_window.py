@@ -32,7 +32,7 @@ from history import (
     list_scans_for_path,
 )
 from storage_scanner.anomaly_detection import detect_size_anomalies
-from storage_scanner.forecasting import forecast_days_until_full
+from storage_scanner.forecasting import forecast_days_until_full, format_forecast_range
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
@@ -122,16 +122,8 @@ class HistoryMixin:
             return "Forecast: not growing — no fill date to estimate"
         if forecast.days_estimate == 0:
             return "Forecast: drive is already full or over capacity"
-
-        spread = forecast.days_pessimistic
-        if spread is None or forecast.days_optimistic == spread:
-            range_text = f"~{forecast.days_estimate:,} days"
-        else:
-            lo, hi = sorted([forecast.days_optimistic, spread])
-            range_text = f"~{lo:,}–{hi:,} days"
-
         return (
-            f"Forecast: full in {range_text} "
+            f"Forecast: full in {format_forecast_range(forecast)} "
             f"({forecast.confidence} confidence, {forecast.data_points} scans "
             f"over {forecast.span_days:,.0f} days, R²={forecast.r_squared:.2f})"
         )
@@ -355,6 +347,26 @@ class HistoryMixin:
             rows = default_rows
             summary = get_growth_summary(newer_id, older_id)
 
+        # Everything the window shows is worked out before it's created, so
+        # a failure here can't leave an empty window behind.
+        drive_capacity = self._get_drive_capacity_bytes(display_path)
+        full_history = get_scan_history(scan_path, limit=200)
+        forecast_text = self._format_forecast(
+            forecast_days_until_full(full_history, drive_capacity)
+        )
+        anomaly_list = detect_size_anomalies(full_history)
+        created_ats_in_order = [row[0] for row in full_history]
+        scan_ids_by_created_at = get_scan_ids_by_created_at(scan_path, limit=200)
+        folder_by_anomaly = {
+            anomaly: self._likely_folder_for_anomaly(
+                scan_path,
+                anomaly,
+                created_ats_in_order,
+                scan_ids_by_created_at,
+            )
+            for anomaly in anomaly_list
+        }
+
         existing = getattr(self, "_growth_win", None)
         if existing is not None and existing.winfo_exists():
             existing.destroy()
@@ -369,11 +381,6 @@ class HistoryMixin:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:
             logger.debug("Growth History window iconbitmap failed", exc_info=True)
-
-        drive_capacity = self._get_drive_capacity_bytes(display_path)
-        full_history = get_scan_history(scan_path, limit=200)
-        forecast = forecast_days_until_full(full_history, drive_capacity)
-        forecast_text = self._format_forecast(forecast)
 
         ttk.Label(
             win,
@@ -391,22 +398,10 @@ class HistoryMixin:
         anomalies_frame = ttk.Frame(notebook, padding=10)
         notebook.add(summary_frame, text="Summary")
         notebook.add(details_frame, text="Growth Details")
-        anomaly_list = detect_size_anomalies(full_history)
         notebook.add(
             anomalies_frame,
             text=f"Anomalies ({len(anomaly_list)})" if anomaly_list else "Anomalies",
         )
-        created_ats_in_order = [row[0] for row in full_history]
-        scan_ids_by_created_at = get_scan_ids_by_created_at(scan_path, limit=200)
-        folder_by_anomaly = {
-            anomaly: self._likely_folder_for_anomaly(
-                scan_path,
-                anomaly,
-                created_ats_in_order,
-                scan_ids_by_created_at,
-            )
-            for anomaly in anomaly_list
-        }
         self._build_anomalies_tab(
             anomalies_frame, anomaly_list, len(full_history), folder_by_anomaly
         )

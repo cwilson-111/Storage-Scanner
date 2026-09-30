@@ -167,3 +167,16 @@ def forecast_days_until_full(history, drive_capacity_bytes, now=None):
         data_points=len(history),
         span_days=round(span_days, 1),
     )
+
+
+def format_forecast_range(forecast):
+    """The days-until-full range of an "ok" Forecast with days left, as
+    text: fewest days first ("~80–120 days"). Noisy history can leave the
+    slow end of the slope band not growing at all, and so no upper bound
+    (days_optimistic None): that reads "at least N days"."""
+    low, high = forecast.days_pessimistic, forecast.days_optimistic
+    if high is None:
+        return f"at least {low:,} days"
+    if low == high:
+        return f"~{forecast.days_estimate:,} days"
+    return f"~{low:,}–{high:,} days"

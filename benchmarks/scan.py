@@ -259,6 +259,12 @@ def main(argv=None):
             print(f"Can't use baseline {args.baseline}: {exc}", file=sys.stderr)
             return 1
 
+    # The scanner logs to the app's log, attached when it's first imported
+    # (in run_benchmark): unless told otherwise, point it at a throwaway
+    # folder, not the real app log.
+    if not os.environ.get("STORAGE_SCANNER_LOG_DIR"):
+        os.environ["STORAGE_SCANNER_LOG_DIR"] = tempfile.mkdtemp(prefix="storage-scanner-bench-")
+
     result = run_benchmark(
         args.profile, args.seed, args.runs, args.workers, args.dir, keep=args.keep
     )
