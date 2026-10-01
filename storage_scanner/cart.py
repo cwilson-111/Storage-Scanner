@@ -18,7 +18,7 @@ class CartManager:
     added from. A folder `Node` hashes by identity; a `FileNode` view hashes
     and compares by the file row it reads (see storage_scanner.models), so
     the same file looked up twice is still one entry -- the same assumption
-    duplicate_window.py's own sets of nodes rely on. Adding the same node
+    ui/duplicates_view.py's own sets of nodes rely on. Adding the same node
     twice just updates its source label, not duplicates it.
     """
 

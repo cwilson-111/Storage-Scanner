@@ -1,8 +1,9 @@
 """Finding duplicate files, and keeping duplicate groups true afterwards.
 
-Tk-free: DuplicatesMixin (ui/duplicate_window.py) runs the finder and shows
-its groups; delete_service re-checks a group on disk before deleting a copy
-of it as a duplicate. A group is (size, (edge_digest, middle_digest), nodes):
+Tk-free: DuplicatesMixin (ui/duplicate_window.py) runs the finder and
+ui/duplicates_view.py shows its groups; delete_service re-checks a group on
+disk before deleting a copy of it as a duplicate. A group is
+(size, (edge_digest, middle_digest), nodes):
 the size the scan recorded, BLAKE2b of the first and last
 DUPLICATE_HASH_CHUNK_BYTES, and of the middle chunk (None for a file no
 larger than two chunks, which the first two already cover).
