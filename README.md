@@ -81,16 +81,18 @@ and [PRIVACY.md](PRIVACY.md) for what the app does (and doesn't) do with your da
 
 | | `StorageScanner.exe` (standard) | `StorageScanner-Data.exe` |
 |---|---|---|
-| Where | The [latest release](https://github.com/cwilson-111/Storage-Scanner/releases/latest) | A **pre-release** on the [Releases](https://github.com/cwilson-111/Storage-Scanner/releases) page, tagged `data-v…` |
+| Where | The [latest release](https://github.com/cwilson-111/Storage-Scanner/releases/latest) | The same release, next to it |
 | Scanning, duplicates, cleanup, history | Yes | Yes |
 | Tools ▸ Data Tools (CSV → Parquet / Excel) | Not included | Included |
 | Size / startup | Smaller, faster to start | Much larger (bundles `pyarrow`), slower to start |
-| In-app update notice | Yes | No — a Data build never prompts you to update, so check the Releases page yourself |
+| In-app update notice | Yes | Yes |
 
 If you don't need the CSV conversion tools, use the standard build. The Data
 build is Windows-only and otherwise identical; it ships with its own
 `sbom-data.json` and `SHA256SUMS-data.txt`, which list exactly which optional
-packages were bundled.
+packages were bundled. Releases up to 1.12.0 published it separately as a
+`data-v…` pre-release; a `data-v1.12.0` copy never hears about a newer
+version, so download the Data build once from the latest release.
 
 ## Features
 
@@ -274,7 +276,8 @@ packages were bundled.
   Tools ▸ Data Tools lets you compress any CSV file (not just this app's own
   exports) to Parquet, or convert it to an Excel `.xlsx` workbook. Both use
   optional third-party packages (`pyarrow`, `openpyxl` respectively) that
-  aren't required for anything else in the app.
+  aren't required for anything else in the app; run from source, the menu
+  appears once you `pip install -r requirements-data.txt`.
 
 ### Staying current
 - **Update notice** — on launch, a quiet check (at most once a day) for a

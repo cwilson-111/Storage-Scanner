@@ -74,8 +74,13 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 ### Privacy and support
 
 - The update check can be turned off (Settings, or the
-  `STORAGE_SCANNER_NO_UPDATE_CHECK` environment variable), never runs from
-  a build that isn't a release, and Data builds hear about Data builds.
+  `STORAGE_SCANNER_NO_UPDATE_CHECK` environment variable) and never runs
+  from a build that isn't a release.
+- The Data build (Tools ▸ Data Tools) now comes from the same tag and the
+  same release as the standard build, and gets the same update notice. A
+  `data-v1.12.0` copy can't hear about it: download `StorageScanner-Data.exe`
+  from this release once. From source, the menu appears once
+  `requirements-data.txt` is installed.
 - Help ▸ Copy Diagnostic Info (no file or folder names) and Report a
   Problem; issue forms and SECURITY.md.
 - The log no longer loses lines when the app and a scheduled scan write at
@@ -90,6 +95,8 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   Windows; Windows-only tests are marked and skipped elsewhere. Running
   from source needs Python 3.11 or later.
 - Build and test tools are pinned to exact versions.
+- The main window's code is split by job (toolbar, scan lifecycle, scan
+  banners, tree rows), each file under 500 lines.
 
 ## v1.12.0 — 2026-09-29
 

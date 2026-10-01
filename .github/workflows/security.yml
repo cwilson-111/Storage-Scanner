@@ -49,12 +49,13 @@ jobs:
 
       # pip-audit rather than a third-party action: the whole dependency
       # surface is requirements-dev.txt (PyInstaller, Pillow, the test/lint
-      # toolchain), and those land inside the shipped executable.
+      # toolchain) and requirements-data.txt (pyarrow, openpyxl), and those
+      # land inside the shipped executables.
       - name: Install pip-audit
         run: pip install pip-audit
 
       - name: Audit build and test dependencies
-        run: pip-audit --strict --requirement requirements-dev.txt
+        run: pip-audit --strict --requirement requirements-dev.txt --requirement requirements-data.txt
 
   secrets:
     name: Secret scan

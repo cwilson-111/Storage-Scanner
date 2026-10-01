@@ -1,10 +1,11 @@
 name: Build Storage Scanner
 
-# Builds a Windows .exe, a macOS .dmg, and a Linux binary on every push to
-# main and every pull request into main (downloadable from the Actions tab
-# as artifacts), after the test job passes. Pushing a version tag like
-# v1.0.0 also publishes all three as a GitHub Release, with that version's
-# CHANGELOG.md section as the release notes (the release job at the end).
+# Builds a Windows .exe (standard, and the Data build with Tools ▸ Data
+# Tools), a macOS .dmg, and a Linux binary on every push to main and every
+# pull request into main (downloadable from the Actions tab as artifacts),
+# after the test jobs pass. Pushing a version tag like v1.0.0 also publishes
+# all four in one GitHub Release, with that version's CHANGELOG.md section
+# as the release notes (the release job at the end).
 # Can also be triggered manually from the Actions tab (Run workflow).
 on:
   push:
@@ -66,6 +67,9 @@ jobs:
     # app from source. Windows-only tests carry @pytest.mark.windows and are
     # skipped off Windows (tests/conftest.py); lint, types, coverage and the
     # scale gate run once, in the job above. Every build waits for both.
+    # The Windows leg also installs the Data build's packages, so the
+    # csv_to_* tests run their real conversions there (they skip without
+    # pyarrow and openpyxl, as in the job above and the standard build).
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -75,6 +79,7 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.13"
+            data-packages: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -84,6 +89,10 @@ jobs:
 
       - name: Install test dependencies
         run: pip install -r requirements-dev.txt
+
+      - name: Install the Data build's packages
+        if: matrix.data-packages
+        run: pip install -r requirements-data.txt
 
       # Tk needs a display: xvfb gives the Linux runner one.
       - name: Run test suite
@@ -158,6 +167,61 @@ jobs:
             dist/StorageScanner-portable.zip
             dist/sbom.json
             dist/SHA256SUMS.txt
+
+  build-data:
+    # The Data build: the same app plus pyarrow and openpyxl, which turn on
+    # Tools ▸ Data Tools (CSV to Parquet, CSV to Excel). Same tag, same
+    # version stamp and same release as the standard build; only the
+    # bundled packages and the file names differ.
+    needs: [test, test-other-os]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install -r requirements-dev.txt -r requirements-data.txt
+
+      - name: Build Icon
+        run: python make_icon.py
+
+      - name: Stamp version
+        run: python -c "open('storage_scanner/version.py', 'w').write('__version__ = ' + repr('${{ github.ref_name }}') + chr(10))"
+
+      - name: Build executable
+        # --hidden-import for each: the app finds them with find_spec and
+        # imports them only when a Data Tools command runs, which
+        # PyInstaller's static analysis can't follow.
+        run: pyinstaller --onefile --windowed --name StorageScanner-Data --icon icon.ico --add-data "icon.ico;." --hidden-import pyarrow.csv --hidden-import pyarrow.parquet --hidden-import openpyxl Storage-Scanner.py
+
+      - name: Smoke-test the built executable
+        run: python smoke_test_build.py dist/StorageScanner-Data.exe
+
+      - name: Generate software bill of materials
+        run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom-data.json
+
+      - name: Create portable ZIP
+        run: Compress-Archive -Path dist\StorageScanner-Data.exe -DestinationPath dist\StorageScanner-Data-portable.zip
+
+      - name: Generate SHA-256 checksums
+        run: |
+          Get-FileHash dist\StorageScanner-Data.exe, dist\StorageScanner-Data-portable.zip, dist\sbom-data.json -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content dist\SHA256SUMS-data.txt
+          Get-Content dist\SHA256SUMS-data.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: StorageScanner-Data
+          path: |
+            dist/StorageScanner-Data.exe
+            dist/StorageScanner-Data-portable.zip
+            dist/sbom-data.json
+            dist/SHA256SUMS-data.txt
 
   build-macos:
     needs: [test, test-other-os]
@@ -280,12 +344,12 @@ jobs:
             dist/SHA256SUMS-linux.txt
 
   release:
-    # Publishes what the three build jobs uploaded, only for a tag, and only
-    # once all three have passed, so a release never goes out missing a
+    # Publishes what the four build jobs uploaded, only for a tag, and only
+    # once all four have passed, so a release never goes out missing a
     # platform. It builds nothing and installs nothing, which is why it's
     # the one job allowed to write.
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build, build-macos, build-linux]
+    needs: [build, build-data, build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -316,6 +380,10 @@ jobs:
             dist/StorageScanner-portable.zip
             dist/sbom.json
             dist/SHA256SUMS.txt
+            dist/StorageScanner-Data.exe
+            dist/StorageScanner-Data-portable.zip
+            dist/sbom-data.json
+            dist/SHA256SUMS-data.txt
             dist/StorageScanner.dmg
             dist/sbom-macos.json
             dist/SHA256SUMS-macos.txt

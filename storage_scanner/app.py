@@ -29,6 +29,7 @@ from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
 from storage_scanner.ui.cart_window import CartMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
+from storage_scanner.ui.data_tools import DataToolsMixin
 from storage_scanner.ui.delete_dialogs import DeletionMixin
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.error_dialog import ErrorDialogMixin
@@ -58,6 +59,7 @@ class StorageScannerApp(
     ScanLifecycleMixin,
     ScanBannersMixin,
     MainTreeMixin,
+    DataToolsMixin,
     LiveTreeMixin,
     ScanProgressMixin,
     HistoryMixin,

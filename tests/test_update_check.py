@@ -103,13 +103,10 @@ def _fresh_db(tmp_path, monkeypatch):
     history.init_history_db()
 
 
-def _record_requests(monkeypatch, tag="v99.0.0", data_tag="data-v99.0.0"):
+def _record_requests(monkeypatch, tag="v99.0.0"):
     calls = []
     monkeypatch.setattr(
         update_check, "_fetch_latest_release_tag", lambda: calls.append("latest") or tag
-    )
-    monkeypatch.setattr(
-        update_check, "_fetch_latest_data_release_tag", lambda: calls.append("data") or data_tag
     )
     return calls
 
@@ -136,24 +133,3 @@ def test_turning_the_check_off_stops_the_request(tmp_path, monkeypatch):
     assert update_check.check_for_update(current_version="v1.0.0") is None
 
     assert calls == []
-
-
-def test_a_data_build_is_told_about_the_newest_data_build(tmp_path, monkeypatch):
-    _fresh_db(tmp_path, monkeypatch)
-    calls = _record_requests(monkeypatch, data_tag="data-v1.13.0")
-
-    assert update_check.check_for_update(current_version="data-v1.12.0") == "data-v1.13.0"
-    assert calls == ["data"]
-
-
-def test_the_newest_data_tag_is_picked_by_version_not_by_order(monkeypatch):
-    releases = [
-        {"tag_name": "v1.13.0"},
-        {"tag_name": "data-v1.9.0"},
-        {"tag_name": "data-v1.12.0"},
-        {"tag_name": "data-v1.14.0", "draft": True},
-        {"tag_name": "data-vbroken"},
-    ]
-    monkeypatch.setattr(update_check, "_get_json", lambda url: releases)
-
-    assert update_check._fetch_latest_data_release_tag() == "data-v1.12.0"

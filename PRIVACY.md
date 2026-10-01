@@ -71,8 +71,7 @@ or set the environment variable `STORAGE_SCANNER_NO_UPDATE_CHECK=1` (useful
 for managed installs and scheduled scans). A run that isn't a release —
 from source, or a build of the main branch — never makes the request at
 all; see `storage_scanner/update_check.py` and `storage_scanner/version.py`
-for exactly how. A Data build checks the list of releases for the newest
-Data build instead.
+for exactly how.
 
 ## What it does not do
 

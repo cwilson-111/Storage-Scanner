@@ -76,13 +76,13 @@ runtime package at all.
 
 Two features use an optional third-party package instead, imported only
 when that specific feature runs: `pyarrow` (Compress CSV to Parquet) and
-`openpyxl` (Convert CSV to Excel). PyInstaller can only bundle a package that's actually installed in
-the build environment when it runs, so the standard release doesn't include
-`pyarrow`/`openpyxl`; the separate Windows-only **Data build**
-(`.github/workflows/build-data.yml`, published as a `data-v…` pre-release)
-installs them explicitly and bundles them. Each release's own `sbom*.json`
-lists exactly which optional packages made it in — check that rather than
-assuming from this doc.
+`openpyxl` (Convert CSV to Excel). PyInstaller can only bundle a package
+that's actually installed in the build environment when it runs, so the
+standard build doesn't include them; the Windows-only **Data build**
+(`build.yml`'s `build-data` job, from the same tag and in the same release)
+installs `requirements-data.txt` and bundles them. Each release's own
+`sbom*.json` lists exactly which optional packages made it in — check that
+rather than assuming from this doc.
 
 ## Continuous scanning of the source itself
 
@@ -93,8 +93,9 @@ published against a dependency that hasn't changed still gets found):
 - **CodeQL** (`security-extended` query pack) statically analyses the Python
   source; findings land in the repo's Security tab.
 - **`pip-audit --strict`** checks `requirements-dev.txt` — PyInstaller,
-  Pillow and the test toolchain — against the Python advisory database.
-  That file is the entire dependency surface, and PyInstaller's output
+  Pillow and the test toolchain — and `requirements-data.txt` (the Data
+  build's `pyarrow` and `openpyxl`) against the Python advisory database.
+  Those files are the entire dependency surface, and PyInstaller's output
   embeds what's installed at build time, so a vulnerable build dependency
   is a shipped one.
 - **gitleaks** scans the full commit history, not just the current tip, for

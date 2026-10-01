@@ -139,6 +139,7 @@ class ToolbarMixin:
         history_menu.add_command(label="Schedule Scans…", command=self.show_schedule_scans)
         self.tools_menu.add_cascade(label="History & Trust", menu=history_menu)
 
+        self._add_data_tools_menu(self.tools_menu)
         add_scan_only(self.tools_menu, "Export Results…", self.export_results)
         self._refresh_tools_state()  # no tree yet: scan-only items start greyed out
 

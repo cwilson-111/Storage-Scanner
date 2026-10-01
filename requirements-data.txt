@@ -1,0 +1,6 @@
+# The Data build's extra packages (Tools ▸ Data Tools), on top of
+# requirements-dev.txt: installed by CI's Data build and its test job, and by
+# anyone running the csv_to_* tests for real instead of their "not
+# installed" branch. The versions data-v1.12.0 shipped with.
+pyarrow==25.0.1
+openpyxl==3.1.5

@@ -14,9 +14,6 @@ This is the only network call anywhere in the app (see PRIVACY.md). It:
   comparison, and the only action available is a link to the Releases page
   for the user to open themselves.
 
-A Data build (version "data-vX.Y.Z") compares against the newest data-v
-pre-release, which /releases/latest never returns.
-
 Every failure mode (offline, GitHub unreachable, malformed response, a
 corrupt cached timestamp) resolves to "no update notice shown" — this must
 never be able to disrupt startup or the rest of the app.
@@ -35,11 +32,9 @@ from storage_scanner.version import __version__ as CURRENT_VERSION
 
 _REPO = "https://api.github.com/repos/cwilson-111/Storage-Scanner"
 RELEASES_API_URL = f"{_REPO}/releases/latest"
-RELEASES_LIST_API_URL = f"{_REPO}/releases?per_page=30"
 
 ENABLED_KEY = "update_check_enabled"
 DISABLE_ENV_VAR = "STORAGE_SCANNER_NO_UPDATE_CHECK"
-DATA_PREFIX = "data-"
 
 _LAST_CHECK_KEY = "last_update_check_at"
 _MIN_INTERVAL_HOURS = 24
@@ -100,27 +95,6 @@ def _fetch_latest_release_tag():
         return None
 
 
-def _fetch_latest_data_release_tag():
-    """The newest data-vX.Y.Z tag among recent releases (pre-releases
-    included), or None."""
-    try:
-        releases = _get_json(RELEASES_LIST_API_URL)
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        logger.debug("Update check request failed", exc_info=True)
-        return None
-    tags = [
-        release.get("tag_name") or ""
-        for release in releases
-        if isinstance(release, dict) and not release.get("draft")
-    ]
-    data_tags = [
-        tag
-        for tag in tags
-        if tag.startswith(DATA_PREFIX) and parse_version(tag[len(DATA_PREFIX) :])
-    ]
-    return max(data_tags, key=lambda tag: parse_version(tag[len(DATA_PREFIX) :]), default=None)
-
-
 def _should_check_now():
     last_checked = get_app_metadata(_LAST_CHECK_KEY)
     if not last_checked:
@@ -138,23 +112,17 @@ def check_for_update(current_version=None):
     request (bounded by _REQUEST_TIMEOUT_SECONDS) when a check is due.
     """
     current_version = current_version or CURRENT_VERSION
-    data_build = current_version.startswith(DATA_PREFIX)
-    current = current_version[len(DATA_PREFIX) :] if data_build else current_version
     try:
         # Not a release (a source run, a CI build of main): nothing to
         # compare with, so no request at all.
-        if parse_version(current) is None or not update_check_enabled():
+        if parse_version(current_version) is None or not update_check_enabled():
             return None
         if not _should_check_now():
             return None
         set_app_metadata(_LAST_CHECK_KEY, datetime.now(timezone.utc).isoformat())
-        if data_build:
-            latest_tag = _fetch_latest_data_release_tag()
-            latest = latest_tag[len(DATA_PREFIX) :] if latest_tag else None
-        else:
-            latest_tag = latest = _fetch_latest_release_tag()
-        if latest and is_newer(latest, current):
-            return latest_tag
+        latest = _fetch_latest_release_tag()
+        if latest and is_newer(latest, current_version):
+            return latest
         return None
     except Exception:  # noqa: BLE001 - an update check must never break startup
         logger.exception("Update check failed unexpectedly")
