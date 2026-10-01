@@ -849,7 +849,7 @@ or the path has a `%` — ✅ done (2026-09-29)**
   original (longest stall 51 ms). `tests/test_archive.py` covers a write
   failing part-way and a cancel.
 
-**P2-13. Fold the Data build back into main.**
+**P2-13. Fold the Data build back into main — ✅ done (2026-10-01)**
 - Why: 17 of the `data` branch's 18 commits are "Merge branch 'main' into
   data"; the feature itself is two modules plus 75 lines in
   `ui/main_window.py`, the source of the merge conflict noted on
@@ -861,9 +861,31 @@ or the path has a `%` — ✅ done (2026-09-29)**
   appears only when pyarrow or openpyxl is present), build both variants
   from one tag, delete the branch.
 - Size: S. Verify: one tag produces both builds.
+- Done: `csv_to_parquet.py`, `csv_to_xlsx.py` and their tests are on main;
+  the menu moved to `ui/data_tools.py` (`DataToolsMixin`), shown per item
+  only when `importlib.util.find_spec` finds pyarrow or openpyxl, and the
+  converters are imported only when used. `requirements-data.txt` pins
+  pyarrow 25.0.1 and openpyxl 3.1.5 (what data-v1.12.0 shipped).
+  `build.yml` gained a `build-data` job (same tag, same version stamp, same
+  release; the release job waits for it and attaches its four files); the
+  Windows 3.13 test leg installs the data packages so the `csv_to_*` tests
+  run; `pip-audit` covers both requirements files. `build-data.yml`,
+  `update_check`'s data-v channel and its two tests are gone; the `data`
+  branch is deleted (tag `data-v1.12.0` still points at its tip).
+- Verified: CI on 8bb2ad8: `build-data` built and smoke-tested
+  `StorageScanner-Data.exe` (107 MB artifact), the Windows 3.13 leg
+  installed the data packages and passed, the security run passed. Locally
+  (packages in a `--target` dir): the 19 `csv_to_*` tests pass; the real app
+  without them has no Data Tools menu, with them shows both commands, both
+  write real files (731.5 KB CSV → 258.7 KB Parquet), and pyarrow isn't
+  imported at startup either way.
+- Not done: no tag has been pushed, so the release job attaching the Data
+  files is untested until v1.13.0. A `data-v1.12.0` install never hears of
+  a newer version (the README and CHANGELOG say so).
 
 **P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` —
-main_window split ✅ (2026-10-01); Protocol and history.py move not yet.**
+main_window split and Duplicates class ✅ (2026-10-01); Protocol and
+history.py move not yet.**
 - Why: 1,284 and 912 lines against the 500-line rule, 14% and 39% covered.
   The duplicate engine (about 280 lines of hashing and matching) lives in a
   UI module, and the 370-line `_show_duplicates_window` of closures is where
@@ -887,9 +909,17 @@ main_window split ✅ (2026-10-01); Protocol and history.py move not yet.**
 - Verified: ruff, black, mypy, 744 tests (three test files now import the
   new modules); the real app on its mainloop: scan from a folder argument,
   paging, Enter, sort, every Tools menu entry, Growth History, close.
-- Not done: a Protocol for the shared app attributes, the Duplicates window
-  as a class, `history.py` into the package; `history_window.py` (757) and
-  `cleanup_window.py` (651) are still over 500 lines.
+- Done (2): the Duplicate Files window is `DuplicatesWindow` in
+  `ui/duplicates_view.py` (388 lines): the closures are methods, the
+  per-group dicts are attributes. `duplicate_window.py` keeps the finder
+  thread and progress poll (162 lines).
+- Verified (2): gates and 742 tests; the real app on a folder with a
+  three-copy and a two-copy group: rows, keepers, row reason, right-click,
+  select-all to cart skips keepers, deleting a copy dissolves its group,
+  prunes the cart and removes the file.
+- Not done: a Protocol for the shared app attributes, `history.py` into the
+  package; `history_window.py` (757) and `cleanup_window.py` (651) are
+  still over 500 lines.
 
 **P2-15. Run the tests on Linux and macOS, and settle the Python range — ✅
 done (2026-09-29)**
