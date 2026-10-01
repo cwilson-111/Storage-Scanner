@@ -6,8 +6,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.ui import main_window
-from storage_scanner.ui.main_window import MainWindowMixin
+from storage_scanner.ui import scan_lifecycle
+from storage_scanner.ui.scan_lifecycle import ScanLifecycleMixin
 
 
 class _Var:
@@ -25,7 +25,7 @@ class _Root:
         self.destroyed = True
 
 
-class _App(MainWindowMixin):
+class _App(ScanLifecycleMixin):
     def __init__(self, choice, turbo_on=True):
         self.turbo_scan_var = _Var(turbo_on)
         self.root = _Root()
@@ -43,16 +43,16 @@ def not_elevated_ntfs(monkeypatch):
     case where the dialog appears at all."""
     relaunches = []
     errors = []
-    monkeypatch.setattr(main_window, "IS_WINDOWS", True)
-    monkeypatch.setattr(main_window, "IS_ROOT", False)
-    monkeypatch.setattr(main_window, "is_ntfs_fixed_drive", lambda _path: True)
+    monkeypatch.setattr(scan_lifecycle, "IS_WINDOWS", True)
+    monkeypatch.setattr(scan_lifecycle, "IS_ROOT", False)
+    monkeypatch.setattr(scan_lifecycle, "is_ntfs_fixed_drive", lambda _path: True)
     monkeypatch.setattr(
-        main_window,
+        scan_lifecycle,
         "relaunch_elevated_windows",
         lambda initial=None: relaunches.append(initial) or True,
     )
     monkeypatch.setattr(
-        main_window.messagebox,
+        scan_lifecycle.messagebox,
         "showerror",
         lambda *a, **k: errors.append(a),
     )
@@ -60,14 +60,14 @@ def not_elevated_ntfs(monkeypatch):
 
 
 def test_just_this_scan_uses_turbo_through_the_helper(not_elevated_ntfs, tmp_path):
-    app = _App(MainWindowMixin.TURBO_THIS_SCAN_ONLY)
+    app = _App(ScanLifecycleMixin.TURBO_THIS_SCAN_ONLY)
 
     assert app._resolve_turbo_scan_consent(str(tmp_path)) is True
     assert not app.root.destroyed
 
 
 def test_regular_scan_skips_turbo(not_elevated_ntfs, tmp_path):
-    app = _App(MainWindowMixin.TURBO_REGULAR_SCAN)
+    app = _App(ScanLifecycleMixin.TURBO_REGULAR_SCAN)
 
     assert app._resolve_turbo_scan_consent(str(tmp_path)) is False
 
@@ -77,7 +77,7 @@ def test_restart_as_admin_relaunches_on_the_same_folder_and_starts_no_scan(
     tmp_path,
 ):
     relaunches, _errors = not_elevated_ntfs
-    app = _App(MainWindowMixin.TURBO_RESTART_AS_ADMIN)
+    app = _App(ScanLifecycleMixin.TURBO_RESTART_AS_ADMIN)
 
     assert app._resolve_turbo_scan_consent(str(tmp_path)) is None
     assert relaunches == [str(tmp_path)]
@@ -86,8 +86,8 @@ def test_restart_as_admin_relaunches_on_the_same_folder_and_starts_no_scan(
 
 def test_a_declined_restart_falls_back_to_a_regular_scan(not_elevated_ntfs, monkeypatch, tmp_path):
     _relaunches, errors = not_elevated_ntfs
-    monkeypatch.setattr(main_window, "relaunch_elevated_windows", lambda initial=None: False)
-    app = _App(MainWindowMixin.TURBO_RESTART_AS_ADMIN)
+    monkeypatch.setattr(scan_lifecycle, "relaunch_elevated_windows", lambda initial=None: False)
+    app = _App(ScanLifecycleMixin.TURBO_RESTART_AS_ADMIN)
 
     assert app._resolve_turbo_scan_consent(str(tmp_path)) is False
     assert not app.root.destroyed
@@ -95,15 +95,15 @@ def test_a_declined_restart_falls_back_to_a_regular_scan(not_elevated_ntfs, monk
 
 
 def test_already_elevated_never_asks(not_elevated_ntfs, monkeypatch, tmp_path):
-    monkeypatch.setattr(main_window, "IS_ROOT", True)
-    app = _App(MainWindowMixin.TURBO_REGULAR_SCAN)
+    monkeypatch.setattr(scan_lifecycle, "IS_ROOT", True)
+    app = _App(ScanLifecycleMixin.TURBO_REGULAR_SCAN)
 
     assert app._resolve_turbo_scan_consent(str(tmp_path)) is True
     assert app.asked == 0
 
 
 def test_toggle_off_never_asks(not_elevated_ntfs, tmp_path):
-    app = _App(MainWindowMixin.TURBO_THIS_SCAN_ONLY, turbo_on=False)
+    app = _App(ScanLifecycleMixin.TURBO_THIS_SCAN_ONLY, turbo_on=False)
 
     assert app._resolve_turbo_scan_consent(str(tmp_path)) is False
     assert app.asked == 0

@@ -35,10 +35,14 @@ from storage_scanner.ui.error_dialog import ErrorDialogMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
 from storage_scanner.ui.history_window import HistoryMixin
 from storage_scanner.ui.live_tree import LiveTreeMixin
+from storage_scanner.ui.main_tree import MainTreeMixin
 from storage_scanner.ui.main_window import MainWindowMixin
 from storage_scanner.ui.onboarding_window import OnboardingMixin
+from storage_scanner.ui.scan_banners import ScanBannersMixin
+from storage_scanner.ui.scan_lifecycle import ScanLifecycleMixin
 from storage_scanner.ui.scan_progress_panel import ScanProgressMixin
 from storage_scanner.ui.search_window import SearchMixin
+from storage_scanner.ui.toolbar import ToolbarMixin
 from storage_scanner.ui.treemap_window import TreemapMixin
 from storage_scanner.update_check import check_for_update, release_page_url
 
@@ -50,6 +54,10 @@ CLOSE_WAIT_SECONDS = 120
 
 class StorageScannerApp(
     MainWindowMixin,
+    ToolbarMixin,
+    ScanLifecycleMixin,
+    ScanBannersMixin,
+    MainTreeMixin,
     LiveTreeMixin,
     ScanProgressMixin,
     HistoryMixin,

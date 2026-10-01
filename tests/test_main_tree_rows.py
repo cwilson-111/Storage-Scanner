@@ -15,7 +15,7 @@ from storage_scanner.app import StorageScannerApp
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import node_display
 from storage_scanner.settings import apply_theme
-from storage_scanner.ui import main_window
+from storage_scanner.ui import main_tree
 
 # name -> size in bytes. Names differ in case so the name sort is seen to
 # ignore it; every size differs so the size sort has one right answer.
@@ -222,7 +222,7 @@ def test_the_change_column_shows_growth_since_the_last_scan_and_sorts_by_it(
         os.path.normcase(os.path.normpath(sub.path)): sub.size + 500,  # shrank by 500 B
         os.path.normcase(os.path.normpath(zed.path)): max(zed.size - 2048, 1),  # grew
     }
-    monkeypatch.setattr(main_window, "get_folder_sizes", lambda scan_id: previous)
+    monkeypatch.setattr(main_tree, "get_folder_sizes", lambda scan_id: previous)
 
     app._show_changes(previous_scan_id=1)
 
@@ -239,7 +239,7 @@ def test_the_change_column_shows_growth_since_the_last_scan_and_sorts_by_it(
 def test_a_big_level_shows_a_page_then_more_on_request_and_sorts_its_true_top(
     app, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(main_window, "ROWS_PER_PAGE", 2)
+    monkeypatch.setattr(main_tree, "ROWS_PER_PAGE", 2)
     _write(tmp_path, TOP_FILES)  # five files: 500, 400, 300, 200, 100 bytes
     root_node = scanner.scan(str(tmp_path), queue.Queue(), threading.Event())
     root_iid = app._insert_node("", root_node, parent_size=root_node.size)

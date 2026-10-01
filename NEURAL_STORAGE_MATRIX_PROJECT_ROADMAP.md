@@ -862,7 +862,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
   from one tag, delete the branch.
 - Size: S. Verify: one tag produces both builds.
 
-**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py`.**
+**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` —
+main_window split ✅ (2026-10-01); Protocol and history.py move not yet.**
 - Why: 1,284 and 912 lines against the 500-line rule, 14% and 39% covered.
   The duplicate engine (about 280 lines of hashing and matching) lives in a
   UI module, and the 370-line `_show_duplicates_window` of closures is where
@@ -874,6 +875,21 @@ or the path has a `%` — ✅ done (2026-09-29)**
   drives and elevation; move `history.py` into the package; describe the
   shared app attributes in a Protocol.
 - Size: L. Verify: every file under 500 lines; coverage of the moved logic.
+- Done: the duplicate engine left the UI with P0 (`duplicate_finder.py`,
+  so `duplicate_window.py` is 528 lines). `main_window.py` (1,566 lines) is
+  now five mixins, each under 500 lines, methods moved verbatim by an
+  `ast`-driven script: `ui/toolbar.py` (toolbar, menus, Settings/Help,
+  drives, elevation; 430), `ui/scan_lifecycle.py` (engine choice, workers,
+  progress poll, finish/cancel; 370), `ui/scan_banners.py` (details strip,
+  fallback and unreadable-paths banners; 238), `ui/main_tree.py` (finished
+  rows, paging, sorting, Change column, row removal; 346), and
+  `ui/main_window.py` (tree widget, status bar, row actions; 289).
+- Verified: ruff, black, mypy, 744 tests (three test files now import the
+  new modules); the real app on its mainloop: scan from a folder argument,
+  paging, Enter, sort, every Tools menu entry, Growth History, close.
+- Not done: a Protocol for the shared app attributes, the Duplicates window
+  as a class, `history.py` into the package; `history_window.py` (757) and
+  `cleanup_window.py` (651) are still over 500 lines.
 
 **P2-15. Run the tests on Linux and macOS, and settle the Python range — ✅
 done (2026-09-29)**

@@ -1,6 +1,6 @@
 """Tests for MainWindowMixin._list_drives()'s Linux branch -- a plain
 @staticmethod, pure filesystem logic, so this is fully testable without
-ever constructing a real Tk window (nothing else in main_window.py has
+ever constructing a real Tk window (nothing else in ui/toolbar.py has
 that property, hence no broader UI test suite exists for this file).
 """
 
@@ -11,22 +11,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner.ui import main_window
+from storage_scanner.ui import toolbar
 
 
 def test_list_drives_linux_always_includes_root(monkeypatch):
-    monkeypatch.setattr(main_window, "IS_MACOS", False)
-    monkeypatch.setattr(main_window, "IS_LINUX", True)
+    monkeypatch.setattr(toolbar, "IS_MACOS", False)
+    monkeypatch.setattr(toolbar, "IS_LINUX", True)
     monkeypatch.setattr(os.path, "isdir", lambda p: False)
     monkeypatch.delenv("USER", raising=False)
     monkeypatch.delenv("LOGNAME", raising=False)
 
-    assert main_window.MainWindowMixin._list_drives() == ["/"]
+    assert toolbar.ToolbarMixin._list_drives() == ["/"]
 
 
 def test_list_drives_linux_finds_mounted_media_under_the_users_media_dir(monkeypatch):
-    monkeypatch.setattr(main_window, "IS_MACOS", False)
-    monkeypatch.setattr(main_window, "IS_LINUX", True)
+    monkeypatch.setattr(toolbar, "IS_MACOS", False)
+    monkeypatch.setattr(toolbar, "IS_LINUX", True)
     monkeypatch.setenv("USER", "alice")
     monkeypatch.delenv("LOGNAME", raising=False)
 
@@ -45,7 +45,7 @@ def test_list_drives_linux_finds_mounted_media_under_the_users_media_dir(monkeyp
     monkeypatch.setattr(os, "listdir", fake_listdir)
     monkeypatch.setattr(os.path, "ismount", lambda p: p in mounted)
 
-    drives = main_window.MainWindowMixin._list_drives()
+    drives = toolbar.ToolbarMixin._list_drives()
 
     assert drives == ["/", os.path.join(media_dir, "USB_STICK")]
 
@@ -54,8 +54,8 @@ def test_list_drives_linux_skips_unmounted_placeholder_directories(monkeypatch):
     # udisks2/automount tools create an empty per-device directory upfront,
     # before anything is actually mounted there -- os.path.ismount() is
     # what filters those back out.
-    monkeypatch.setattr(main_window, "IS_MACOS", False)
-    monkeypatch.setattr(main_window, "IS_LINUX", True)
+    monkeypatch.setattr(toolbar, "IS_MACOS", False)
+    monkeypatch.setattr(toolbar, "IS_LINUX", True)
     monkeypatch.setenv("USER", "alice")
     monkeypatch.delenv("LOGNAME", raising=False)
 
@@ -64,4 +64,4 @@ def test_list_drives_linux_skips_unmounted_placeholder_directories(monkeypatch):
     monkeypatch.setattr(os, "listdir", lambda p: ["not_yet_mounted"])
     monkeypatch.setattr(os.path, "ismount", lambda p: False)
 
-    assert main_window.MainWindowMixin._list_drives() == ["/"]
+    assert toolbar.ToolbarMixin._list_drives() == ["/"]
