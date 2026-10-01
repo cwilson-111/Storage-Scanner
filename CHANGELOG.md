@@ -38,6 +38,13 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 - `StorageScanner.exe <folder>` scans that folder straight away, and
   Settings can add "Scan with Storage Scanner" to folders' right-click
   menu (Windows, this user only).
+- Ctrl/Shift+click selects several rows: Delete, Add to Cart and Copy
+  Path act on all of them (a file inside a selected folder goes with it).
+- **Modified** and **Accessed** columns, sortable.
+- Largest Files has a right-click menu (reveal, copy path, add to cart,
+  delete) and takes several rows; in File Types, double-click a type to
+  list its files, largest first, with the same menu. Both close when a new
+  scan starts.
 
 ### Growth History
 

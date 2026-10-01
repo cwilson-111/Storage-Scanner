@@ -102,14 +102,23 @@ class LiveTreeMixin:
         )
 
     # The windows listing (and able to delete) rows of the scanned tree.
-    _TREE_LIST_WINDOWS = ("_search_win", "_duplicates_win", "_cleanup_win")
+    _TREE_LIST_WINDOWS = (
+        "_search_win",
+        "_duplicates_win",
+        "_cleanup_win",
+        "_top_win",
+        "_types_win",
+        "_type_files_win",
+    )
 
     def _begin_scan_view(self, target):
         """Clear the last scan's tree and everything tied to it, and show
-        the target's row straight away. Search & Filter, Find Duplicate
-        Files and Cleanup Recommendations close, and a duplicate search
-        still running stops: their rows would belong to the tree this scan
-        replaces (the delete service refuses those anyway)."""
+        the target's row straight away. Every window listing its rows
+        closes (Search & Filter, Find Duplicate Files, Cleanup
+        Recommendations, Largest Files, File Types and a type's file list),
+        and a duplicate search still running stops: their rows would belong
+        to the tree this scan replaces (the delete service refuses those
+        anyway)."""
         self.cancel_event.clear()
         for name in self._TREE_LIST_WINDOWS:
             win = getattr(self, name, None)

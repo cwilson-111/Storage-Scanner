@@ -1046,9 +1046,8 @@ growth.**
   double-click kept apart, and area from on-disk size.
 - Size: L.
 
-**P2-20. Everyday table stakes in the main window — keys, macOS menu, On
-Disk sort and CSV ✅ done (2026-09-29); multi-select, new columns, File
-Types and Largest Files not yet.**
+**P2-20. Everyday table stakes in the main window — ✅ done (2026-10-01);
+Owner and Folders columns left out.**
 - Why:
   - one selection at a time (`selectmode="browse"`, line 234);
   - the only keys are Delete, F5 and Return in the path box (lines 91,
@@ -1078,8 +1077,37 @@ Types and Largest Files not yet.**
   closed a folder, Backspace moved to the parent, Ctrl+C copied its path,
   Ctrl+F opened Search & Filter, the On Disk heading took the sort arrow);
   `tests/test_export.py` for the CSV changes.
-- Not done: extended selection, Modified/Accessed/Owner/Folders columns,
-  File Types drill-down, Largest Files context menu.
+- Done (rest): the main tree is `selectmode="extended"`.
+  `MainWindowMixin._selected_nodes` leaves out rows inside another selected
+  folder; Delete, Add to Cart and Copy Path (one path per line) act on it,
+  with one confirmation naming up to five paths and the total; right-click
+  keeps a selection that contains the row; Reveal, Set Budget and Enter
+  stay on the focused row. Modified and Accessed columns (the item's own
+  times, as Explorer shows them; `live_tree_model.date_text`) sort newest
+  first; the data order keeps Change last and `displaycolumns` shows it
+  before the dates. Largest Files and a type's file list are one
+  `FileListWindow` (`ui/file_list_view.py`): extended selection, context
+  menu (also Shift+F10/Menu key), Delete key, reveal/copy/cart/delete
+  through the delete service, rows dropped on deletes from any window.
+  File Types: double-click or Enter on a type opens its files, largest
+  first, capped at 1,000 with a "N more" note (Tk-free collection in
+  `file_windows.py`, `tests/test_file_windows.py`). A new scan now closes
+  Largest Files, File Types and a type's list too (`_TREE_LIST_WINDOWS`).
+- Verified (rest): gates and 750 tests (new: selection nesting, Modified
+  sort and cell, five file-list tests). Real app on its mainloop: headings
+  show Change, Modified, Accessed; Modified sorts newest first; selecting
+  a file, a folder and a file inside it copied two paths, carted two items,
+  asked once ("2 items … 9.8 KB in all") and sent both to the real Recycle
+  Bin (then purged), the rows and cart entries went; Largest Files and File
+  Types closed when a new scan started. The agent's own run covered the
+  file lists' menus, Copy Path, cart, delete renumbering, the 1,000-row
+  cap and the drill-down note (keys fired through their bound scripts; a
+  background process can't take focus). `benchmarks/main_tree.py` at 250k
+  files: open 0.33 → 0.42 s, sort by name 0.37 → 0.51 s (two more cells
+  per row in Tk; formatting is 8 ms per 2,000 dates).
+- Not done: Owner (a security-descriptor read per item, too slow for a
+  scan) and a Folders count column; the File Types window's own totals
+  don't change after a delete (its file list does).
 
 **P2-21. High DPI and a dark theme.**
 - Why: nothing declares DPI awareness. The v1.11.0 exe's manifest has

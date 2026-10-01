@@ -144,6 +144,8 @@ class MainTreeMixin:
         "percent": "% of Parent",
         "items": "Files",
         "change": "Change",
+        "modified": "Modified",
+        "accessed": "Accessed",
     }
 
     def _sort_by(self, key):
@@ -166,6 +168,8 @@ class MainTreeMixin:
             "name": ("#0",),
             "items": ("items",),
             "change": ("change",),
+            "modified": ("modified",),
+            "accessed": ("accessed",),
         }[self._sort_key]
         for col, base in self._HEADINGS.items():
             text = base + (arrow if col in active_cols else "")

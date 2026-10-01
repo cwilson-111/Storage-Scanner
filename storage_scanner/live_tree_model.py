@@ -13,6 +13,7 @@ its share of its (growing) folder changes.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 from storage_scanner.formatting import bar, human_size
@@ -26,9 +27,20 @@ _NOT_YET = "…"
 @dataclass(frozen=True)
 class RowDisplay:
     text: str  # icon and name
-    values: tuple  # (size, on disk, % of parent, files)
+    values: tuple  # (size, on disk, % of parent, files, modified, accessed)
     tags: tuple  # style tags, besides the heat tag and the row stripe
     heat: Optional[float]  # share of the parent for the heat colour; None: no heat tag
+
+
+def date_text(epoch):
+    """The Modified/Accessed columns: local date and time to the minute, ""
+    when unknown (0) or out of the platform's range."""
+    if not epoch:
+        return ""
+    try:
+        return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 
 def row_label(node, icon):
@@ -54,7 +66,7 @@ def row_display(node, size, alloc_size, file_count, parent_size, state=None):
     if state == QUEUED:
         return RowDisplay(
             text=row_label(node, QUEUED_ICON),
-            values=(_NOT_YET, _NOT_YET, "—", _NOT_YET),
+            values=(_NOT_YET, _NOT_YET, "—", _NOT_YET, "", ""),
             tags=("placeholder", "dir"),
             heat=None,
         )
@@ -83,7 +95,14 @@ def row_display(node, size, alloc_size, file_count, parent_size, state=None):
         icon = SCANNING_ICON
     return RowDisplay(
         text=row_label(node, icon),
-        values=(human_size(size), alloc_text, percent, items),
+        values=(
+            human_size(size),
+            alloc_text,
+            percent,
+            items,
+            date_text(node.mtime),
+            date_text(node.atime),
+        ),
         tags=tags,
         heat=heat,
     )
@@ -96,16 +115,20 @@ def node_display(node, parent_size):
 
 def sort_key_function(key, change_of=None):
     """The key a level's rows sort by for a heading's sort key ("name",
-    "size", "alloc", "items" or "change"); sizes and counts read a folder's running
-    totals while a scan is still filling them in. "change" needs
-    `change_of(node)`, a folder's growth since the last scan or None (not
-    known), which sorts as no change."""
+    "size", "alloc", "items", "modified", "accessed" or "change"); sizes and
+    counts read a folder's running totals while a scan is still filling them
+    in. "change" needs `change_of(node)`, a folder's growth since the last
+    scan or None (not known), which sorts as no change."""
     if key == "name":
         return lambda node: node.name.lower()
     if key == "items":
         return lambda node: node.file_count
     if key == "alloc":
         return lambda node: node.alloc_size
+    if key == "modified":
+        return lambda node: node.mtime
+    if key == "accessed":
+        return lambda node: node.atime
     if key == "change" and change_of is not None:
         return lambda node: change_of(node) or 0
     return lambda node: node.size

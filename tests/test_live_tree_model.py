@@ -32,7 +32,7 @@ def test_a_queued_folder_is_greyed_with_nothing_to_show_yet():
     row = row_display(_folder(), 0, 0, 0, parent_size=10 * GB, state=QUEUED)
 
     assert row.text == f"{QUEUED_ICON} Docs\\"
-    assert row.values == ("…", "…", "—", "…")
+    assert row.values == ("…", "…", "—", "…", "", "")
     assert row.tags == ("placeholder", "dir")
     assert row.heat is None
 
@@ -41,7 +41,7 @@ def test_a_folder_being_read_shows_its_totals_so_far_as_a_share_of_its_parent_so
     row = row_display(_folder(), 3 * GB, 2 * GB, 1234, parent_size=12 * GB, state=SCANNING)
 
     assert row.text == f"{SCANNING_ICON} Docs\\"
-    size, on_disk, percent, files = row.values
+    size, on_disk, percent, files, _modified, _accessed = row.values
     assert (size, on_disk, files) == ("3.0 GB", "2.0 GB", "1,234")
     assert percent.endswith(" 25.0%")
     assert row.heat == 0.25

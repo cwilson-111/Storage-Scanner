@@ -48,9 +48,15 @@ class MainWindowMixin:
         container = ttk.Frame(self.root, padding=(8, 4))
         container.pack(side=TOP, fill=BOTH, expand=True)
 
-        columns = ("size", "alloc", "percent", "items", "change")
+        # Data order is what live_tree_model.row_display gives, then Change;
+        # on screen Change comes before the dates.
+        columns = ("size", "alloc", "percent", "items", "modified", "accessed", "change")
         self.tree = ttk.Treeview(
-            container, columns=columns, show="tree headings", selectmode="browse"
+            container,
+            columns=columns,
+            displaycolumns=("size", "alloc", "percent", "items", "change", "modified", "accessed"),
+            show="tree headings",
+            selectmode="extended",
         )
         # Clickable headings sort that level (and every expanded level). The
         # percent/alloc columns sort by (logical) size — within a level
@@ -61,6 +67,8 @@ class MainWindowMixin:
         self.tree.heading("percent", text="% of Parent", command=lambda: self._sort_by("size"))
         self.tree.heading("items", text="Files", command=lambda: self._sort_by("items"))
         self.tree.heading("change", text="Change", command=lambda: self._sort_by("change"))
+        self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
+        self.tree.heading("accessed", text="Accessed", command=lambda: self._sort_by("accessed"))
         self._update_heading_arrows()
 
         self.tree.column("#0", width=440, anchor=W, stretch=True)
@@ -71,6 +79,10 @@ class MainWindowMixin:
         # Growth since the last saved scan of this path (P2-18); filled in
         # once this scan's history is saved (_show_changes).
         self.tree.column("change", width=150, anchor=E, stretch=False)
+        # The item's own times, as Explorer's "Date modified" shows them (a
+        # folder's changes when an entry directly in it is added or removed).
+        self.tree.column("modified", width=130, anchor=W, stretch=False)
+        self.tree.column("accessed", width=130, anchor=W, stretch=False)
 
         vsb = ttk.Scrollbar(container, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(container, orient="horizontal", command=self.tree.xview)
@@ -158,29 +170,46 @@ class MainWindowMixin:
     # -- Column sorting ---------------------------------------------------- #
 
     def _delete_selected(self):
-        iid = self.tree.focus()
-        node = self.node_by_iid.get(iid)
-        if not node or self._refuse_delete_during_scan():
+        nodes = self._selected_nodes()
+        if not nodes or self._refuse_delete_during_scan():
             return
-        request = DeleteRequest(node, "Main tree")
+        requests = [DeleteRequest(node, "Main tree") for node in nodes]
         # Something that will be refused anyway (the scan's own root, a
-        # drive, a system folder) isn't worth an "are you sure?" first.
-        if self.delete_service.refusal(request) is None:
+        # drive, a system folder) isn't worth an "are you sure?" first; the
+        # delete service reports it.
+        allowed = [r.node for r in requests if self.delete_service.refusal(r) is None]
+        if allowed and not messagebox.askyesno(
+            f"Delete to {TRASH_NAME}", self._delete_question(allowed), icon="warning"
+        ):
+            return
+        self._delete_nodes(requests)
+
+    @staticmethod
+    def _delete_question(nodes):
+        """The "are you sure?" text for sending `nodes` to the bin."""
+        if len(nodes) == 1:
+            [node] = nodes
             kind = "folder" if node.is_dir else "file"
-            if not messagebox.askyesno(
-                f"Delete to {TRASH_NAME}",
+            return (
                 f"Send this {kind} to the {TRASH_NAME}?\n\n{node.path}\n\n"
                 f"{human_size(node.size)}"
-                + (f" in {node.file_count:,} files" if node.is_dir else ""),
-                icon="warning",
-            ):
-                return
-        self._delete_nodes([request])
+                + (f" in {node.file_count:,} files" if node.is_dir else "")
+            )
+        listed = "\n".join(node.path for node in nodes[:5])
+        more = f"\n… and {len(nodes) - 5:,} more" if len(nodes) > 5 else ""
+        total = sum(node.size for node in nodes)
+        return (
+            f"Send these {len(nodes):,} items to the {TRASH_NAME}?\n\n{listed}{more}\n\n"
+            f"{human_size(total)} in all"
+        )
 
     def _show_menu(self, event):
+        """Right-click: the menu for the selection if the row is part of it,
+        else for that row alone."""
         iid = self.tree.identify_row(event.y)
         if iid:
-            self.tree.selection_set(iid)
+            if iid not in self.tree.selection():
+                self.tree.selection_set(iid)
             self.tree.focus(iid)
             self.menu.tk_popup(event.x_root, event.y_root)
 
@@ -191,7 +220,8 @@ class MainWindowMixin:
         if not box:
             return "break"
         x, y, _width, height = box
-        self.tree.selection_set(iid)
+        if iid not in self.tree.selection():
+            self.tree.selection_set(iid)
         self.menu.tk_popup(self.tree.winfo_rootx() + x + 24, self.tree.winfo_rooty() + y + height)
         return "break"
 
@@ -228,12 +258,31 @@ class MainWindowMixin:
         return "break"
 
     def _selected_node(self):
+        """The focused row's node: what Reveal, Set Budget and Enter act on."""
         return self.node_by_iid.get(self.tree.focus())
 
+    def _selected_nodes(self):
+        """Every selected row's node, top to bottom, leaving out any inside
+        another selected folder (acting on the folder covers it)."""
+        selected = [self.node_by_iid[i] for i in self.tree.selection() if i in self.node_by_iid]
+        folders = {node.path.rstrip("\\/") for node in selected if node.is_dir}
+
+        def inside_a_selected_folder(node):
+            path = os.path.dirname(node.path.rstrip("\\/"))
+            while path and path not in folders:
+                parent = os.path.dirname(path)
+                if parent == path:
+                    return False
+                path = parent
+            return bool(path)
+
+        return [node for node in selected if not inside_a_selected_folder(node)]
+
     def _add_selected_to_cart(self):
-        node = self._selected_node()
-        if node:
+        nodes = self._selected_nodes()
+        for node in nodes:
             self.cart.add(node, "Main tree")
+        if nodes:
             self._refresh_cart_indicator()
 
     def _reveal(self, path, is_dir):
@@ -264,10 +313,11 @@ class MainWindowMixin:
             self._reveal(node.path, node.is_dir)
 
     def _copy_path(self):
-        node = self._selected_node()
-        if node:
+        """Copy the selected paths, one per line."""
+        nodes = self._selected_nodes()
+        if nodes:
             self.root.clipboard_clear()
-            self.root.clipboard_append(node.path)
+            self.root.clipboard_append("\n".join(node.path for node in nodes))
 
     def _set_budget_for_selected(self):
         node = self._selected_node()

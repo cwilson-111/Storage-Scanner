@@ -6,6 +6,7 @@ times them)."""
 import os
 import queue
 import threading
+import time
 from tkinter import StringVar, TclError, Tk, Toplevel
 
 import pytest
@@ -13,7 +14,7 @@ import pytest
 from storage_scanner import scanner
 from storage_scanner.app import StorageScannerApp
 from storage_scanner.formatting import human_size
-from storage_scanner.live_tree_model import node_display
+from storage_scanner.live_tree_model import date_text, node_display
 from storage_scanner.settings import apply_theme
 from storage_scanner.ui import main_tree
 
@@ -234,6 +235,36 @@ def test_the_change_column_shows_growth_since_the_last_scan_and_sorts_by_it(
     app._sort_by("change")
     folders = [n for n in _names(app, root_iid) if app.node_by_iid[_row(app, root_iid, n)].is_dir]
     assert folders == ["Zed", "sub"]
+    _assert_striped(app, root_iid)
+
+
+def test_a_selection_with_a_folder_and_rows_inside_it_acts_on_the_folder_once(app, scanned):
+    root_iid = scanned
+    sub_iid = _row(app, root_iid, "sub")
+    picked = [_row(app, sub_iid, "X.bin"), sub_iid, _row(app, root_iid, "A.txt")]
+    app.tree.selection_set(picked)
+
+    names = sorted(node.name for node in app._selected_nodes())
+
+    assert names == ["A.txt", "sub"]  # X.bin goes with its folder
+
+
+def test_the_modified_column_shows_each_rows_time_and_sorts_newest_first(app, tmp_path):
+    _write(tmp_path, {"old.txt": 1, "mid.txt": 1, "new.txt": 1})
+    for days_ago, name in ((300, "old.txt"), (20, "mid.txt"), (1, "new.txt")):
+        stamp = time.time() - days_ago * 86400
+        os.utime(tmp_path / name, (stamp, stamp))
+    root_node = scanner.scan(str(tmp_path), queue.Queue(), threading.Event())
+    app.root_node = root_node
+    root_iid = app._insert_node("", root_node, parent_size=root_node.size or 1)
+    app._populate_children(root_iid, root_node)
+
+    app._sort_by("modified")
+
+    assert _names(app, root_iid) == ["new.txt", "mid.txt", "old.txt"]
+    old = app.node_by_iid[_row(app, root_iid, "old.txt")]
+    assert app.tree.set(_row(app, root_iid, "old.txt"), "modified") == date_text(old.mtime)
+    assert date_text(old.mtime)[:4].isdigit()
     _assert_striped(app, root_iid)
 
 

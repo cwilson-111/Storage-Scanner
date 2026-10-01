@@ -155,7 +155,14 @@ version, so download the Data build once from the latest release.
 - **Treemap explorer** — a drill-down, click-to-zoom treemap where
   rectangle area represents size and color represents relative heat, with
   breadcrumb navigation and hover details.
-- **Largest Files** and **File Types Breakdown** views.
+- **Largest Files** and **File Types Breakdown** views. Double-click a type
+  to list its files, largest first; both lists have a right-click menu
+  (reveal, copy path, add to cart, delete) and take several rows at once.
+- **Main tree columns** — size, on disk, share of the parent, files, the
+  change since the last scan, and each item's modified and accessed times;
+  click a heading to sort. Ctrl/Shift+click selects several rows to copy,
+  add to the cart or delete together; **Changed folders only** hides what
+  didn't change.
 
 ### Cleaning up safely
 - **Duplicate file finder** — a staged pipeline (group by size → hash the
@@ -379,8 +386,8 @@ The main window works from the keyboard: Tab between controls, the arrow
 keys in the tree, Enter to open a folder, Backspace or Alt+Up to go up,
 Delete to send to the Recycle Bin/Trash, Shift+F10 or the Menu key for the
 row's menu, Ctrl+C to copy a path, Ctrl+F to search, F5 to scan again
-(Cmd instead of Ctrl on macOS). Most other windows are lists with buttons,
-reachable with Tab.
+(Cmd instead of Ctrl on macOS); Shift+arrow keys select several rows.
+Most other windows are lists with buttons, reachable with Tab.
 
 Screen readers are the limit: the tree and lists are Tk widgets, which
 don't expose their rows to Windows' accessibility interfaces, so a screen
