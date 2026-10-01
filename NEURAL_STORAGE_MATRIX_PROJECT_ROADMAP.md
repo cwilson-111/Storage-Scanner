@@ -883,9 +883,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
   files is untested until v1.13.0. A `data-v1.12.0` install never hears of
   a newer version (the README and CHANGELOG say so).
 
-**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` —
-main_window split and Duplicates class ✅ (2026-10-01); Protocol and
-history.py move not yet.**
+**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` — every UI
+file under 500 lines ✅ (2026-10-01); Protocol and history.py move not yet.**
 - Why: 1,284 and 912 lines against the 500-line rule, 14% and 39% covered.
   The duplicate engine (about 280 lines of hashing and matching) lives in a
   UI module, and the 370-line `_show_duplicates_window` of closures is where
@@ -917,9 +916,22 @@ history.py move not yet.**
   three-copy and a two-copy group: rows, keepers, row reason, right-click,
   select-all to cart skips keepers, deleting a copy dissolves its group,
   prunes the cart and removes the file.
-- Not done: a Protocol for the shared app attributes, `history.py` into the
-  package; `history_window.py` (757) and `cleanup_window.py` (651) are
-  still over 500 lines.
+- Done (3): the other two windows built from closures are classes too.
+  `GrowthHistoryWindow` (`ui/growth_history_view.py`, 495 lines) takes the
+  data `HistoryMixin.show_growth_history` gathers (`history_window.py`
+  757 → 316). `CleanupWindow` (`ui/cleanup_view.py`, 475) with the archive
+  flow in `ui/cleanup_archive.py` (221); `cleanup_window.py` 651 → 44.
+  Every module under `storage_scanner/ui/` is now under 500 lines.
+- Verified (3): gates, 743 tests on Windows, 665 passed / 74 skipped under
+  WSL; the real app on its mainloop, two scans of a folder that grew 8 MB:
+  Growth History's four tabs, tables, snapshot pickers and Compare; Cleanup
+  listed a 106 MB 400-day-old log and a duplicate, archived the log through
+  the worker (zip written, original removed, row gone) and deleted one copy
+  of the duplicate (file gone, group dissolved).
+- Not done: a Protocol for the shared app attributes; `history.py` into
+  the package. Outside `ui/`, `history.py` (956), `mft_parser.py` (689),
+  `turbo_cache.py` (538), `scanner.py` (514) and `file_ops.py` (508) are
+  over 500 lines.
 
 **P2-15. Run the tests on Linux and macOS, and settle the Python range — ✅
 done (2026-09-29)**

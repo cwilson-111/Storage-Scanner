@@ -1,5 +1,5 @@
 """Tests for storage_scanner.cleanup_cache -- pure SQLite round-tripping,
-no scan/GUI/Tkinter involved (see cleanup_window.py for how this gets
+no scan/GUI/Tkinter involved (see ui/cleanup_view.py for how this gets
 populated and consulted from the actual Cleanup Recommendations window).
 """
 

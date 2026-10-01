@@ -1,24 +1,11 @@
-"""Scan-history persistence glue and the Growth History window.
+"""Scan-history persistence glue and opening the Growth History window
+(ui/growth_history_view.py) on what the history database holds.
 
 A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
 import os
-from tkinter import (
-    BOTH,
-    END,
-    LEFT,
-    RIGHT,
-    TOP,
-    E,
-    Menu,
-    StringVar,
-    Toplevel,
-    W,
-    X,
-    messagebox,
-    ttk,
-)
+from tkinter import messagebox
 
 from history import (
     delete_scan,
@@ -38,7 +25,6 @@ from storage_scanner.anomaly_detection import detect_size_anomalies
 from storage_scanner.forecasting import forecast_days_until_full, format_forecast_range
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
-from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
 from storage_scanner.scan_history import (
     collect_folder_sizes,
     drive_space,
@@ -46,17 +32,7 @@ from storage_scanner.scan_history import (
     record_scan,
 )
 from storage_scanner.scan_progress_model import FINISHED
-from storage_scanner.settings import COLORS, FONT_BOLD
-from storage_scanner.ui.history_scans import build_scans_tab
-
-
-def _change_percent_text(previous_size, growth_percent):
-    """A folder's change as a percentage, or for one only a single scan has
-    (history keeps folders of 50 MB or more), which way it went: it may have
-    appeared or gone, or only crossed 50 MB."""
-    if growth_percent is not None:
-        return f"{growth_percent:.1f}%"
-    return "New / was <50 MB" if previous_size == 0 else "Gone / now <50 MB"
+from storage_scanner.ui.growth_history_view import GrowthHistoryWindow
 
 
 class HistoryMixin:
@@ -119,19 +95,6 @@ class HistoryMixin:
             # no longer exists.
             error_message = str(exc)
             self.root.after(0, lambda: self._history_save_failed(error_message, progress_token))
-
-    def _format_change(self, value, is_bytes=True):
-        if value is None:
-            return "—"
-        sign = "+" if value > 0 else "-" if value < 0 else ""
-        if is_bytes and isinstance(value, (int, float)) and abs(value) >= 1024:
-            return f"{sign}{human_size(abs(value))}"
-        return f"{sign}{int(value):,}"
-
-    def _format_percent(self, value):
-        if value is None:
-            return "—"
-        return f"{value:+.1f}%"
 
     def _format_forecast(self, forecast, free_as_of=""):
         """Render a Forecast namedtuple as one line — a range and an
@@ -251,120 +214,6 @@ class HistoryMixin:
 
         return folder_path
 
-    def _build_anomalies_tab(self, frame, anomalies, history_count, folder_by_anomaly=None):
-        """Populate the Anomalies tab: scan-to-scan size changes that were
-        statistical outliers for this path's own history (see
-        storage_scanner.anomaly_detection) — a lead worth checking, not a
-        diagnosis. `folder_by_anomaly` (anomaly -> folder path or None)
-        adds a best-effort "which folder" column, since an anomaly on its
-        own only knows the root path's total changed, not where — see
-        _likely_folder_for_anomaly."""
-        if history_count < 4:
-            ttk.Label(
-                frame,
-                text=(
-                    f"Not enough scan history yet to detect anomalies "
-                    f"({history_count}/4 scans needed)."
-                ),
-            ).pack(side=TOP, anchor=W)
-            return
-
-        folder_by_anomaly = folder_by_anomaly or {}
-
-        cols = ("date", "kind", "change", "folder")
-        tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
-        tv.heading("date", text="Date")
-        tv.heading("kind", text="Type")
-        tv.heading("change", text="What happened")
-        tv.heading("folder", text="Likely folder")
-        tv.column("date", width=140, anchor=W, stretch=False)
-        tv.column("kind", width=80, anchor=W, stretch=False)
-        tv.column("change", width=420, anchor=W, stretch=True)
-        tv.column("folder", width=260, anchor=W, stretch=False)
-
-        vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
-        tv.configure(yscrollcommand=vsb.set)
-        tv.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        tv.tag_configure("even", background=COLORS["panel"])
-        tv.tag_configure("odd", background=COLORS["stripe"])
-        # Both anomaly kinds are worth a second look — a mass-deletion-shaped
-        # drop isn't "good news" just because it's a decrease, so this uses
-        # the same warning/critical severity colors the heat scale uses,
-        # not the "shrinking = good" convention below (which is about a
-        # plain summary of direction, not a flagged statistical outlier).
-        tv.tag_configure("spike", foreground=COLORS["error"])
-        tv.tag_configure("drop", foreground=COLORS["warning"])
-
-        if not anomalies:
-            tv.insert(
-                "", END, values=("—", "—", "No anomalies detected in this path's history.", "")
-            )
-            return
-
-        # Only anomalies a folder was actually identified for get a
-        # reveal action — nothing to open for "Not identified".
-        iid_to_folder = {}
-
-        for index, anomaly in enumerate(anomalies):
-            date_text = anomaly.created_at.split("T")[0]
-            folder_path = folder_by_anomaly.get(anomaly)
-            iid = tv.insert(
-                "",
-                END,
-                values=(
-                    date_text,
-                    anomaly.kind.capitalize(),
-                    anomaly.message,
-                    folder_path or "Not identified",
-                ),
-                tags=(anomaly.kind, "odd" if index % 2 else "even"),
-            )
-            if folder_path:
-                iid_to_folder[iid] = folder_path
-
-        def reveal_selected(_event=None):
-            folder_path = iid_to_folder.get(tv.focus())
-            if folder_path:
-                self._reveal(folder_path, is_dir=True)
-
-        tv.bind("<Double-1>", reveal_selected)
-
-        row_menu = Menu(frame, tearoff=0)
-
-        def show_row_menu(event):
-            iid = tv.identify_row(event.y)
-            if not iid or iid not in iid_to_folder:
-                return
-            tv.selection_set(iid)
-            tv.focus(iid)
-            row_menu.delete(0, END)
-            row_menu.add_command(
-                label=f"Reveal in {FILE_MANAGER_NAME}",
-                command=reveal_selected,
-            )
-            row_menu.tk_popup(event.x_root, event.y_root)
-
-        tv.bind("<Button-2>" if IS_MACOS else "<Button-3>", show_row_menu)
-
-    def _summarize_folder_change(self, row):
-        if not row:
-            return "—"
-        (
-            folder_path,
-            previous_size,
-            current_size,
-            growth_bytes,
-            growth_percent,
-            growth_type,
-            file_count,
-        ) = row
-        percent_text = "new" if growth_percent is None else f"{growth_percent:.1f}%"
-        return f"{os.path.basename(folder_path)} — {human_size(growth_bytes)} ({percent_text})"
-
     # -- Show Growth Function ---------------------------------------------- #
     def _history_path_without_scan(self):
         """With nothing scanned this session: the path in the path box if
@@ -446,312 +295,21 @@ class HistoryMixin:
         if existing is not None and existing.winfo_exists():
             existing.destroy()
 
-        win = Toplevel(self.root)
-        self._growth_win = win
-        win.configure(bg=COLORS["bg"])
-        win.title("Storage Growth History")
-        win.geometry("980x620")
-
-        try:
-            win.iconbitmap(resource_path("icon.ico"))
-        except Exception:
-            logger.debug("Growth History window iconbitmap failed", exc_info=True)
-
-        ttk.Label(
-            win,
-            padding=(10, 8),
-            text=f"Growth history for {display_path}  —  {size_text}  |  {forecast_text}",
-            wraplength=940,
-        ).pack(side=TOP, fill=X)
-
-        self._build_snapshot_picker(win, scan_path, scan_choices, newer_id, older_id)
-
-        notebook = ttk.Notebook(win)
-        notebook.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
-
-        summary_frame = ttk.Frame(notebook, padding=10)
-        details_frame = ttk.Frame(notebook, padding=10)
-        anomalies_frame = ttk.Frame(notebook, padding=10)
-        scans_frame = ttk.Frame(notebook, padding=10)
-        notebook.add(summary_frame, text="Summary")
-        notebook.add(details_frame, text="Growth Details")
-        notebook.add(
-            anomalies_frame,
-            text=f"Anomalies ({len(anomaly_list)})" if anomaly_list else "Anomalies",
+        view = GrowthHistoryWindow(
+            self,
+            scan_path,
+            header_text=f"Growth history for {display_path}  —  {size_text}  |  {forecast_text}",
+            scan_choices=scan_choices,
+            newer_id=newer_id,
+            older_id=older_id,
+            summary=summary,
+            rows=rows,
+            anomalies=anomaly_list,
+            history_count=len(full_history),
+            folder_by_anomaly=folder_by_anomaly,
         )
-        notebook.add(scans_frame, text=f"Scans ({len(scan_choices)})")
-        self._build_anomalies_tab(
-            anomalies_frame, anomaly_list, len(full_history), folder_by_anomaly
-        )
-        build_scans_tab(
-            scans_frame,
-            scan_choices,
-            lambda scan_id, date_text: self._remove_scan(scan_path, scan_id, date_text),
-        )
+        self._growth_win = view.win
 
-        overview = ttk.LabelFrame(summary_frame, text="Overview", padding=10)
-        overview.pack(fill=X, pady=(0, 10))
-
-        metrics = [
-            (
-                "Current size",
-                (
-                    human_size(summary["current_size_bytes"])
-                    if summary["current_size_bytes"] is not None
-                    else "—"
-                ),
-            ),
-            (
-                "Previous size",
-                (
-                    human_size(summary["previous_size_bytes"])
-                    if summary["previous_size_bytes"] is not None
-                    else "—"
-                ),
-            ),
-            ("Size change", self._format_change(summary["size_change_bytes"])),
-            ("Size change %", self._format_percent(summary["size_change_percent"])),
-            (
-                "Current files",
-                (
-                    f"{summary['current_file_count']:,}"
-                    if summary["current_file_count"] is not None
-                    else "—"
-                ),
-            ),
-            (
-                "Previous files",
-                (
-                    f"{summary['previous_file_count']:,}"
-                    if summary["previous_file_count"] is not None
-                    else "—"
-                ),
-            ),
-            (
-                "File count change",
-                self._format_change(summary["file_count_change"], is_bytes=False),
-            ),
-            ("Tracked folders", f"{summary['tracked_folders']:,}"),
-            ("New folders (or newly over 50 MB)", f"{summary['new_folders']:,}"),
-            (
-                "Largest growth folder",
-                self._summarize_folder_change(summary["largest_growth_folder"]),
-            ),
-            (
-                "Largest shrink folder",
-                self._summarize_folder_change(summary["largest_shrink_folder"]),
-            ),
-        ]
-
-        for index, (label, value) in enumerate(metrics):
-            ttk.Label(overview, text=f"{label}:", font=FONT_BOLD).grid(
-                row=index // 2, column=(index % 2) * 2, sticky=W, padx=(0, 8), pady=4
-            )
-            ttk.Label(overview, text=value).grid(
-                row=index // 2, column=(index % 2) * 2 + 1, sticky=W, pady=4
-            )
-
-        changes_frame = ttk.LabelFrame(summary_frame, text="Top folder changes", padding=10)
-        changes_frame.pack(fill=BOTH, expand=True)
-
-        change_cols = ("folder", "change", "status")
-        change_tv = ttk.Treeview(
-            changes_frame, columns=change_cols, show="headings", selectmode="browse"
-        )
-        change_tv.heading("folder", text="Folder")
-        change_tv.heading("change", text="Change")
-        change_tv.heading("status", text="Status")
-        change_tv.column("folder", width=420, anchor=W, stretch=True)
-        change_tv.column("change", width=140, anchor=E, stretch=False)
-        change_tv.column("status", width=100, anchor=W, stretch=False)
-
-        change_tv.pack(fill=BOTH, expand=True)
-        change_tv.tag_configure("even", background=COLORS["panel"])
-        change_tv.tag_configure("odd", background=COLORS["stripe"])
-        change_tv.tag_configure("growing", foreground=COLORS["warning"])
-        change_tv.tag_configure("shrinking", foreground=COLORS["good"])
-        change_tv.tag_configure("unchanged", foreground=COLORS["muted"])
-
-        if not rows:
-            change_tv.insert(
-                "",
-                END,
-                values=("No previous scan found for this exact path.", "", ""),
-                tags=("even",),
-            )
-        else:
-            for index, row in enumerate(rows[:10]):
-                (
-                    folder_path,
-                    previous_size,
-                    current_size,
-                    growth_bytes,
-                    growth_percent,
-                    growth_type,
-                    file_count,
-                ) = row
-                if growth_type == "Growing":
-                    status_tag = "growing"
-                elif growth_type == "Shrinking":
-                    status_tag = "shrinking"
-                else:
-                    status_tag = "unchanged"
-                change_tv.insert(
-                    "",
-                    END,
-                    values=(
-                        folder_path,
-                        f"{human_size(growth_bytes)} "
-                        f"({_change_percent_text(previous_size, growth_percent)})",
-                        growth_type,
-                    ),
-                    tags=(status_tag, "odd" if index % 2 else "even"),
-                )
-
-        details_frame_content = ttk.Frame(details_frame, padding=(0, 0, 0, 0))
-        details_frame_content.pack(fill=BOTH, expand=True)
-
-        cols = ("folder", "previous", "current", "growth", "percent", "status", "files")
-        tv = ttk.Treeview(details_frame_content, columns=cols, show="headings", selectmode="browse")
-
-        tv.heading("folder", text="Folder")
-        tv.heading("previous", text="Previous")
-        tv.heading("current", text="Current")
-        tv.heading("growth", text="Growth")
-        tv.heading("percent", text="% Growth")
-        tv.heading("status", text="Status")
-        tv.heading("files", text="Files")
-
-        tv.column("folder", width=360, anchor=W, stretch=True)
-        tv.column("previous", width=100, anchor=E, stretch=False)
-        tv.column("current", width=100, anchor=E, stretch=False)
-        tv.column("growth", width=100, anchor=E, stretch=False)
-        tv.column("percent", width=90, anchor=E, stretch=False)
-        tv.column("status", width=90, anchor=W, stretch=False)
-        tv.column("files", width=80, anchor=E, stretch=False)
-
-        vsb = ttk.Scrollbar(details_frame_content, orient="vertical", command=tv.yview)
-        tv.configure(yscrollcommand=vsb.set)
-
-        tv.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-
-        details_frame_content.rowconfigure(0, weight=1)
-        details_frame_content.columnconfigure(0, weight=1)
-
-        tv.tag_configure("even", background=COLORS["panel"])
-        tv.tag_configure("odd", background=COLORS["stripe"])
-        tv.tag_configure("growing", foreground=COLORS["warning"])
-        tv.tag_configure("shrinking", foreground=COLORS["good"])
-        tv.tag_configure("unchanged", foreground=COLORS["muted"])
-
-        if not rows:
-            tv.insert(
-                "",
-                END,
-                values=(
-                    "No previous scan found for this exact path.",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                ),
-                tags=("even",),
-            )
-            return
-
-        for index, row in enumerate(rows):
-            (
-                folder_path,
-                previous_size,
-                current_size,
-                growth_bytes,
-                growth_percent,
-                growth_type,
-                file_count,
-            ) = row
-
-            percent_text = _change_percent_text(previous_size, growth_percent)
-
-            if growth_type == "Growing":
-                status_tag = "growing"
-            elif growth_type == "Shrinking":
-                status_tag = "shrinking"
-            else:
-                status_tag = "unchanged"
-
-            stripe = "odd" if index % 2 else "even"
-
-            tv.insert(
-                "",
-                END,
-                values=(
-                    folder_path,
-                    human_size(previous_size),
-                    human_size(current_size),
-                    human_size(growth_bytes),
-                    percent_text,
-                    growth_type,
-                    f"{file_count:,}",
-                ),
-                tags=(status_tag, stripe),
-            )
-
-    def _build_snapshot_picker(self, win, scan_path, scan_choices, newer_id, older_id):
-        """Let the user pick any two saved snapshots of this path to compare,
-        instead of only ever seeing the two most recent (roadmap: 'compare
-        any two snapshots, not only the latest two')."""
-        picker = ttk.LabelFrame(win, text="Compare snapshots", padding=(10, 6))
-        picker.pack(side=TOP, fill=X, padx=10, pady=(0, 6))
-
-        if len(scan_choices) < 2:
-            ttk.Label(
-                picker,
-                text="Scan this path again at a later date to unlock snapshot comparison.",
-            ).pack(side=LEFT)
-            return
-
-        label_by_id = {
-            scan_id: f"{created_at.replace('T', ' ')}  —  "
-            f"{human_size(total_size)}, {file_count:,} files"
-            for scan_id, created_at, total_size, file_count in scan_choices
-        }
-        id_by_label = {label: scan_id for scan_id, label in label_by_id.items()}
-        labels = list(id_by_label.keys())  # already newest-first from list_scans_for_path
-
-        ttk.Label(picker, text="Compare to:").pack(side=LEFT)
-        newer_var = StringVar(value=label_by_id.get(newer_id, labels[0]))
-        newer_combo = ttk.Combobox(
-            picker,
-            textvariable=newer_var,
-            values=labels,
-            state="readonly",
-            width=42,
-        )
-        newer_combo.pack(side=LEFT, padx=(4, 12))
-
-        ttk.Label(picker, text="Baseline:").pack(side=LEFT)
-        older_var = StringVar(value=label_by_id.get(older_id, labels[min(1, len(labels) - 1)]))
-        older_combo = ttk.Combobox(
-            picker,
-            textvariable=older_var,
-            values=labels,
-            state="readonly",
-            width=42,
-        )
-        older_combo.pack(side=LEFT, padx=(4, 12))
-
-        def do_compare():
-            self.show_growth_history(
-                compare_a_id=id_by_label[newer_var.get()],
-                compare_b_id=id_by_label[older_var.get()],
-            )
-
-        ttk.Button(picker, text="Compare", command=do_compare).pack(side=RIGHT)
-
-    # -- Duplicate file finder --------------------------------------------- #
     def _collect_folder_sizes_for_history(self, root_node):
         """Folders worth a history row — see scan_history.collect_folder_sizes."""
         return collect_folder_sizes(root_node)

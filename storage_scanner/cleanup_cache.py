@@ -1,8 +1,8 @@
 """Persists the last computed Cleanup Recommendations result to SQLite, so
 opening the app fresh and going straight to Tools > Clean Up > Cleanup
 Recommendations shows last time's results immediately -- no scan needed
-first. See cleanup_window.show_cleanup_recommendations for how this gets
-populated and consulted.
+first. See cleanup_window.show_cleanup_recommendations and
+ui/cleanup_view.py's CleanupWindow for how this gets populated and consulted.
 
 Same %LOCALAPPDATA%\\NeuralStorageMatrix\\ directory, own DB file, and
 per-call-connection/WAL/PRAGMA conventions as history.py/turbo_cache.py.
@@ -80,7 +80,7 @@ def init_cleanup_cache_db():
 class CachedNode:
     """Enough of a real storage_scanner.models.Node for a cached
     recommendation row to be displayed, revealed in the file manager, and
-    deleted -- see cleanup_window.py's use of rec.node.path/name/is_dir/
+    deleted -- see cleanup_view.py's use of rec.node.path/name/is_dir/
     size, and delete_service.check_stale's of size/mtime (0 if unknown).
     Never a stand-in for a real scanned node otherwise: no .children, no
     .error -- this never participates in (or gets inserted into) a live

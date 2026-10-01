@@ -44,7 +44,7 @@ def _latest_stats(progress_q):
     posted snapshots off progress_q, never by reading back a mutated
     shared dict (see _find_duplicate_files's own local `stats` counter,
     kept independent of any caller's state so two concurrent callers -
-    show_duplicates()'s own worker and CleanupMixin's separate duplicate
+    show_duplicates()'s own worker and CleanupWindow's separate duplicate
     scan - can't race or cross-contaminate each other)."""
     latest = None
     while True:
@@ -77,7 +77,7 @@ def test_cloud_placeholder_excluded_from_duplicate_hashing(tmp_path):
 def test_two_concurrent_scans_do_not_cross_contaminate_stats(tmp_path):
     """Simulates show_duplicates()'s Duplicate Files window staying open
     (its dup_stats already showing a prior run's totals) while
-    CleanupMixin's own background duplicate scan runs its own,
+    CleanupWindow's own background duplicate scan runs its own,
     independent call -- the second call must never see or mutate the
     first's numbers, in either direction."""
     app = _make_app(tmp_path)
@@ -91,7 +91,7 @@ def test_two_concurrent_scans_do_not_cross_contaminate_stats(tmp_path):
     }
     before = dict(app.dup_stats)
 
-    app._find_duplicate_files(cancel_event=threading.Event())  # cleanup_window.py's own call shape
+    app._find_duplicate_files(cancel_event=threading.Event())  # cleanup_view.py's own call shape
 
     assert app.dup_stats == before  # untouched by the second, independent call
 
@@ -99,7 +99,7 @@ def test_two_concurrent_scans_do_not_cross_contaminate_stats(tmp_path):
 def test_stats_are_not_exposed_via_a_shared_attribute(tmp_path):
     """_find_duplicate_files must never mutate a caller's own state as a
     side effect -- it only ever reports stats through progress_q, which is
-    optional. CleanupMixin's own duplicate-candidate scan (cleanup_window.
+    optional. CleanupWindow's own duplicate-candidate scan (cleanup_view.
     py) calls this with no progress_q, from a call site that has nothing
     to do with show_duplicates()'s dup_stats attribute at all."""
     app = _make_app(tmp_path)
