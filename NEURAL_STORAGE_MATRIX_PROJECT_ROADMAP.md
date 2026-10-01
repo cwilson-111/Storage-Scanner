@@ -1124,7 +1124,7 @@ Types and Largest Files not yet.**
 the plan; start it only on a real demand signal, and begin with the CLI and
 scheduled JSON output before any service, ingest API or console. Size: L.
 
-**P3-2. Repo housekeeping.**
+**P3-2. Repo housekeeping — ✅ done (2026-10-01)**
 - Why: `git branch -a --merged main` lists `feat/compact-tree`,
   `feat/live-tree-progress`, `fix/followups`, `new_visuals`,
   `wip/2026-09-25`, `origin/new_visuals` and `origin/wip/2026-09-25`; only
@@ -1137,6 +1137,21 @@ scheduled JSON output before any service, ingest API or console. Size: L.
 - Do: delete the merged branches locally and on origin, drop the stash after
   a last look, remove the stray files, recreate the venv.
 - Size: S.
+- Done: deleted 12 local branches with `git branch -d` (each merged: the
+  four above plus the P0/P1 work branches `fix/p0-delete-safety`,
+  `fix/p1-*`) and `origin/wip/2026-09-25`; `origin/new_visuals` was only a
+  stale tracking ref (pruned). `data` went with P2-13. Left
+  Dependabot's open `actions` branch. Both stashes dropped after comparing
+  every class and function in them with main: the Cart/orphaned-install
+  stash was all on main except `cart_window._cart_failure_reason`,
+  superseded by the delete service's per-item reasons; the partial P1-6
+  stash was superseded by `tests/test_history_recovery.py` (its only
+  missing names were the matplotlib chart code P3-11 removed). Removed
+  `TreeSize.spec`, `dist\`, root `__pycache__`; recreated `.venv` with
+  Python 3.13.2 from the pinned `requirements-dev.txt` (no 3.14 artifacts).
+- Verified: in the new venv, ruff, black, mypy and 743 tests pass.
+- Not done: `build\` (PyInstaller's work folder, ignored) was left; any
+  local build recreates it.
 
 **P3-3. The `%TEMP%` folder in the repo root — ✅ done (2026-09-29)**
 - Why: an empty folder created 2026-09-24 21:22:52 and last changed
