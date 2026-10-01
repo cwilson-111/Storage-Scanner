@@ -77,6 +77,7 @@ def app(capsys):
         # a Tk variable can be freed on a scanner worker thread, which Tk
         # refuses ("main thread is not in main loop") after a 1 s wait.
         app.status_var = None
+        app.changed_only_var = None
 
 
 def _write(folder, files):
@@ -233,6 +234,41 @@ def test_the_change_column_shows_growth_since_the_last_scan_and_sorts_by_it(
     app._sort_by("change")
     folders = [n for n in _names(app, root_iid) if app.node_by_iid[_row(app, root_iid, n)].is_dir]
     assert folders == ["Zed", "sub"]
+    _assert_striped(app, root_iid)
+
+
+def test_changed_folders_only_lists_changed_folders_until_unticked(app, scanned, monkeypatch):
+    root_iid = scanned
+    sub, zed = (app.node_by_iid[_row(app, root_iid, name)] for name in ("sub", "Zed"))
+    assert app.changed_only_check.instate(["disabled"])  # nothing to compare with yet
+
+    # Zed is the same size as last time; "sub" wasn't kept by that scan and
+    # is over the (lowered) history threshold, so it counts as new.
+    monkeypatch.setattr(main_tree, "MIN_FOLDER_SIZE_FOR_HISTORY", 50)
+    previous = {os.path.normcase(os.path.normpath(zed.path)): zed.size}
+    monkeypatch.setattr(main_tree, "get_folder_sizes", lambda scan_id: previous)
+    app._show_changes(previous_scan_id=1)
+    assert app.changed_only_check.instate(["!disabled"])
+
+    app.changed_only_var.set(True)
+    app._refilter_tree()
+    assert _names(app, root_iid) == ["sub"]  # no files, no unchanged folder
+    # Nothing under "sub" changed, so it has nothing to expand.
+    assert app.tree.get_children(_row(app, root_iid, "sub")) == ()
+
+    previous[os.path.normcase(os.path.normpath(zed.path))] = zed.size + 1  # Zed shrank
+    previous[os.path.normcase(os.path.normpath(sub.path))] = sub.size  # sub didn't
+    app._show_changes(previous_scan_id=1)  # arrives with the box still ticked
+    assert _names(app, root_iid) == ["Zed"]
+
+    previous[os.path.normcase(os.path.normpath(zed.path))] = zed.size  # nothing changed
+    app._refilter_tree()
+    [message] = app.tree.get_children(root_iid)
+    assert app.tree.item(message, "text") == "No folder here changed since the last scan."
+
+    app.changed_only_var.set(False)
+    app._refilter_tree()
+    assert sorted(_names(app, root_iid)) == sorted([*TOP_FILES, "sub", "Zed"])
     _assert_striped(app, root_iid)
 
 

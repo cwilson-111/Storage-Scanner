@@ -16,6 +16,7 @@ from tkinter import (
     BOTTOM,
     LEFT,
     TOP,
+    BooleanVar,
     E,
     Menu,
     StringVar,
@@ -75,10 +76,22 @@ class MainWindowMixin:
         hsb = ttk.Scrollbar(container, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        container.rowconfigure(0, weight=1)
+        # Lists only the folders whose size changed since the last saved
+        # scan of this path (P2-18); usable once the Change column is filled.
+        self.changed_only_var = BooleanVar(master=self.root, value=False)
+        self.changed_only_check = ttk.Checkbutton(
+            container,
+            text="Changed folders only",
+            variable=self.changed_only_var,
+            command=self._refilter_tree,
+            state="disabled",
+        )
+        self.changed_only_check.grid(row=0, column=0, columnspan=2, sticky="e", pady=(0, 2))
+
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        vsb.grid(row=1, column=1, sticky="ns")
+        hsb.grid(row=2, column=0, sticky="ew")
+        container.rowconfigure(1, weight=1)
         container.columnconfigure(0, weight=1)
 
         # A row carries up to three tags that each set a *different* option, so

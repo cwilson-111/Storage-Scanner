@@ -992,8 +992,8 @@ attestation and GUI self-test not yet.**
 - Done: both confirmations use `cleanup_recommendations.
   sampled_match_warning`, which formats the constant ("1.0 MB" today).
 
-**P2-18. Show what changed since the last scan in the main tree — column ✅
-done (2026-09-29); filter and treemap colour not yet.**
+**P2-18. Show what changed since the last scan in the main tree — column
+and filter ✅ done (2026-10-01); treemap colour is P2-19.**
 - Why: the main tree has Name, Size, On Disk, % of Parent and Files
   (`ui/main_window.py:239-243`). Growth against the previous scan exists
   only inside Growth History, and it's the thing TreeSize Free and WizTree
@@ -1013,7 +1013,23 @@ done (2026-09-29); filter and treemap colour not yet.**
 - Verified: the real app on its real mainloop: scan a 60 MB folder, add a
   10 MB file, rescan: the folder and its parent read "+10.0 MB (+16.7%)".
   `tests/test_main_tree_rows.py` checks the cells and the Change sort.
-- Not done: the "changed only" filter; growth as a treemap colour (P2-19).
+- Done (filter): "Changed folders only" above the tree (`_build_tree`),
+  greyed out until `_show_changes` has a previous scan and again when a
+  new scan starts. Ticked, `MainTreeMixin._ordered_children` lists only
+  folders whose size differs from the previous scan or that are 50 MB or
+  more and new to history (`_has_changed`), so paging and sorting follow;
+  a folder gets an arrow only if something under it is listed; an empty
+  level says "No folder here changed since the last scan."
+  `_refilter_tree` rebuilds the finished tree on toggle (or when the
+  comparison arrives with the box ticked) and reopens folders still listed.
+- Verified (filter): `tests/test_main_tree_rows.py` (disabled until a
+  comparison, only changed/new folders, no arrow without changes, update
+  while ticked, empty message, untick restores everything, stripes). Real
+  app on its mainloop: two 60 MB folders, 10 MB added to one, rescan:
+  ticked shows only it (its subfolder inside, "+10.0 MB (+16.7%)"),
+  unticked restores every row with it still open, a new scan disables the
+  box.
+- Not done: growth as a treemap colour (P2-19).
 
 **P2-19. Treemap: nested, in the main window, coloured by type, age or
 growth.**

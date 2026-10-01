@@ -6,9 +6,7 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
 import os
-from tkinter import (
-    END,
-)
+from tkinter import END
 
 from history import get_folder_sizes
 from storage_scanner.formatting import human_size
@@ -53,7 +51,9 @@ class MainTreeMixin:
             tags=self._row_tags(display, index),
         )
         self.node_by_iid[iid] = node
-        if node.has_children:
+        if node.has_children and (
+            not self._changed_only() or any(self._has_changed(c) for c in node.children)
+        ):
             self.tree.insert(iid, END, text=PLACEHOLDER_TEXT, tags=("placeholder",))
         return iid
 
@@ -65,11 +65,24 @@ class MainTreeMixin:
         elif kids:
             return  # already populated
 
-        self._insert_page(parent_iid, node, self._ordered_children(node), 0)
+        ordered = self._ordered_children(node)
+        self._insert_page(parent_iid, node, ordered, 0)
+        if not ordered and self._changed_only():
+            self.tree.insert(
+                parent_iid,
+                END,
+                text="No folder here changed since the last scan.",
+                tags=("placeholder",),
+            )
 
     def _ordered_children(self, node):
+        """A level's rows in sort order: every child, or with Changed
+        folders only ticked, just the folders that changed."""
+        children = node.children
+        if self._changed_only():
+            children = [child for child in children if self._has_changed(child)]
         return sorted(
-            node.children,
+            children,
             key=sort_key_function(self._sort_key, self._folder_change),
             reverse=self._sort_reverse,
         )
@@ -267,11 +280,70 @@ class MainTreeMixin:
         """Fill the Change column against `previous_scan_id` (the scan saved
         before the one on screen), and re-sort if that's the sort key."""
         self._previous_folder_sizes = get_folder_sizes(previous_scan_id)
+        self.changed_only_check.state(
+            ["!disabled"] if self._previous_folder_sizes else ["disabled"]
+        )
+        if self._changed_only():
+            self._refilter_tree()
+            return
         for iid, node in self.node_by_iid.items():
             if node.is_dir and self.tree.exists(iid):
                 self.tree.set(iid, "change", self._change_cell(node))
         if self._sort_key == "change":
             self._resort_tree()
+
+    def _changed_only(self):
+        """Whether the finished tree lists only changed folders: Changed
+        folders only is ticked and there's a previous scan to compare with."""
+        return bool(self._previous_folder_sizes) and self.changed_only_var.get()
+
+    def _has_changed(self, node):
+        """Whether Changed folders only lists `node`: a folder whose size
+        differs from the previous scan's, or one of 50 MB or more that scan
+        didn't keep (new, or grown past the size history keeps)."""
+        if not node.is_dir:
+            return False
+        previous = self._previous_size(node)
+        if previous is None:
+            return node.size >= MIN_FOLDER_SIZE_FOR_HISTORY
+        return node.size != previous
+
+    def _refilter_tree(self):
+        """Rebuild the finished tree's rows after Changed folders only is
+        ticked or unticked (or the comparison arrives with it ticked). The
+        scan's own row stays; folders that were open and are still listed
+        open again."""
+        if self._live_tracker is not None:
+            return  # a scan's rows are on screen; they follow when it finishes
+        tree = self.tree
+        open_nodes = set()
+
+        def collect_open(parent_iid):
+            for iid in tree.get_children(parent_iid):
+                node = self.node_by_iid.get(iid)
+                if node is not None and node.is_dir and tree.item(iid, "open"):
+                    open_nodes.add(node)
+                    collect_open(iid)
+
+        def reopen(parent_iid):
+            for iid in tree.get_children(parent_iid):
+                node = self.node_by_iid.get(iid)
+                if node in open_nodes and tree.get_children(iid):  # still has rows to show
+                    self._populate_children(iid, node)
+                    tree.item(iid, open=True)
+                    reopen(iid)
+
+        for top_iid in tree.get_children(""):
+            node = self.node_by_iid.get(top_iid)
+            if node is None:
+                continue
+            collect_open(top_iid)
+            rows = tree.get_children(top_iid)
+            for iid in rows:
+                self._forget_subtree(iid)
+            tree.delete(*rows)
+            self._populate_children(top_iid, node)
+            reopen(top_iid)
 
     # -- Constraints Functions --------------------------------------------- #
     def _forget_subtree(self, iid):

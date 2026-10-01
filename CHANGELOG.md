@@ -19,7 +19,8 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 - A **Change** column shows how much each folder grew or shrank since the
   previous saved scan of the same path (history keeps folders of 50 MB or
-  more), and sorts by it.
+  more), and sorts by it. **Changed folders only**, above the tree, lists
+  just the folders that changed (files and unchanged folders hide).
 - F5 no longer starts a second scan while the last one's result is still
   arriving.
 - Closing while a scan's history is being saved waits for the save, and
