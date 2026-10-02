@@ -22,8 +22,6 @@ never be able to disrupt startup or the rest of the app.
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 
 from history import get_app_metadata, set_app_metadata
@@ -76,6 +74,8 @@ def update_check_enabled():
 
 
 def _get_json(url):
+    import urllib.request  # here, not at startup: most launches never call it
+
     request = urllib.request.Request(
         url,
         headers={
@@ -90,7 +90,7 @@ def _get_json(url):
 def _fetch_latest_release_tag():
     try:
         return _get_json(RELEASES_API_URL).get("tag_name")
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+    except (TimeoutError, ValueError, OSError):  # urllib's URLError is an OSError
         logger.debug("Update check request failed", exc_info=True)
         return None
 

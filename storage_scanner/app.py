@@ -15,7 +15,6 @@ import queue
 import sys
 import threading
 import time
-import webbrowser
 from tkinter import TOP, Tk, X, messagebox, ttk
 
 from history import open_history_db
@@ -183,6 +182,8 @@ class StorageScannerApp(
         self._update_banner = banner
 
         def open_release_page():
+            import webbrowser  # here, not at startup
+
             webbrowser.open(release_page_url(newer_tag))
 
         def dismiss():

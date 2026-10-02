@@ -589,7 +589,7 @@ done (2026-09-29)**
 
 ### P2 — soon
 
-**P2-1. The one-file exe takes 5–6 s to start.**
+**P2-1. The one-file exe takes 5–6 s to start — ✅ done (2026-10-01)**
 - Why: `dist\StorageScanner.exe` (the Sep 17 build, same flags as
   `build.yml:87`) running `--cli` on a one-file folder took 5.32–6.26 s over
   three runs; the same from source took 0.71–0.90 s. A one-file exe unpacks
@@ -600,6 +600,25 @@ done (2026-09-29)**
   the one-file exe as the single download, and import the automation and
   audit windows, `urllib` and `webbrowser` lazily.
 - Size: S–M. Verify: launch time for both builds.
+- Done: both Windows build jobs (and `build.bat`) also build `--onedir`
+  into `dist/portable`, smoke-test it (`--cli` and `--selftest-gui`), and
+  zip that folder as `StorageScanner-portable.zip` /
+  `StorageScanner-Data-portable.zip`; the one-file exe stays the main
+  download. Imported only when used: `webbrowser` (update banner, Report a
+  Problem), `urllib.request` (`update_check._get_json`; its `URLError` is
+  caught as the `OSError` it is) and `xml.sax.saxutils` (`schedule`,
+  `notify`, which pulled in `urllib`). The automation and audit windows
+  are mixin base classes, so they can't load lazily; `file_ops`, which
+  the audit window imports, is needed at startup anyway.
+- Verified: local PyInstaller 6.22.3 builds, `--cli` on a one-file folder,
+  three runs each: one-file 1.91–2.00 s, one-folder 0.23 s warm (0.95 s
+  the first time), source 0.28–0.30 s; `--selftest-gui` (1 s of it is the
+  run) 3.47 s vs 1.84 s. The ZIP (13.4 MB) extracts to `StorageScanner\`
+  and the extracted copy passes `smoke_test_build.py`. Importing
+  `storage_scanner.app` from source: 257 → 216–231 ms; none of the three
+  modules is loaded at startup.
+- Not done: the one-folder build won't run from inside the ZIP without
+  extracting (the README says so); no installer.
 
 **P2-2. The tree can't show very large folders — ✅ done (2026-09-29)**
 - Why: the finish rebuild of one level takes 2.1 s at 35,000 rows, 6.7 s at

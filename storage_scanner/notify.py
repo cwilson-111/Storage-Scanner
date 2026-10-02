@@ -21,7 +21,6 @@ it as plain argv items.
 import os
 import shutil
 import subprocess
-from xml.sax.saxutils import escape
 
 from storage_scanner.formatting import human_size
 from storage_scanner.platform_support import IS_LINUX, IS_MACOS, IS_WINDOWS
@@ -57,6 +56,8 @@ def budget_breach_message(display_path, breach):
 
 
 def windows_toast_xml(title, body):
+    from xml.sax.saxutils import escape  # here, not at startup: it pulls in urllib
+
     return (
         '<toast><visual><binding template="ToastGeneric">'
         f"<text>{escape(title)}</text><text>{escape(body)}</text>"

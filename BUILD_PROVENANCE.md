@@ -40,9 +40,11 @@ in order:
 pip install -r requirements-dev.txt
 python make_icon.py
 pyinstaller --onefile --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." Storage-Scanner.py
+pyinstaller --onedir --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." --distpath dist/portable --workpath build/portable Storage-Scanner.py
 python make_sbom.py --app-version <the git tag> --output dist/sbom.json
 ```
-followed by generating the portable ZIP and `SHA256SUMS.txt`.
+followed by zipping the one-folder build (`dist/portable/StorageScanner`)
+as the portable ZIP, and `SHA256SUMS.txt`. Both builds are smoke-tested.
 
 **macOS:**
 ```

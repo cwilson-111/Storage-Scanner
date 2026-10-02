@@ -32,7 +32,6 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
-from xml.sax.saxutils import escape
 
 from storage_scanner.platform_support import IS_WINDOWS
 
@@ -200,6 +199,8 @@ def windows_task_xml(scheduled, command=None, today=None):
             f"<{WEEKDAY_ELEMENTS[scheduled.weekday]} />"
             "</DaysOfWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek>"
         )
+
+    from xml.sax.saxutils import escape  # here, not at startup: it pulls in urllib
 
     description = escape(f"Storage Scanner: scans {scheduled.path} and saves it to scan history.")
 

@@ -5,7 +5,6 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
 import os
-import webbrowser
 from tkinter import (
     LEFT,
     RIGHT,
@@ -202,9 +201,7 @@ class ToolbarMixin:
         help_menu.add_command(label="Getting Started…", command=self.show_onboarding)
         help_menu.add_separator()
         help_menu.add_command(label="Copy Diagnostic Info", command=self._copy_diagnostic_info)
-        help_menu.add_command(
-            label="Report a Problem…", command=lambda: webbrowser.open(diagnostics.ISSUES_URL)
-        )
+        help_menu.add_command(label="Report a Problem…", command=self._report_a_problem)
         self.tools_menu.add_cascade(label="Help", menu=help_menu)
 
         self.top_count_var = StringVar(value="25")
@@ -376,6 +373,11 @@ class ToolbarMixin:
             messagebox.showerror("Storage Scanner", str(exc))
             return
         self.status_var.set(done + " (on Windows 11, under “Show more options”).")
+
+    def _report_a_problem(self):
+        import webbrowser  # here, not at startup: only this menu item needs it
+
+        webbrowser.open(diagnostics.ISSUES_URL)
 
     def _copy_diagnostic_info(self):
         """Help ▸ Copy Diagnostic Info (storage_scanner/diagnostics.py)."""

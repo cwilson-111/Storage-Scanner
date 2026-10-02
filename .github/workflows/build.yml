@@ -152,11 +152,20 @@ jobs:
         # windowed .exe, so calling it here would always "succeed".
         run: python smoke_test_build.py dist/StorageScanner.exe
 
+      - name: Build the portable folder
+        # The portable ZIP holds a one-folder build: the one-file exe unpacks
+        # itself to %TEMP% on every launch (about 2 s), the folder starts in
+        # about a quarter of a second.
+        run: pyinstaller --onedir --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." --distpath dist/portable --workpath build/portable Storage-Scanner.py
+
+      - name: Smoke-test the portable folder
+        run: python smoke_test_build.py dist/portable/StorageScanner/StorageScanner.exe
+
       - name: Generate software bill of materials
         run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom.json
 
       - name: Create portable ZIP
-        run: Compress-Archive -Path dist\StorageScanner.exe -DestinationPath dist\StorageScanner-portable.zip
+        run: Compress-Archive -Path dist\portable\StorageScanner -DestinationPath dist\StorageScanner-portable.zip
 
       - name: Generate SHA-256 checksums
         run: |
@@ -224,11 +233,18 @@ jobs:
       - name: Smoke-test the built executable
         run: python smoke_test_build.py dist/StorageScanner-Data.exe
 
+      - name: Build the portable folder
+        # See the build job's step of the same name.
+        run: pyinstaller --onedir --windowed --name StorageScanner-Data --icon icon.ico --add-data "icon.ico;." --hidden-import pyarrow.csv --hidden-import pyarrow.parquet --hidden-import openpyxl --distpath dist/portable --workpath build/portable Storage-Scanner.py
+
+      - name: Smoke-test the portable folder
+        run: python smoke_test_build.py dist/portable/StorageScanner-Data/StorageScanner-Data.exe
+
       - name: Generate software bill of materials
         run: python make_sbom.py --app-version "${{ github.ref_name }}" --output dist/sbom-data.json
 
       - name: Create portable ZIP
-        run: Compress-Archive -Path dist\StorageScanner-Data.exe -DestinationPath dist\StorageScanner-Data-portable.zip
+        run: Compress-Archive -Path dist\portable\StorageScanner-Data -DestinationPath dist\StorageScanner-Data-portable.zip
 
       - name: Generate SHA-256 checksums
         run: |

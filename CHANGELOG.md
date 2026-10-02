@@ -35,6 +35,9 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   formulas.
 - A folder with hundreds of thousands of files opens at once: the first
   1,000 rows show, with a row to show more (250,000 files: 5.4 s → 0.3 s).
+- `StorageScanner-portable.zip` is now a folder build that starts about
+  2 seconds faster than the single `.exe` (extract it, then run
+  `StorageScanner\StorageScanner.exe`); the app also loads less at startup.
 - `StorageScanner.exe <folder>` scans that folder straight away, and
   Settings can add "Scan with Storage Scanner" to folders' right-click
   menu (Windows, this user only).

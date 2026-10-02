@@ -32,8 +32,14 @@ Or grab any of these straight from the [Releases](https://github.com/cwilson-111
 > flagging it before SmartScreen ever gets a chance to — a reputation check
 > against an unsigned, freshly-released, PyInstaller-built binary, not a
 > real detection. If that happens, download **`StorageScanner-portable.zip`**
-> instead (same binary, zipped — usually avoids the same trigger), or try a
-> different browser. Verify against `SHA256SUMS.txt` either way.
+> instead (usually avoids the same trigger), or try a different browser.
+> Verify against `SHA256SUMS.txt` either way.
+
+**Windows, portable folder** — `StorageScanner-portable.zip` is the same app
+as a folder: extract all of it, then run `StorageScanner\StorageScanner.exe`.
+It starts about 2 seconds faster than the single `.exe`, which unpacks
+itself to a temporary folder on every launch. It won't run from inside the
+ZIP without extracting first.
 
 **macOS** — open `StorageScanner.dmg` and drag Storage Scanner into
 Applications.
@@ -57,8 +63,8 @@ older than that release may not run it — build from source there instead
 
 Every release includes, per platform:
 - **`StorageScanner.exe`** / **`StorageScanner-portable.zip`** (Windows) —
-  the same executable, zipped as an alternative if you'd rather not have
-  anything auto-registered by an installer-style download.
+  the app as one file, and the same app as a folder (zipped), which starts
+  faster.
 - **`StorageScanner.dmg`** (macOS).
 - **`StorageScanner-linux-x86_64.tar.gz`** (Linux).
 - **`sbom*.json`** — a software bill of materials (CycloneDX format, one
