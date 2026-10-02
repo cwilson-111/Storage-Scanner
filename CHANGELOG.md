@@ -49,6 +49,14 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   list its files, largest first, with the same menu. Both close when a new
   scan starts.
 
+### Appearance
+
+- A dark theme: Settings ▸ Appearance follows the system's light or dark
+  mode by default, or stays Light or Dark (applies at the next start).
+- Sharp on high-DPI Windows displays: the app declares DPI awareness, and
+  rows, columns and windows grow with the display scale instead of
+  Windows blurring a stretched 100% picture.
+
 ### Growth History
 
 - The summary counts every tracked folder (not just the top 50), and

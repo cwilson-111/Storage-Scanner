@@ -617,6 +617,8 @@ done (2026-09-29)**
   and the extracted copy passes `smoke_test_build.py`. Importing
   `storage_scanner.app` from source: 257 → 216–231 ms; none of the three
   modules is loaded at startup.
+- Verified (CI, ad29a0f): both Windows jobs built, smoke-tested and zipped
+  the portable folder; all jobs green.
 - Not done: the one-folder build won't run from inside the ZIP without
   extracting (the README says so); no installer.
 
@@ -1012,6 +1014,9 @@ GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
   one-folder build with `_tcl_data` deleted passes every `--cli` check and
   fails only `--selftest-gui` ("Can't find a usable init.tcl"), the gap
   this closes.
+- Verified (CI, 7535ad6): all four build jobs passed "Smoke-test" (now with
+  `--selftest-gui`; Linux under xvfb, macOS on the .app) and "Attest build
+  provenance".
 - Not done: a tag and main at the same commit still build twice.
 
 **P2-17. The sampled-duplicate warning hard-codes "1 MB" — ✅ done
