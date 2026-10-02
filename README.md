@@ -299,6 +299,9 @@ version, so download the Data build once from the latest release.
   newer release, shown as a small dismissible banner with a link — never
   an auto-download or auto-run of anything. See [PRIVACY.md](PRIVACY.md)
   for exactly what this does and doesn't send.
+- **Appearance** — Settings ▸ Appearance: match the system's light or dark
+  mode (the default), or always Light or Dark; it applies the next time
+  the app opens. Sharp on high-DPI (125–200%) Windows displays.
 
 Pure Python standard library for everything above — **no required
 third-party runtime dependencies**. Two features are the exceptions,

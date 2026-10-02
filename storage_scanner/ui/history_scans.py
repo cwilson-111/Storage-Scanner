@@ -11,7 +11,7 @@ from tkinter import END, LEFT, RIGHT, TOP, E, Menu, W, X, ttk
 
 from storage_scanner.formatting import human_size
 from storage_scanner.platform_support import IS_MACOS
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 REMOVE_LABEL = "Remove this scan"
 
@@ -35,9 +35,9 @@ def build_scans_tab(frame, scan_choices, on_remove):
     tv.heading("date", text="Scanned")
     tv.heading("size", text="Size")
     tv.heading("files", text="Files")
-    tv.column("date", width=200, anchor=W, stretch=True)
-    tv.column("size", width=140, anchor=E, stretch=False)
-    tv.column("files", width=120, anchor=E, stretch=False)
+    tv.column("date", width=px(200), anchor=W, stretch=True)
+    tv.column("size", width=px(140), anchor=E, stretch=False)
+    tv.column("files", width=px(120), anchor=E, stretch=False)
     vsb = ttk.Scrollbar(table, orient="vertical", command=tv.yview)
     tv.configure(yscrollcommand=vsb.set)
     tv.grid(row=0, column=0, sticky="nsew")

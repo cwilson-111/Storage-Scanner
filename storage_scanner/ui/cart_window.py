@@ -27,7 +27,7 @@ from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 
 class CartMixin:
@@ -56,7 +56,7 @@ class CartMixin:
         win = Toplevel(self.root)
         self._cart_win = win
         win.configure(bg=COLORS["bg"])
-        win.geometry("900x560")
+        win.geometry(f"{px(900)}x{px(560)}")
 
         try:
             win.iconbitmap(resource_path("icon.ico"))
@@ -81,10 +81,10 @@ class CartMixin:
         tv.heading("kind", text="Type")
         tv.heading("size", text="Size")
         tv.heading("path", text="Path")
-        tv.column("source", width=170, anchor=W, stretch=False)
-        tv.column("kind", width=60, anchor=W, stretch=False)
-        tv.column("size", width=100, anchor=E, stretch=False)
-        tv.column("path", width=500, anchor=W, stretch=True)
+        tv.column("source", width=px(170), anchor=W, stretch=False)
+        tv.column("kind", width=px(60), anchor=W, stretch=False)
+        tv.column("size", width=px(100), anchor=E, stretch=False)
+        tv.column("path", width=px(500), anchor=W, stretch=True)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

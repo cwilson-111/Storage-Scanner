@@ -17,7 +17,7 @@ from storage_scanner.file_ops import open_trash
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import TRASH_NAME, resource_path
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 
 class AuditMixin:
@@ -30,7 +30,7 @@ class AuditMixin:
         self._audit_win = win
         win.configure(bg=COLORS["bg"])
         win.title("Audit Log")
-        win.geometry("1000x560")
+        win.geometry(f"{px(1000)}x{px(560)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -76,12 +76,12 @@ class AuditMixin:
         tv.heading("path", text="Path")
         tv.heading("size", text="Size")
         tv.heading("result", text="Result")
-        tv.column("date", width=140, anchor="w", stretch=False)
-        tv.column("source", width=150, anchor="w", stretch=False)
-        tv.column("kind", width=60, anchor="w", stretch=False)
-        tv.column("path", width=440, anchor="w", stretch=True)
-        tv.column("size", width=90, anchor="e", stretch=False)
-        tv.column("result", width=160, anchor="w", stretch=False)
+        tv.column("date", width=px(140), anchor="w", stretch=False)
+        tv.column("source", width=px(150), anchor="w", stretch=False)
+        tv.column("kind", width=px(60), anchor="w", stretch=False)
+        tv.column("path", width=px(440), anchor="w", stretch=True)
+        tv.column("size", width=px(90), anchor="e", stretch=False)
+        tv.column("result", width=px(160), anchor="w", stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

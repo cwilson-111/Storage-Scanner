@@ -13,7 +13,7 @@ from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, TRASH_NAME, resource_path
-from storage_scanner.settings import COLORS, heat_color
+from storage_scanner.settings import COLORS, heat_color, px
 
 
 class FileListWindow:
@@ -46,7 +46,7 @@ class FileListWindow:
         self.win = Toplevel(app.root)
         setattr(app, attr, self.win)
         self.win.configure(bg=COLORS["bg"])
-        self.win.geometry("820x520")
+        self.win.geometry(f"{px(820)}x{px(520)}")
         try:
             self.win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -79,9 +79,9 @@ class FileListWindow:
         tv.heading("rank", text="#")
         tv.heading("size", text="Size")
         tv.heading("path", text="Path")
-        tv.column("rank", width=44, anchor=E, stretch=False)
-        tv.column("size", width=100, anchor=E, stretch=False)
-        tv.column("path", width=640, anchor=W, stretch=True)
+        tv.column("rank", width=px(44), anchor=E, stretch=False)
+        tv.column("size", width=px(100), anchor=E, stretch=False)
+        tv.column("path", width=px(640), anchor=W, stretch=True)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

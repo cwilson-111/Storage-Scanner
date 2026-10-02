@@ -17,12 +17,13 @@ import threading
 import time
 from tkinter import TOP, Tk, X, messagebox, ttk
 
-from history import open_history_db
+from history import get_app_metadata, open_history_db
+from storage_scanner import appearance
 from storage_scanner.cart import CartManager
 from storage_scanner.history_schema import NewerDatabaseError
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
-from storage_scanner.settings import apply_theme
+from storage_scanner.settings import apply_theme, px, use_palette
 from storage_scanner.ui.audit_window import AuditMixin
 from storage_scanner.ui.automation_window import AutomationMixin
 from storage_scanner.ui.budget_window import BudgetMixin
@@ -79,12 +80,22 @@ class StorageScannerApp(
         self.root = root
         self._initial_path = initial_path
         root.title("Storage Scanner — Elevated (Admin)" if IS_ROOT else "Storage Scanner")
-        root.geometry("960x640")
         # Tkinter's default for an exception raised inside a widget callback
         # (button command, bind, etc.) is a traceback on stderr, invisible
         # in a windowed build; this logs it and shows a dialog instead.
         root.report_callback_exception = self._report_tk_callback_exception
+        # Opened first: the Appearance setting lives in it, and the palette
+        # has to be chosen before any widget takes a colour.
+        history_warning = _open_history()
+        self.appearance = appearance.resolve(
+            get_app_metadata(appearance.SETTING_KEY, appearance.SYSTEM)
+        )
+        use_palette(self.appearance)
         apply_theme(root)
+        root.geometry(f"{px(960)}x{px(640)}")
+        if self.appearance == appearance.DARK:
+            root.after_idle(lambda: appearance.use_dark_title_bar(root))
+            root.bind_class("Toplevel", "<Map>", _dark_title_bar_on_map, add="+")
         try:
             root.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001 - icon is cosmetic; never fail over it
@@ -107,7 +118,6 @@ class StorageScannerApp(
         self._sort_key = "size"  # "name" | "size" | "alloc" | "items" | "change"
         self._sort_reverse = True  # sizes default biggest-first
 
-        history_warning = _open_history()
         if history_warning:
             self.root.after(
                 0,
@@ -281,9 +291,16 @@ def main():
     # the folder that was on screen, and the Explorer menu entry the folder
     # clicked (storage_scanner/explorer_menu.py).
     initial_path = folder_argument(sys.argv[1]) if len(sys.argv) > 1 else None
+    appearance.enable_dpi_awareness()  # before the first window
     root = Tk()
     StorageScannerApp(root, initial_path=initial_path)  # applies the Structural Light theme
     root.mainloop()
+
+
+def _dark_title_bar_on_map(event):
+    """Every window the dark theme opens gets a dark title bar too."""
+    if event.widget.winfo_class() == "Toplevel":
+        appearance.use_dark_title_bar(event.widget)
 
 
 def folder_argument(arg):

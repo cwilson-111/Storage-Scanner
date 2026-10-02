@@ -16,7 +16,7 @@ from storage_scanner.formatting import bar, human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import FileNode, iter_file_rows
 from storage_scanner.platform_support import resource_path
-from storage_scanner.settings import COLORS, heat_color
+from storage_scanner.settings import COLORS, heat_color, px
 from storage_scanner.ui.file_list_view import FileListWindow
 
 NO_EXTENSION = "(no extension)"
@@ -140,7 +140,7 @@ class FileWindowsMixin:
         self._types_win = win
         win.configure(bg=COLORS["bg"])
         win.title(f"File Types — {len(rows)} extensions")
-        win.geometry("760x520")
+        win.geometry(f"{px(760)}x{px(520)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -162,10 +162,10 @@ class FileWindowsMixin:
         tv.heading("size", text="Size")
         tv.heading("percent", text="% of Total")
         tv.heading("files", text="Files")
-        tv.column("ext", width=150, anchor=W, stretch=False)
-        tv.column("size", width=110, anchor=E, stretch=False)
-        tv.column("percent", width=260, anchor=W, stretch=True)
-        tv.column("files", width=90, anchor=E, stretch=False)
+        tv.column("ext", width=px(150), anchor=W, stretch=False)
+        tv.column("size", width=px(110), anchor=E, stretch=False)
+        tv.column("percent", width=px(260), anchor=W, stretch=True)
+        tv.column("files", width=px(90), anchor=E, stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

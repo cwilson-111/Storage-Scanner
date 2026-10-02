@@ -26,7 +26,7 @@ from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
 from storage_scanner.search import filter_nodes, parse_size
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 
 class SearchMixin:
@@ -43,7 +43,7 @@ class SearchMixin:
         scan_tree = self.root_node  # what every row here is from
         win.configure(bg=COLORS["bg"])
         win.title("Search & Filter")
-        win.geometry("920x600")
+        win.geometry(f"{px(920)}x{px(600)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -109,11 +109,11 @@ class SearchMixin:
         tv.heading("size", text="Size")
         tv.heading("modified", text="Modified")
         tv.heading("path", text="Path")
-        tv.column("kind", width=55, anchor=W, stretch=False)
-        tv.column("name", width=190, anchor=W, stretch=False)
-        tv.column("size", width=90, anchor=E, stretch=False)
-        tv.column("modified", width=100, anchor=W, stretch=False)
-        tv.column("path", width=380, anchor=W, stretch=True)
+        tv.column("kind", width=px(55), anchor=W, stretch=False)
+        tv.column("name", width=px(190), anchor=W, stretch=False)
+        tv.column("size", width=px(90), anchor=E, stretch=False)
+        tv.column("modified", width=px(100), anchor=W, stretch=False)
+        tv.column("path", width=px(380), anchor=W, stretch=True)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

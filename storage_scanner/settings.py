@@ -1,5 +1,6 @@
 """App-wide constants: duplicate-scan exclusions, palette, fonts, ttk theme."""
 
+from tkinter import font as tkfont
 from tkinter import ttk
 
 from storage_scanner.logging_setup import logger
@@ -75,10 +76,11 @@ DUPLICATE_HASH_CHUNK_BYTES = 1024 * 1024
 # --------------------------------------------------------------------------- #
 # Theme — "Structural Light": a light, data-tool palette. Fine hairlines and
 # one confident blue instead of neon glow — see After Jarvis (the palette
-# comparison put together while choosing this) for the reasoning.
+# comparison put together while choosing this) for the reasoning. The dark
+# palette keeps the same roles; storage_scanner/appearance.py picks one.
 # --------------------------------------------------------------------------- #
 
-COLORS = {
+LIGHT_COLORS = {
     "bg": "#f6f7f9",  # window background
     "bg2": "#eef1f6",  # header/heading chrome
     "panel": "#ffffff",  # content surfaces (tree rows, cards)
@@ -92,7 +94,52 @@ COLORS = {
     "good": "#1a8754",  # positive: shrinking / improvement
     "error": "#c0331f",  # critical: errors, top-heat, spikes
     "stripe": "#fafbfc",  # subtle zebra striping
+    "heat_low": "#9aa1b0",  # heat_color's three stops: small items stay quiet
+    "heat_mid": "#d97706",
+    "heat_high": "#c0331f",
 }
+
+DARK_COLORS = {
+    "bg": "#1e1f22",
+    "bg2": "#2b2d31",
+    "panel": "#25272b",
+    "border": "#3a3d44",
+    "fg": "#e6e8eb",
+    "muted": "#9aa1ac",
+    "accent": "#4c6ef5",  # still carries white button text
+    "accent2": "#a9bcff",  # light enough to read on the dark rows
+    "sel": "#2f3d66",
+    "warning": "#f0a030",
+    "good": "#3fb97a",
+    "error": "#ff6b5b",
+    "stripe": "#2a2c30",
+    "heat_low": "#7d8590",
+    "heat_mid": "#f0a030",
+    "heat_high": "#ff6b5b",
+}
+
+# The palette in use. Every module reads colours from this dict when it
+# builds a widget, so use_palette must run before the first window.
+COLORS = dict(LIGHT_COLORS)
+
+
+def use_palette(name):
+    """Switch COLORS to "light" or "dark" in place."""
+    COLORS.clear()
+    COLORS.update(DARK_COLORS if name == "dark" else LIGHT_COLORS)
+
+
+# How much bigger than at 96 DPI the screen draws things: Tk's own scaling
+# (pixels per point) over its 96-DPI value. apply_theme sets it.
+_UI_SCALE = 1.0
+
+
+def px(pixels):
+    """A size given in pixels at 96 DPI (100%), in pixels on this screen.
+    Tk scales fonts for the screen's DPI by itself, but not sizes given in
+    pixels: column widths, window sizes, wrap lengths."""
+    return round(pixels * _UI_SCALE)
+
 
 # Tkinter can only use fonts actually installed on the OS — there's no
 # @font-face equivalent — so this picks each platform's native modern UI
@@ -125,7 +172,11 @@ def heat_color(fraction):
     neutral, and only real space hogs earn the warning/critical colors.
     """
     f = max(0.0, min(1.0, fraction))
-    neutral, warning, critical = (0x9A, 0xA1, 0xB0), (0xD9, 0x77, 0x06), (0xC0, 0x33, 0x1F)
+    neutral, warning, critical = (
+        _rgb(COLORS["heat_low"]),
+        _rgb(COLORS["heat_mid"]),
+        _rgb(COLORS["heat_high"]),
+    )
     if f < 0.5:
         t = f / 0.5
         c1, c2 = neutral, warning
@@ -138,18 +189,26 @@ def heat_color(fraction):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _rgb(hex_color):
+    hex_color = hex_color.lstrip("#")
+    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+
+
 def contrast_text_color(hex_color):
     """Black-ish or white text, whichever reads better against
     `hex_color` — computed from relative luminance rather than guessed
-    per-case, so it stays correct if the heat/fill colors above change."""
-    hex_color = hex_color.lstrip("#")
-    r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+    per-case, so it stays correct if the heat/fill colors above change
+    (and whichever palette is in use)."""
+    r, g, b = _rgb(hex_color)
     luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-    return COLORS["fg"] if luminance > 0.55 else "#ffffff"
+    return LIGHT_COLORS["fg"] if luminance > 0.55 else "#ffffff"
 
 
 def apply_theme(root):
-    """Style every ttk widget with the Structural Light palette."""
+    """Style every ttk widget with the palette in COLORS, and record how
+    much this screen scales things (px)."""
+    global _UI_SCALE
+    _UI_SCALE = max(1.0, float(root.tk.call("tk", "scaling")) / (96 / 72))
     C = COLORS
     style = ttk.Style()
     try:
@@ -249,9 +308,12 @@ def apply_theme(root):
         background=C["panel"],
         fieldbackground=C["panel"],
         foreground=C["fg"],
-        rowheight=24,
+        # Tall enough for the row font at this DPI; 24 px at 100%.
+        rowheight=max(px(24), tkfont.Font(root=root, font=FONT_MONO).metrics("linespace") + 8),
         font=FONT_MONO,
         bordercolor=C["border"],
+        lightcolor=C["border"],
+        darkcolor=C["border"],
     )
     style.configure(
         "Treeview.Heading",
@@ -270,7 +332,13 @@ def apply_theme(root):
 
     # Notebook (tabs) and LabelFrame — previously unstyled, so they fell back
     # to 'clam''s own grey defaults once theme_use("clam") was set app-wide.
-    style.configure("TNotebook", background=C["bg"], bordercolor=C["border"])
+    style.configure(
+        "TNotebook",
+        background=C["bg"],
+        bordercolor=C["border"],
+        lightcolor=C["border"],
+        darkcolor=C["border"],
+    )
     style.configure(
         "TNotebook.Tab",
         background=C["bg2"],
@@ -278,12 +346,20 @@ def apply_theme(root):
         padding=(12, 6),
         font=FONT,
         bordercolor=C["border"],
+        lightcolor=C["bg2"],
+        darkcolor=C["bg2"],
     )
     style.map(
         "TNotebook.Tab", background=[("selected", C["panel"])], foreground=[("selected", C["fg"])]
     )
 
-    style.configure("TLabelframe", background=C["bg"], bordercolor=C["border"])
+    style.configure(
+        "TLabelframe",
+        background=C["bg"],
+        bordercolor=C["border"],
+        lightcolor=C["border"],
+        darkcolor=C["border"],
+    )
     style.configure("TLabelframe.Label", background=C["bg"], foreground=C["muted"], font=FONT_BOLD)
 
     # Scrollbars.
@@ -293,10 +369,30 @@ def apply_theme(root):
             background=C["bg2"],
             troughcolor=C["bg"],
             bordercolor=C["bg"],
+            lightcolor=C["bg2"],
+            darkcolor=C["bg2"],
             arrowcolor=C["muted"],
+            arrowsize=px(14),
             relief="flat",
         )
         style.map(orient, background=[("active", C["accent"])])
+
+    # Check boxes and radio buttons (Changed folders only, dialogs).
+    for kind in ("TCheckbutton", "TRadiobutton"):
+        style.configure(
+            kind,
+            background=C["bg"],
+            foreground=C["fg"],
+            indicatorbackground=C["panel"],
+            indicatorforeground=C["accent"],
+            font=FONT,
+        )
+        style.map(
+            kind,
+            background=[("active", C["bg"])],
+            foreground=[("disabled", C["muted"])],
+            indicatorbackground=[("disabled", C["bg2"]), ("pressed", C["sel"])],
+        )
 
     # Progressbar.
     style.configure(

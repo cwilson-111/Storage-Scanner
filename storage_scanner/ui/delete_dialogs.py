@@ -18,7 +18,7 @@ from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import remove_from_tree
 from storage_scanner.platform_support import TRASH_NAME, resource_path
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 # How many refused/failed items one error dialog lists by name.
 _MAX_LISTED = 10
@@ -39,7 +39,7 @@ def _ask(parent, title, text, confirm_text, must_type=None):
         logger.debug("Delete dialog iconbitmap failed", exc_info=True)
 
     answer = {"value": False}
-    ttk.Label(dialog, padding=(16, 14, 16, 10), wraplength=520, justify=LEFT, text=text).pack(
+    ttk.Label(dialog, padding=(16, 14, 16, 10), wraplength=px(520), justify=LEFT, text=text).pack(
         side=TOP, fill=X
     )
 

@@ -11,7 +11,7 @@ from tkinter import BOTTOM, LEFT, RIGHT, TOP, Toplevel, X, ttk
 
 from storage_scanner import logging_setup
 from storage_scanner.logging_setup import logger
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 TITLE = "Something went wrong"
 
@@ -51,7 +51,7 @@ class ErrorDialogMixin:
         ttk.Label(
             dialog,
             padding=(16, 14, 16, 10),
-            wraplength=520,
+            wraplength=px(520),
             justify=LEFT,
             text=f"That didn't work.\n\n{summary_text(exc_value)}{where}",
         ).pack(side=TOP, fill=X)

@@ -41,7 +41,7 @@ from storage_scanner.platform_support import (
     TRASH_NAME,
     resource_path,
 )
-from storage_scanner.settings import COLORS, DUPLICATE_HASH_CHUNK_BYTES
+from storage_scanner.settings import COLORS, DUPLICATE_HASH_CHUNK_BYTES, px
 
 # How much of a big file's start, middle and end a match compared, as the
 # header and the row details word it.
@@ -71,7 +71,7 @@ class DuplicatesWindow:
 
         self.win = Toplevel(app.root)
         self.win.configure(bg=COLORS["bg"])
-        self.win.geometry("980x600")
+        self.win.geometry(f"{px(980)}x{px(600)}")
         try:
             self.win.iconbitmap(resource_path("icon.ico"))
         except Exception:
@@ -117,7 +117,7 @@ class DuplicatesWindow:
             ("path", "Path", 620, W, True),
         ):
             tv.heading(col, text=text)
-            tv.column(col, width=width, anchor=anchor, stretch=stretch)
+            tv.column(col, width=px(width), anchor=anchor, stretch=stretch)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

@@ -33,7 +33,7 @@ from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_WINDOWS, resource_path
 from storage_scanner.scheduled_tasks import list_windows_tasks
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 _EXPORT_FILE_TYPES = {
     "csv": [("CSV (one row per file and folder)", "*.csv")],
@@ -97,7 +97,7 @@ class AutomationMixin:
         self._schedule_win = win
         win.configure(bg=COLORS["bg"])
         win.title("Schedule Scans")
-        win.geometry("860x700" if IS_WINDOWS else "760x470")
+        win.geometry(f"{px(860)}x{px(700)}" if IS_WINDOWS else f"{px(760)}x{px(470)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -115,7 +115,7 @@ class AutomationMixin:
             win,
             padding=(10, 0, 10, 8),
             foreground=COLORS["muted"],
-            wraplength=720,
+            wraplength=px(720),
             justify=LEFT,
             text=(
                 f"Runs a headless scan through {scheduler} and saves it to scan history, "
@@ -182,6 +182,7 @@ class AutomationMixin:
             wrap="word",
             bg=COLORS["panel"],
             fg=COLORS["fg"],
+            insertbackground=COLORS["fg"],
             relief="flat",
             padx=8,
             pady=6,
@@ -189,7 +190,9 @@ class AutomationMixin:
         preview.pack(side=TOP, fill=X if IS_WINDOWS else BOTH, expand=not IS_WINDOWS, padx=10)
 
         status_var = StringVar()
-        ttk.Label(win, textvariable=status_var, padding=(10, 4), wraplength=720, justify=LEFT).pack(
+        ttk.Label(
+            win, textvariable=status_var, padding=(10, 4), wraplength=px(720), justify=LEFT
+        ).pack(
             side=TOP,
             fill=X,
         )
@@ -318,7 +321,7 @@ class AutomationMixin:
             ("notes", "Needs attention", 200, True),
         ):
             tv.heading(col, text=heading)
-            tv.column(col, width=width, anchor=W, stretch=stretch)
+            tv.column(col, width=px(width), anchor=W, stretch=stretch)
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
         tv.grid(row=0, column=0, sticky="nsew")

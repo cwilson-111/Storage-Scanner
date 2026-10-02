@@ -14,7 +14,7 @@ from tkinter import BOTH, LEFT, TOP, Canvas, Toplevel, X, ttk
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
-from storage_scanner.settings import COLORS, FONT, contrast_text_color, heat_color
+from storage_scanner.settings import COLORS, FONT, contrast_text_color, heat_color, px
 from storage_scanner.treemap import compute_layout
 
 _MIN_LABEL_W = 42
@@ -34,7 +34,7 @@ class TreemapMixin:
         self._treemap_win = win
         win.configure(bg=COLORS["bg"])
         win.title("Treemap")
-        win.geometry("900x620")
+        win.geometry(f"{px(900)}x{px(620)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001

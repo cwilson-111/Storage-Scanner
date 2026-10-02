@@ -20,6 +20,7 @@ from tkinter import (
 
 from history import get_app_metadata, set_app_metadata
 from storage_scanner import (
+    appearance,
     diagnostics,
     explorer_menu,
     history_retention,
@@ -192,6 +193,19 @@ class ToolbarMixin:
                 command=self._on_change_history_keep_all,
             )
         settings_menu.add_cascade(label="Keep Every Saved Scan For", menu=keep_all_menu)
+        # Light, dark, or the system's choice (storage_scanner/appearance.py).
+        self.appearance_var = StringVar(
+            value=get_app_metadata(appearance.SETTING_KEY, appearance.SYSTEM)
+        )
+        appearance_menu = Menu(settings_menu, tearoff=0)
+        for value, label in appearance.CHOICES:
+            appearance_menu.add_radiobutton(
+                label=label,
+                value=value,
+                variable=self.appearance_var,
+                command=self._on_change_appearance,
+            )
+        settings_menu.add_cascade(label="Appearance", menu=appearance_menu)
         self.tools_menu.add_cascade(label="Settings", menu=settings_menu)
 
         # Last, where a Help menu conventionally sits: the first-run guide
@@ -410,6 +424,15 @@ class ToolbarMixin:
             messagebox.showerror("Storage Scanner", f"Could not delete the cache:\n{exc}")
             return
         self.status_var.set(f"Cleared the Turbo Scan cache ({human_size(size)}).")
+
+    def _on_change_appearance(self):
+        set_app_metadata(appearance.SETTING_KEY, self.appearance_var.get())
+        if appearance.resolve(self.appearance_var.get()) != self.appearance:
+            messagebox.showinfo(
+                "Appearance",
+                "The new appearance applies the next time you open Storage Scanner.",
+                parent=self.root,
+            )
 
     def _on_change_history_keep_all(self):
         set_app_metadata(history_retention.KEEP_ALL_DAYS_KEY, self.history_keep_all_var.get())

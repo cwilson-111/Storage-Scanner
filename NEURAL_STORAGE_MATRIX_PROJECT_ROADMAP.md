@@ -1143,7 +1143,8 @@ Owner and Folders columns left out.**
   scan) and a Folders count column; the File Types window's own totals
   don't change after a delete (its file list does).
 
-**P2-21. High DPI and a dark theme.**
+**P2-21. High DPI and a dark theme — ✅ done (2026-10-01); a real 150%
+screen not tried.**
 - Why: nothing declares DPI awareness. The v1.11.0 exe's manifest has
   `longPathAware` but no `dpiAware`, the code never calls
   `SetProcessDpiAwareness`, and the venv's Python reports awareness 0, so
@@ -1154,6 +1155,33 @@ Owner and Folders columns left out.**
 - Do: per-monitor DPI awareness with row height from font metrics; a dark
   palette that follows the OS.
 - Size: M. Verify: screenshots at 150%.
+- Done: `storage_scanner/appearance.py`: Settings ▸ Appearance (Match
+  System, the default / Light / Dark, in app_metadata), read from the
+  Windows `AppsUseLightTheme` value, macOS `AppleInterfaceStyle` or GNOME
+  `color-scheme`; applies at the next start (the history DB now opens
+  before the theme, which needs the setting). `settings.LIGHT_COLORS`
+  (unchanged) and `DARK_COLORS`; `use_palette` switches `COLORS` in place
+  before any widget takes a colour; heat colours come from the palette;
+  `contrast_text_color` no longer assumes a light `fg`. Dark title bars
+  through DWM for the main window and every Toplevel. Check boxes, radio
+  buttons, scrollbar, tree, notebook and frame edges are styled (the
+  "Changed folders only" box had clam's grey background in light mode
+  too). DPI: `enable_dpi_awareness` declares *system* awareness before
+  the first window (main and `--selftest-gui`), not per-monitor: Tk 8.6
+  doesn't redraw on `WM_DPICHANGED`, so on a second monitor at another
+  scale Windows stretching it is better than a wrong size. `apply_theme`
+  records the scale from `tk scaling`; `settings.px` scales every window
+  size, table column width and wrap length (62 + 13 + 11 sites); the row
+  height is the font's line space + 8 (24 px at 100%).
+- Verified: screenshots of the real app on its mainloop: dark at 100%
+  (main window, Largest Files, Growth History tabs) after fixing what the
+  first shots showed (light check box, scrollbar and tree edges, frame and
+  tab borders); light with Tk scaling 2.0 (what a 144-DPI, 150% screen
+  gives a DPI-aware process): window 1440×960, rows 36 px, columns and
+  text in proportion, nothing clipped. Gates and 750 tests.
+- Not done: a physical 125–150% display (this one is 100%); classic Tk
+  menus and message boxes stay in the system's light style; switching
+  needs a restart.
 
 **P2-22. Explorer integration and package managers — folder menu and
 `StorageScanner.exe <folder>` ✅ (2026-09-29); winget/Scoop not yet.**

@@ -24,6 +24,7 @@ def run_selftest_gui(seconds=RUN_SECONDS):
     none, so the exit code is what counts)."""
     from tkinter import Tk
 
+    from storage_scanner import appearance
     from storage_scanner.app import StorageScannerApp
 
     errors = []
@@ -33,6 +34,7 @@ def run_selftest_gui(seconds=RUN_SECONDS):
         root.destroy()
 
     try:
+        appearance.enable_dpi_awareness()  # as main() does
         root = Tk()
         root.withdraw()
         StorageScannerApp(root)

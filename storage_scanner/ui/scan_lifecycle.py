@@ -37,7 +37,7 @@ from storage_scanner.platform_support import (
 from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.serialization import dict_to_node
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 
 class ScanLifecycleMixin:
@@ -104,7 +104,7 @@ class ScanLifecycleMixin:
         ttk.Label(
             dialog,
             padding=(16, 14, 16, 4),
-            wraplength=470,
+            wraplength=px(470),
             justify=LEFT,
             text=(
                 "Turbo Scan reads the NTFS Master File Table directly instead "
@@ -116,7 +116,7 @@ class ScanLifecycleMixin:
         ttk.Label(
             dialog,
             padding=(16, 4, 16, 10),
-            wraplength=470,
+            wraplength=px(470),
             justify=LEFT,
             foreground=COLORS["muted"],
             text=(

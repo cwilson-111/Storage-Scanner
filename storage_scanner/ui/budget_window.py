@@ -13,7 +13,7 @@ from storage_scanner.budgets import check_all_budgets
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 
 class BudgetMixin:
@@ -59,7 +59,7 @@ class BudgetMixin:
         self._budgets_win = win
         win.configure(bg=COLORS["bg"])
         win.title("Storage Budgets")
-        win.geometry("780x420")
+        win.geometry(f"{px(780)}x{px(420)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -85,11 +85,11 @@ class BudgetMixin:
         tv.heading("current", text="Last Known Size")
         tv.heading("status", text="Status")
         tv.heading("as_of", text="As Of")
-        tv.column("path", width=300, anchor="w", stretch=True)
-        tv.column("threshold", width=90, anchor="e", stretch=False)
-        tv.column("current", width=110, anchor="e", stretch=False)
-        tv.column("status", width=80, anchor="w", stretch=False)
-        tv.column("as_of", width=150, anchor="w", stretch=False)
+        tv.column("path", width=px(300), anchor="w", stretch=True)
+        tv.column("threshold", width=px(90), anchor="e", stretch=False)
+        tv.column("current", width=px(110), anchor="e", stretch=False)
+        tv.column("status", width=px(80), anchor="w", stretch=False)
+        tv.column("as_of", width=px(150), anchor="w", stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

@@ -50,7 +50,7 @@ from storage_scanner.platform_support import (
     TRASH_NAME,
     resource_path,
 )
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 from storage_scanner.ui.cleanup_archive import archive_review_candidates
 
 _CATEGORY_TAGS = {
@@ -96,7 +96,7 @@ class CleanupWindow:
         self.win = Toplevel(app.root)
         self.win.configure(bg=COLORS["bg"])
         self.win.title("Cleanup Recommendations")
-        self.win.geometry("1020x600")
+        self.win.geometry(f"{px(1020)}x{px(600)}")
         try:
             self.win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -133,12 +133,12 @@ class CleanupWindow:
         tv.heading("risk", text="Risk")
         tv.heading("recoverable", text="Recoverable")
         tv.heading("action", text="Proposed action")
-        tv.column("category", width=110, anchor="w", stretch=False)
-        tv.column("name", width=170, anchor="w", stretch=False)
-        tv.column("reason", width=330, anchor="w", stretch=True)
-        tv.column("risk", width=150, anchor="w", stretch=False)
-        tv.column("recoverable", width=90, anchor="e", stretch=False)
-        tv.column("action", width=210, anchor="w", stretch=False)
+        tv.column("category", width=px(110), anchor="w", stretch=False)
+        tv.column("name", width=px(170), anchor="w", stretch=False)
+        tv.column("reason", width=px(330), anchor="w", stretch=True)
+        tv.column("risk", width=px(150), anchor="w", stretch=False)
+        tv.column("recoverable", width=px(90), anchor="e", stretch=False)
+        tv.column("action", width=px(210), anchor="w", stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

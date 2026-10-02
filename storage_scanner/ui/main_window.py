@@ -39,7 +39,7 @@ from storage_scanner.platform_support import (
     TRASH_NAME,
 )
 from storage_scanner.search import parse_size
-from storage_scanner.settings import COLORS, FONT_MONO_BOLD
+from storage_scanner.settings import COLORS, FONT_MONO_BOLD, px
 
 
 class MainWindowMixin:
@@ -71,18 +71,18 @@ class MainWindowMixin:
         self.tree.heading("accessed", text="Accessed", command=lambda: self._sort_by("accessed"))
         self._update_heading_arrows()
 
-        self.tree.column("#0", width=440, anchor=W, stretch=True)
-        self.tree.column("size", width=110, anchor=E, stretch=False)
-        self.tree.column("alloc", width=110, anchor=E, stretch=False)
-        self.tree.column("percent", width=200, anchor=W, stretch=False)
-        self.tree.column("items", width=90, anchor=E, stretch=False)
+        self.tree.column("#0", width=px(440), anchor=W, stretch=True)
+        self.tree.column("size", width=px(110), anchor=E, stretch=False)
+        self.tree.column("alloc", width=px(110), anchor=E, stretch=False)
+        self.tree.column("percent", width=px(200), anchor=W, stretch=False)
+        self.tree.column("items", width=px(90), anchor=E, stretch=False)
         # Growth since the last saved scan of this path (P2-18); filled in
         # once this scan's history is saved (_show_changes).
-        self.tree.column("change", width=150, anchor=E, stretch=False)
+        self.tree.column("change", width=px(150), anchor=E, stretch=False)
         # The item's own times, as Explorer's "Date modified" shows them (a
         # folder's changes when an entry directly in it is added or removed).
-        self.tree.column("modified", width=130, anchor=W, stretch=False)
-        self.tree.column("accessed", width=130, anchor=W, stretch=False)
+        self.tree.column("modified", width=px(130), anchor=W, stretch=False)
+        self.tree.column("accessed", width=px(130), anchor=W, stretch=False)
 
         vsb = ttk.Scrollbar(container, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(container, orient="horizontal", command=self.tree.xview)

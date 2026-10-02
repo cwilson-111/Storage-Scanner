@@ -26,7 +26,7 @@ from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
     resource_path,
 )
-from storage_scanner.settings import COLORS
+from storage_scanner.settings import COLORS, px
 
 # The scan-details strip's second row: what the scan found, as opposed to
 # how it ran. One row of everything outgrew the default window width.
@@ -158,7 +158,7 @@ class ScanBannersMixin:
         self._inaccessible_paths_win = win
         win.configure(bg=COLORS["bg"])
         win.title(f"Couldn't Be Read — {len(inaccessible_nodes)} path(s)")
-        win.geometry("780x420")
+        win.geometry(f"{px(780)}x{px(420)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
         except Exception:  # noqa: BLE001
@@ -176,7 +176,7 @@ class ScanBannersMixin:
                 "C:\\System Volume Information, or a backup tool's own storage) — "
                 "running this app elevated doesn't override that."
             ),
-            wraplength=740,
+            wraplength=px(740),
             justify=LEFT,
         ).pack(side=TOP, fill=X)
 
@@ -187,8 +187,8 @@ class ScanBannersMixin:
         tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
         tv.heading("path", text="Path")
         tv.heading("type", text="Type")
-        tv.column("path", width=620, anchor=W, stretch=True)
-        tv.column("type", width=80, anchor=W, stretch=False)
+        tv.column("path", width=px(620), anchor=W, stretch=True)
+        tv.column("type", width=px(80), anchor=W, stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

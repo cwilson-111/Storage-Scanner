@@ -26,7 +26,7 @@ from tkinter import (
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
-from storage_scanner.settings import COLORS, FONT_BOLD
+from storage_scanner.settings import COLORS, FONT_BOLD, px
 from storage_scanner.ui.history_scans import build_scans_tab
 
 # A folder's growth type -> the row tag that colours it; anything else
@@ -101,7 +101,7 @@ class GrowthHistoryWindow:
         self.win = Toplevel(app.root)
         self.win.configure(bg=COLORS["bg"])
         self.win.title("Storage Growth History")
-        self.win.geometry("980x620")
+        self.win.geometry(f"{px(980)}x{px(620)}")
 
         try:
             self.win.iconbitmap(resource_path("icon.ico"))
@@ -112,7 +112,7 @@ class GrowthHistoryWindow:
             self.win,
             padding=(10, 8),
             text=header_text,
-            wraplength=940,
+            wraplength=px(940),
         ).pack(side=TOP, fill=X)
 
         self._build_snapshot_picker(scan_choices, newer_id, older_id)
@@ -215,10 +215,10 @@ class GrowthHistoryWindow:
         tv.heading("kind", text="Type")
         tv.heading("change", text="What happened")
         tv.heading("folder", text="Likely folder")
-        tv.column("date", width=140, anchor=W, stretch=False)
-        tv.column("kind", width=80, anchor=W, stretch=False)
-        tv.column("change", width=420, anchor=W, stretch=True)
-        tv.column("folder", width=260, anchor=W, stretch=False)
+        tv.column("date", width=px(140), anchor=W, stretch=False)
+        tv.column("kind", width=px(80), anchor=W, stretch=False)
+        tv.column("change", width=px(420), anchor=W, stretch=True)
+        tv.column("folder", width=px(260), anchor=W, stretch=False)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
@@ -344,9 +344,9 @@ class GrowthHistoryWindow:
         change_tv.heading("folder", text="Folder")
         change_tv.heading("change", text="Change")
         change_tv.heading("status", text="Status")
-        change_tv.column("folder", width=420, anchor=W, stretch=True)
-        change_tv.column("change", width=140, anchor=E, stretch=False)
-        change_tv.column("status", width=100, anchor=W, stretch=False)
+        change_tv.column("folder", width=px(420), anchor=W, stretch=True)
+        change_tv.column("change", width=px(140), anchor=E, stretch=False)
+        change_tv.column("status", width=px(100), anchor=W, stretch=False)
 
         change_tv.pack(fill=BOTH, expand=True)
         change_tv.tag_configure("even", background=COLORS["panel"])
@@ -402,13 +402,13 @@ class GrowthHistoryWindow:
         tv.heading("status", text="Status")
         tv.heading("files", text="Files")
 
-        tv.column("folder", width=360, anchor=W, stretch=True)
-        tv.column("previous", width=100, anchor=E, stretch=False)
-        tv.column("current", width=100, anchor=E, stretch=False)
-        tv.column("growth", width=100, anchor=E, stretch=False)
-        tv.column("percent", width=90, anchor=E, stretch=False)
-        tv.column("status", width=90, anchor=W, stretch=False)
-        tv.column("files", width=80, anchor=E, stretch=False)
+        tv.column("folder", width=px(360), anchor=W, stretch=True)
+        tv.column("previous", width=px(100), anchor=E, stretch=False)
+        tv.column("current", width=px(100), anchor=E, stretch=False)
+        tv.column("growth", width=px(100), anchor=E, stretch=False)
+        tv.column("percent", width=px(90), anchor=E, stretch=False)
+        tv.column("status", width=px(90), anchor=W, stretch=False)
+        tv.column("files", width=px(80), anchor=E, stretch=False)
 
         vsb = ttk.Scrollbar(details_frame_content, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)
