@@ -73,7 +73,9 @@ Every release includes, per platform:
 
 No release is code-signed or notarized yet — checksums let you verify
 integrity, but don't establish who built it, which is what signing/notarization
-is for. That's tracked as future work. See [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md)
+is for. That's tracked as future work. Each file does carry a GitHub build
+provenance attestation tying it to the workflow run and commit that built it:
+`gh attestation verify <file> --repo cwilson-111/Storage-Scanner`. See [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md)
 for exactly how a release is built and what these guarantees do and don't cover,
 and [PRIVACY.md](PRIVACY.md) for what the app does (and doesn't) do with your data.
 

@@ -269,6 +269,13 @@ def main():
 
         sys.exit(run_mft_scan(sys.argv[2:]))
 
+    # The packaged-build smoke test: build the main window hidden, close it,
+    # exit 0 or 1 (see storage_scanner/selftest.py).
+    if len(sys.argv) >= 2 and sys.argv[1] == "--selftest-gui":
+        from storage_scanner.selftest import run_selftest_gui
+
+        sys.exit(run_selftest_gui())
+
     # A folder to scan straight away: the Windows elevated relaunch passes
     # the folder that was on screen, and the Explorer menu entry the folder
     # clicked (storage_scanner/explorer_menu.py).

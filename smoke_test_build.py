@@ -13,6 +13,11 @@ runs) against a small folder of known files, and checks that it:
 - saves the scan to scan history (`--save-history`), creating the history
   database from nothing.
 
+Then runs `--selftest-gui` (storage_scanner/selftest.py), which builds the
+real main window hidden and closes it: the `--cli` run never creates a Tk
+window, so a broken Tcl/Tk bundle or a missing UI module would pass it.
+On Linux this needs a display (CI runs the script under xvfb-run).
+
 It runs the binary with subprocess, which waits for it to finish. That
 matters on Windows: the .exe is a windowed (GUI-subsystem) program, and a
 shell like PowerShell starts one and returns immediately without its exit
@@ -38,12 +43,31 @@ TIMEOUT_SECONDS = 180
 
 
 def _isolated_env(app_data_root):
-    """Environment that sends every platform's app-data folder to app_data_root."""
+    """Environment that sends every platform's app-data folder to app_data_root
+    (and keeps a release-stamped build from checking for updates)."""
     env = dict(os.environ)
     env["LOCALAPPDATA"] = str(app_data_root)  # Windows
     env["XDG_DATA_HOME"] = str(app_data_root)  # Linux
     env["HOME"] = str(app_data_root)  # macOS: ~/Library/Application Support
+    env["STORAGE_SCANNER_NO_UPDATE_CHECK"] = "1"
     return env
+
+
+def _run(command, env, check):
+    """Run `command`, print its output, and check it exits 0 in time."""
+    print("RUN   " + subprocess.list2cmdline(command))
+    try:
+        result = subprocess.run(
+            command, env=env, capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        check(False, f"finished within {TIMEOUT_SECONDS}s")
+        return None
+    for stream, text in (("stdout", result.stdout), ("stderr", result.stderr)):
+        if text and text.strip():
+            print(f"      {stream}: {text.strip()}")
+    check(result.returncode == 0, f"exit code 0 (got {result.returncode})")
+    return result
 
 
 def _history_db(app_data_root):
@@ -84,25 +108,8 @@ def run_smoke_test(binary):
             str(output),
             "--save-history",
         ]
-        print("RUN   " + subprocess.list2cmdline(command))
-
-        try:
-            result = subprocess.run(
-                command,
-                env=_isolated_env(app_data_root),
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            check(False, f"finished within {TIMEOUT_SECONDS}s")
+        if _run(command, _isolated_env(app_data_root), check) is None:
             return failures
-
-        for stream, text in (("stdout", result.stdout), ("stderr", result.stderr)):
-            if text and text.strip():
-                print(f"      {stream}: {text.strip()}")
-
-        check(result.returncode == 0, f"exit code 0 (got {result.returncode})")
 
         if check(output.is_file(), "wrote the JSON result"):
             data = json.loads(output.read_text(encoding="utf-8"))
@@ -129,6 +136,10 @@ def run_smoke_test(binary):
                 rows == [(sum(FILES.values()), len(FILES))],
                 f"saved exactly one scan to history (got {rows})",
             )
+
+        gui_data = Path(work) / "gui-appdata"
+        gui_data.mkdir()
+        _run([str(binary), "--selftest-gui"], _isolated_env(gui_data), check)
 
     return failures
 

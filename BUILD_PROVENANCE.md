@@ -21,14 +21,19 @@ the commit a release was tagged from. Nothing else is added at build time.
 ## Exact build steps
 
 Every release is built by [`.github/workflows/build.yml`](.github/workflows/build.yml),
-as three separate jobs (`build`, `build-macos`, `build-linux`) on GitHub's
-hosted `windows-latest`, `macos-latest`, and `ubuntu-latest` runners
-respectively, each gated on a `test` job (`ruff`, `black --check`, `mypy`,
-and `pytest` with a coverage floor) passing first. Those jobs get a
-read-only token. For a tag, a fourth job, `release`, runs once all three
-have passed: it builds and installs nothing, is the only job allowed to
-write, and publishes their files with that version's `CHANGELOG.md`
-section as the release notes. The core commands, in order:
+as four separate jobs (`build`, `build-data`, `build-macos`, `build-linux`)
+on GitHub's hosted `windows-latest`, `macos-latest`, and `ubuntu-latest`
+runners, each gated on the test jobs (`ruff`, `black --check`, `mypy`, and
+`pytest` with a coverage floor, plus the suite on Linux, macOS and a second
+Python) passing first. Those jobs get a read-only token, plus the right to
+sign a provenance attestation. Each smoke-tests what it built: a headless
+`--cli` scan that must save to history, then `--selftest-gui`, which builds
+the real main window hidden and closes it (so a broken Tcl/Tk bundle or a
+UI module PyInstaller left out fails the build). For a tag, a last job,
+`release`, runs once all four have passed: it builds and installs nothing,
+is the only job allowed to write, and publishes their files with that
+version's `CHANGELOG.md` section as the release notes. The core commands,
+in order:
 
 **Windows:**
 ```
@@ -113,6 +118,14 @@ raised automatically by Dependabot ([`.github/dependabot.yml`](.github/dependabo
 - **`SHA256SUMS*.txt`** and **`sbom*.json`** (one pair per platform),
   attached to every release, let you confirm what you downloaded matches
   what that specific workflow run produced, and what's actually inside it.
+- **Build provenance attestations**: every build outside a pull request
+  records, through GitHub's `actions/attest-build-provenance`, a signed
+  statement that this repository's `build.yml` built that exact file from
+  that commit. With the GitHub CLI:
+  `gh attestation verify StorageScanner.exe --repo cwilson-111/Storage-Scanner`
+  (any of the executables, archives or SBOMs). It shows which workflow run
+  built the file; it doesn't make the build reproducible (below) and isn't
+  code signing (Windows still sees an unsigned program).
 
 ## What this is *not*: a reproducible build
 

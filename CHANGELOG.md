@@ -103,6 +103,10 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   Windows; Windows-only tests are marked and skipped elsewhere. Running
   from source needs Python 3.11 or later.
 - Build and test tools are pinned to exact versions.
+- Every build carries a GitHub build provenance attestation
+  (`gh attestation verify <file> --repo cwilson-111/Storage-Scanner`), and
+  each build's smoke test now also opens and closes the real main window
+  (`--selftest-gui`), so a broken Tcl/Tk bundle fails the build.
 - The main window's code is split by job (toolbar, scan lifecycle, scan
   banners, tree rows), each file under 500 lines.
 

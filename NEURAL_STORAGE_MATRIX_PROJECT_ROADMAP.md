@@ -961,8 +961,8 @@ done (2026-09-29)**
   `logging.FileHandler`, which P3-5 had replaced, so it had stopped
   checking the log; it now checks `logging_setup.log_dir`.
 
-**P2-16. Build provenance and pinned build tools — pins ✅ (2026-09-29);
-attestation and GUI self-test not yet.**
+**P2-16. Build provenance and pinned build tools — pins, attestation and
+GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
 - Why: there's no artifact attestation. `requirements-dev.txt` uses `>=`, so
   each release can bundle a different PyInstaller. Pushing a tag and main at
   the same commit builds everything twice. The smoke test never creates a Tk
@@ -977,8 +977,23 @@ attestation and GUI self-test not yet.**
   `.pre-commit-config.yaml`). Dependabot's pip updates propose upgrades.
 - Verified: `pip download --only-binary=:all:` finds wheels for all of
   them on Windows, macOS and Linux for Python 3.12 and 3.13.
-- Not done: `actions/attest-build-provenance`, a `--selftest-gui` smoke
-  step, and not building twice when a tag and main point at one commit.
+- Done (2): `--selftest-gui` (`storage_scanner/selftest.py`) builds the
+  whole StorageScannerApp hidden, runs Tk for a second and closes it; a
+  build-time exception or a Tk callback error exits 1 at once (the app's
+  error dialog is bypassed, so nothing waits for a click).
+  `smoke_test_build.py` runs it after the `--cli` check, with update checks
+  off; the Linux job runs the smoke test under `xvfb-run`. Every build job
+  outside a pull request runs `actions/attest-build-provenance` (v4.2.2,
+  SHA-pinned) on its executable, archive and SBOM, with `id-token` and
+  `attestations: write` added to those jobs only. BUILD_PROVENANCE and the
+  README say how to check a file (`gh attestation verify`).
+- Verified (2): from source, pass (exit 0) and both failure paths (an
+  exception while building, a callback error: exit 1 in 0.5 s). A local
+  PyInstaller 6.22.3 one-file build passes the whole smoke test; a
+  one-folder build with `_tcl_data` deleted passes every `--cli` check and
+  fails only `--selftest-gui` ("Can't find a usable init.tcl"), the gap
+  this closes.
+- Not done: a tag and main at the same commit still build twice.
 
 **P2-17. The sampled-duplicate warning hard-codes "1 MB" — ✅ done
 (2026-09-29)**
