@@ -127,6 +127,8 @@ class AutomationMixin:
                 "need to be saved again to get them."
             ),
         ).pack(side=TOP, fill=X)
+        if IS_WINDOWS:
+            self._show_notification_check(win)
 
         form = ttk.Frame(win, padding=(10, 0, 10, 6))
         form.pack(side=TOP, fill=X)
@@ -411,10 +413,23 @@ class AutomationMixin:
             ok, message = schedule.delete_windows_task(task.name)
             if ok:
                 status_var.set("Scheduled scan removed.")
+                if len(iid_to_task) == 1:
+                    forget_notification_app_id()
             else:
                 logger.warning("schtasks /Delete failed: %s", message)
                 status_var.set(f"Nothing removed: {message}")
             load_tasks()
+
+        def forget_notification_app_id():
+            # Scheduled scans are what shows notifications; with the last
+            # one gone, the app's notification name and icon go too. A
+            # `--notify` run started some other way registers them again.
+            from storage_scanner.notify import unregister_windows_app_id
+
+            try:
+                unregister_windows_app_id()
+            except OSError:
+                logger.warning("Removing the notification app ID failed", exc_info=True)
 
         tv.bind("<<TreeviewSelect>>", select_task)
 
@@ -425,3 +440,42 @@ class AutomationMixin:
 
         refresh()
         load_tasks()
+
+    def _show_notification_check(self, win):
+        """A line saying whether Windows will show the over-budget
+        notifications and, if not, why and where to turn them back on."""
+        from storage_scanner.notify import APP_DISPLAY_NAME, check_windows_toasts
+
+        text_var = StringVar(value="Asking Windows whether notifications will show…")
+        label = ttk.Label(
+            win,
+            textvariable=text_var,
+            padding=(10, 0, 10, 8),
+            foreground=COLORS["muted"],
+            wraplength=px(720),
+            justify=LEFT,
+        )
+        label.pack(side=TOP, fill=X)
+        checked = queue.Queue()
+        threading.Thread(target=lambda: checked.put(check_windows_toasts()), daemon=True).start()
+
+        def show_result():
+            if not win.winfo_exists():
+                return
+            try:
+                shown, reason = checked.get_nowait()
+            except queue.Empty:
+                win.after(150, show_result)
+                return
+
+            if shown:
+                text_var.set(f'Notifications are on; they come from "{APP_DISPLAY_NAME}".')
+                return
+            if shown is None:
+                logger.warning("Asking Windows about notifications failed: %s", reason)
+                text_var.set(f"Couldn't ask Windows whether notifications will show: {reason}")
+            else:
+                text_var.set(f"Over-budget notifications won't show: {reason}.")
+            label.config(foreground=COLORS["warning"])
+
+        win.after(150, show_result)
