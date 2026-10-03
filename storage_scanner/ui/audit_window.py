@@ -18,9 +18,10 @@ from storage_scanner.history_records import get_audit_log
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class AuditMixin:
+class AuditMixin(AppMixin):
     def show_audit_log(self):
         existing = getattr(self, "_audit_win", None)
         if existing is not None and existing.winfo_exists():

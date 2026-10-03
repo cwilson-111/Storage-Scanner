@@ -32,10 +32,11 @@ from storage_scanner.scan_history import (
     record_scan,
 )
 from storage_scanner.scan_progress_model import FINISHED
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.growth_history_view import GrowthHistoryWindow
 
 
-class HistoryMixin:
+class HistoryMixin(AppMixin):
     def _finish_history_save(
         self, current_scan_id, previous_scan_id, growth_rows, budget_breach, progress_token
     ):

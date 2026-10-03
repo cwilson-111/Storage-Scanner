@@ -13,10 +13,11 @@ from storage_scanner.cleanup_recommendations import is_protected_path
 from storage_scanner.duplicate_finder import find_duplicate_files
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.duplicates_view import DuplicatesWindow
 
 
-class DuplicatesMixin:
+class DuplicatesMixin(AppMixin):
     def _should_skip_duplicate_scan(self, path):
         """Return True if this path should be ignored during duplicate scans."""
         return is_protected_path(path)
@@ -113,11 +114,12 @@ class DuplicatesMixin:
                     self._stop_progress()
                     # A scan started since (and cancelled this search, too
                     # late): the groups are from the tree it replaced.
-                    if self._scan_running() or self._duplicates_scan_root is not self.root_node:
+                    scan_tree = self._duplicates_scan_root
+                    if self._scan_running() or scan_tree is None or scan_tree is not self.root_node:
                         return
                     self.tools_btn.config(state="normal")
                     self.top_count_combo.config(state="readonly")
-                    self._show_duplicates_window(duplicates)
+                    self._show_duplicates_window(scan_tree, duplicates)
                     return
 
                 elif kind == "cancelled":
@@ -143,11 +145,11 @@ class DuplicatesMixin:
 
         self.root.after(100, self._poll_duplicate_progress)
 
-    def _show_duplicates_window(self, duplicates):
+    def _show_duplicates_window(self, scan_tree, duplicates):
         existing = getattr(self, "_duplicates_win", None)
         if existing is not None and existing.winfo_exists():
             existing.destroy()
-        view = DuplicatesWindow(self, duplicates)
+        view = DuplicatesWindow(self, scan_tree, duplicates)
         self._duplicates_win = view.win
         if not view.group_count:
             self.status_var.set("No duplicate files found.")

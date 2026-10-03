@@ -20,16 +20,19 @@ from tkinter import (
     messagebox,
     ttk,
 )
+from typing import Union
 
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
+from storage_scanner.models import FileNode, Node
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
 from storage_scanner.search import filter_nodes, parse_size
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class SearchMixin:
+class SearchMixin(AppMixin):
     def show_search_window(self):
         if not self.root_node:
             return
@@ -125,7 +128,7 @@ class SearchMixin:
         tv.tag_configure("even", background=COLORS["panel"])
         tv.tag_configure("odd", background=COLORS["stripe"])
 
-        iid_to_node = {}
+        iid_to_node: dict[str, Union[Node, FileNode]] = {}
 
         def summarize():
             if iid_to_node:

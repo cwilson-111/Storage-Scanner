@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from tkinter import TOP, Tk, X, messagebox, ttk
+from typing import Optional
 
 from storage_scanner import appearance
 from storage_scanner.cart import CartManager
@@ -187,7 +188,7 @@ class StorageScannerApp(
             return  # already showing one
 
         banner = ttk.Frame(self.root, padding=(10, 6))
-        self._update_banner = banner
+        self._update_banner: Optional[ttk.Frame] = banner
 
         def open_release_page():
             import webbrowser  # here, not at startup

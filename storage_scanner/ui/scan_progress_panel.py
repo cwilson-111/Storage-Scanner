@@ -17,6 +17,7 @@ from tkinter import BOTTOM, LEFT, RIGHT, TOP, StringVar, W, X, ttk
 from storage_scanner.scan_progress import Phase
 from storage_scanner.scan_progress_model import ScanProgressModel, load_estimate
 from storage_scanner.settings import COLORS
+from storage_scanner.ui.app_state import AppMixin
 
 _BAR_MAXIMUM = 1000
 _ANIMATION_MS = 15
@@ -27,7 +28,7 @@ def _detail(view):
     return " · ".join(text for text in (view.estimate, view.current) if text)
 
 
-class ScanProgressMixin:
+class ScanProgressMixin(AppMixin):
     # Steps the UI runs itself, shown via _scan_progress_phase.
     PHASE_SAVING_HISTORY = "Saving history"
     PHASE_WAITING_FOR_ELEVATED_SCAN = "Waiting for the elevated scan"

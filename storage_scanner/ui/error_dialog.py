@@ -12,6 +12,7 @@ from tkinter import BOTTOM, LEFT, RIGHT, TOP, Toplevel, X, ttk
 from storage_scanner import logging_setup
 from storage_scanner.logging_setup import logger
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 TITLE = "Something went wrong"
 
@@ -24,7 +25,7 @@ def summary_text(exc_value):
     return f"{type(exc_value).__name__}{detail}"
 
 
-class ErrorDialogMixin:
+class ErrorDialogMixin(AppMixin):
     _error_dialog = None
 
     def _report_tk_callback_exception(self, exc, val, tb):
