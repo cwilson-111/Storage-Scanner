@@ -7,7 +7,7 @@ import os
 import queue
 import threading
 import time
-from tkinter import StringVar, TclError, Tk, Toplevel
+from tkinter import BooleanVar, StringVar, TclError, Tk, Toplevel
 
 import pytest
 
@@ -40,6 +40,7 @@ class _TreeOnly(StorageScannerApp):
         self._sort_key = "size"
         self._sort_reverse = True
         self.status_var = StringVar(master=root)
+        self.show_treemap_var = BooleanVar(master=root, value=True)  # the toolbar's
         apply_theme(root)
         self._build_tree()
 
@@ -78,6 +79,7 @@ def app(capsys):
         # a Tk variable can be freed on a scanner worker thread, which Tk
         # refuses ("main thread is not in main loop") after a 1 s wait.
         app.status_var = None
+        app.show_treemap_var = None
         app.changed_only_var = None
         app.treemap_pane = None  # its StringVars
 

@@ -126,8 +126,6 @@ class ToolbarMixin:
         explore_menu.add_checkbutton(
             label="Show Treemap", variable=self.show_treemap_var, command=self._toggle_treemap
         )
-        if not self.show_treemap_var.get():
-            self.main_panes.forget(self.treemap_pane.frame)
         add_scan_only(explore_menu, "Search & Filter", self.show_search_window)
         add_scan_only(explore_menu, "Largest Files", self.show_top_files)
         add_scan_only(explore_menu, "File Types Breakdown", self.show_file_types)

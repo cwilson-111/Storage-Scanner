@@ -51,13 +51,15 @@ class MainWindowMixin:
 
     def _build_tree(self):
         # The tree above, the treemap of the selected folder below
-        # (ui/treemap_pane.py); the sash between them can be dragged.
+        # (ui/treemap_pane.py); the sash between them can be dragged. The
+        # toolbar, built first, has read whether the treemap was turned off.
         self.main_panes = ttk.PanedWindow(self.root, orient=VERTICAL)
         self.main_panes.pack(side=TOP, fill=BOTH, expand=True)
         container = ttk.Frame(self.main_panes, padding=(8, 4))
         self.main_panes.add(container, weight=3)
         self.treemap_pane = TreemapPane(self, self.main_panes)
-        self.main_panes.add(self.treemap_pane.frame, weight=2)
+        if self.show_treemap_var.get():
+            self.main_panes.add(self.treemap_pane.frame, weight=2)
 
         # Data order is what live_tree_model.row_display gives, then Change;
         # on screen Change comes before the dates.
