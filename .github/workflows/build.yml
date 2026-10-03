@@ -22,12 +22,40 @@ on:
 permissions:
   contents: read
 
+# A tag and main pushed at the same commit would build everything twice.
+# Pushes share a group per commit, and a tag's run cancels a main run
+# already going there (tag after main); a main run arriving while the tag's
+# runs waits, then `tagged` below skips it (tag before main).
+concurrency:
+  group: ${{ github.event_name == 'push' && format('build-{0}', github.sha) || format('build-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
+  tagged:
+    # Whether this is a push to main of a commit a version tag already
+    # points at: that tag's run builds and releases it, so this one stops.
+    # ls-remote lists an annotated tag's commit as "<sha> refs/tags/vX^{}".
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] &&
+             git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY" 'refs/tags/v*' | grep -q "^$GITHUB_SHA"; then
+            skip=true
+            echo "A version tag already points at $GITHUB_SHA; its run builds it."
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   test:
     # Windows, not ubuntu: several tests exercise Windows-only code paths
     # (NTFS MFT/Turbo Scan, drive-letter/volume-root resolution, cluster-size
     # allocation) that this repo has never run or verified on Linux, and the
     # build job below only ever targets windows-latest anyway.
+    needs: tagged
+    if: needs.tagged.outputs.skip != 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -71,6 +99,8 @@ jobs:
     # The Windows leg also installs the Data build's packages, so the
     # csv_to_* tests run their real conversions there (they skip without
     # pyarrow and openpyxl, as in the job above and the standard build).
+    needs: tagged
+    if: needs.tagged.outputs.skip != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

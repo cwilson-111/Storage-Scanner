@@ -1023,8 +1023,8 @@ done (2026-09-29)**
   `logging.FileHandler`, which P3-5 had replaced, so it had stopped
   checking the log; it now checks `logging_setup.log_dir`.
 
-**P2-16. Build provenance and pinned build tools — pins, attestation and
-GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
+**P2-16. Build provenance and pinned build tools — ✅ done (pins,
+attestation, GUI self-test 2026-10-01; one build per tagged commit 2026-10-02).**
 - Why: there's no artifact attestation. `requirements-dev.txt` uses `>=`, so
   each release can bundle a different PyInstaller. Pushing a tag and main at
   the same commit builds everything twice. The smoke test never creates a Tk
@@ -1058,7 +1058,17 @@ GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
 - Verified (CI, 7535ad6): all four build jobs passed "Smoke-test" (now with
   `--selftest-gui`; Linux under xvfb, macOS on the .app) and "Attest build
   provenance".
-- Not done: a tag and main at the same commit still build twice.
+- Done (3): one build per commit when a tag and main share it. Pushes join
+  a `concurrency` group per commit and a tag's run cancels a main run in
+  progress there (tag pushed after main); a first job, `tagged`, asks
+  `git ls-remote` whether a `v*` tag already points at the commit and, for
+  a push to main, skips every other job (tag pushed first; a main run that
+  queued behind the tag's run ends up here too). Pull requests and manual
+  runs never share a group.
+- Verified (3): the `tagged` script against the real remote: main push of
+  8c2315b (v1.13.0's commit) → skip=true, of untagged 6442ee4 → false, the
+  tag push and a pull request → false; the workflow parses (PyYAML) with
+  test and test-other-os needing `tagged` and every build behind them.
 
 **P2-17. The sampled-duplicate warning hard-codes "1 MB" — ✅ done
 (2026-09-29)**
