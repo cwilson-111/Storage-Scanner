@@ -288,6 +288,11 @@ on this machine):
   back to Compatible from both the MFT read and the cache; a change made
   during a full read reaches the next incremental scan
   (`tests/test_turbo_scan_integration.py`).
+- Real drive (2026-10-02, elevated Turbo Scan of `C:\`, scan 31): 1,331,410
+  files, 284,280 folders; On Disk total 1.733 TB against 1.739 TB the
+  drive reports used (0.37% apart; [inference] NTFS metadata and files the
+  scan can't see). Logical 2.28 TB on a 2.05 TB drive, as compressed,
+  sparse and online-only files allow. No warning or fallback in the log.
 - Not done: `compare_scan_engines.py` on real volumes (needs elevation;
   folded into P1-3).
 
@@ -302,6 +307,10 @@ checklist.**
   grow, rename, delete, and a change during the scan), then
   `compare_scan_engines.py` against Compatible on `C:\Windows`, `C:\Users`,
   a compressed folder and a junction root. Record the results here.
+- Partial (2026-10-02): a full elevated Turbo Scan of `C:\` saved scan 31
+  with no warning in the log, and its On Disk total matches the drive's
+  used space within 0.37% (P1-2). Still to do: an incremental scan after
+  known changes, and `compare_scan_engines.py` against Compatible.
 - Size: M. Verify: the results section exists and matches.
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
@@ -690,7 +699,7 @@ show it — ✅ done (2026-10-02): gated, and ~180 B a folder less.**
     isn't worth a doubled rescan peak.
 
 **P2-4. The Turbo cache file is 615 MB and 54% empty — ✅ done
-(2026-09-29), real-drive check pending (P1-3)**
+(2026-09-29), verified on this drive (2026-10-02)**
 - Why: `turbo_scan_cache.db` here: 150,319 pages of 4 KB, 80,987 of them on
   the free list, for 1,478,444 records, which is about 192 B per record live
   against `baseline.json`'s 128.1 (real names are longer, and the names
@@ -714,8 +723,10 @@ show it — ✅ done (2026-10-02): gated, and ~180 B a folder less.**
   file shrinks below a quarter; a 90-day-stale drive dropped; a junk file
   started over (that test found the open-connection bug). The menu item in
   the real app cleared a 20 KB sandbox cache.
-- Not done: a real Turbo Scan to see this machine's 615 MB shrink (needs
-  elevation).
+- Verified on this drive: the first real full save after the change
+  (2026-10-01 19:48) logged "compacted … (79616 of 150319 pages were
+  free)"; after the 2026-10-02 elevated scan the file is 65,162 pages
+  (267 MB) with 0 free, down from 615 MB.
 
 **P2-5. History edge cases give wrong answers — ✅ done (2026-09-29).**
 Reproduced on synthetic
