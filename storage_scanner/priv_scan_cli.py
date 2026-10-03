@@ -1,5 +1,5 @@
 """Headless entry point for `--priv-scan <path>` (macOS and Linux elevated
-scanning -- see storage_scanner.file_ops.run_elevated_scan_macos/
+scanning -- see storage_scanner.elevation.run_elevated_scan_macos/
 run_elevated_scan_linux for why each platform needs this rather than
 just relaunching the whole GUI as root).
 

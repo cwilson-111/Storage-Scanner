@@ -128,7 +128,7 @@ def _build_mft_record0(extents):
     $DATA data runs, rather than assuming one contiguous span (that
     assumption was a real bug -- see mft_volume.py's module docstring).
     No $STANDARD_INFORMATION/$FILE_NAME needed: resolving extents only
-    ever calls mft_parser.get_nonresident_data_runs_bytes."""
+    ever calls mft_records.get_nonresident_data_runs_bytes."""
     data_attr = _nonresident_data_attr(_encode_runs(extents))
     attrs = data_attr + struct.pack("<I", _ATTR_END_MARKER)
     bytes_in_use = _FIRST_ATTR_OFFSET + len(attrs)
