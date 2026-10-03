@@ -72,9 +72,9 @@ def test_files_that_changed_size_since_the_scan_are_not_matched(tmp_path, monkey
     monkeypatch.setattr(duplicate_finder, "DUPLICATE_HASH_CHUNK_BYTES", chunk)
     grown = bytes(5 * chunk)
     app = _make_app(tmp_path, [("a.bin", grown), ("b.bin", _flip(grown, len(grown) // 2))])
-    sizes = app.root_node.file_sizes
-    for i in range(len(sizes)):
-        sizes[i] = 2 * chunk  # what the scan saw, before they grew
+    folder = app.root_node
+    for i in range(len(folder.file_names)):
+        folder.set_file_size(i, 2 * chunk, 2 * chunk)  # what the scan saw, before they grew
 
     assert _groups(app) == []
 

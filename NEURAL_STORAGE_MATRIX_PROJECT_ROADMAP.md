@@ -646,7 +646,7 @@ done (2026-09-29)**
   re-sorted.
 
 **P2-3. Folders cost six times what files do, and the benchmark doesn't
-show it.**
+show it — ✅ done (2026-10-02): gated, and ~180 B a folder less.**
 - Why: tracemalloc on real scans: `C:\Windows\WinSxS` (124,809 files,
   128,573 folders) 878 B per file all-in; `C:\Program Files` 191 B. That
   works out to about 120 B per file plus 736 B per folder; a folder's first
@@ -658,6 +658,36 @@ show it.**
   folder's file columns into one buffer, trim them after the scan, and
   derive a folder's path from its parent instead of storing it.
 - Size: M. Verify: the new scale.py metric.
+- Done: `benchmarks/scale.py` tree_memory also builds the volume four
+  files to a folder (`REAL_FILES_PER_DIR`) and gates
+  `tree_real_layout_bytes_per_file`. A folder's four number columns are two
+  arrays now: `file_ints` holds each row's size then on-disk size,
+  `file_times` its mtime then atime. `file_sizes`/`file_allocs`/
+  `file_mtimes`/`file_atimes` are read-only properties returning one
+  field's copy (taken once per folder by search, cleanup, duplicates,
+  roll-up, File Types), and `Node.set_file_size()` is the one writer
+  (mft_scan's hard-link dedup). FileNode indexes the arrays directly.
+  Copies rather than memoryviews: a view held anywhere would make the next
+  `add_file` on that folder raise BufferError.
+- Verified: 20k files real layout 320.0 → 276.0 B/file, 50 a folder 117.0
+  → 111.5 (baseline.json updated for these two only); 1M files real layout
+  308.7 → 264.7 B/file, tree peak RSS 994 → 869 MB. A real Compatible scan
+  of `C:\Program Files\Python313` (10,549 files) gives the same JSON
+  before and after except access times. benchmarks/main_tree.py 250k:
+  open 0.30 s, sorts 0.27–0.33 s, delete 0.017 s (no slower). Suite 757
+  passed.
+- Not done, on purpose:
+  - One buffer for every column would save ~160 B a folder more, but
+    every FileNode read would go through struct or a fresh view, and the
+    buffer would need packing after the scan while the live tree reads it.
+  - Trimming arrays after the scan: measured 0–54 B a folder (0 at four
+    files), for a copy pass in `_rollup`.
+  - Deriving a folder's path from its parent: needs a parent pointer, and
+    then (a) Turbo's result, a subtree inside the whole-volume tree
+    (`turbo_read.find_subtree_node`), would keep the entire volume tree
+    alive, and (b) parent ↔ dirs cycles mean a replaced tree is freed only
+    by a full GC pass, so a rescan would hold two trees. ~130 B a folder
+    isn't worth a doubled rescan peak.
 
 **P2-4. The Turbo cache file is 615 MB and 54% empty — ✅ done
 (2026-09-29), real-drive check pending (P1-3)**

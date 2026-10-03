@@ -41,7 +41,7 @@ def test_identical_trees_produce_no_discrepancies():
 def test_size_mismatch_is_reported():
     compatible = _tree_with_one_file()
     turbo = _tree_with_one_file()
-    turbo.file_sizes[0] = 999
+    turbo.set_file_size(0, 999, turbo.file_allocs[0])
 
     discrepancies = _compare(compatible, turbo)
 

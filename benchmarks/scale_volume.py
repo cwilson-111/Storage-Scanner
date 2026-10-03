@@ -8,6 +8,10 @@ import sys
 
 FILES_PER_DIR = 50
 DIRS_PER_DIR = 8
+# A real system drive's shape: 1,142,488 files in 260,518 folders on the
+# C:\ measured for P2-3 (4.4 a folder), where folders, not files, are
+# most of the tree's memory.
+REAL_FILES_PER_DIR = 4
 VOLUME_ROOT = "C:\\" if os.name == "nt" else "/"
 _MTIME = 1_750_000_000.0
 
@@ -15,11 +19,11 @@ _MTIME = 1_750_000_000.0
 # -- The synthetic volume ----------------------------------------------------- #
 
 
-def layout(n_files):
+def layout(n_files, files_per_dir=FILES_PER_DIR):
     """[(folder path parts, files in it)], breadth-first, parents before
     children. Folder parts are relative to the volume root; () is the root,
     which holds no files."""
-    n_dirs = max(1, -(-n_files // FILES_PER_DIR))
+    n_dirs = max(1, -(-n_files // files_per_dir))
     folders = []
     frontier = [()]
     while len(folders) < n_dirs:
@@ -36,7 +40,7 @@ def layout(n_files):
     remaining = n_files
     result = [((), 0)]
     for parts in folders:
-        count = min(FILES_PER_DIR, remaining)
+        count = min(files_per_dir, remaining)
         remaining -= count
         result.append((parts, count))
     return result
@@ -54,7 +58,7 @@ def small_subtree_parts(n_files):
     return layout(n_files)[-1][0]
 
 
-def build_node_tree(n_files):
+def build_node_tree(n_files, files_per_dir=FILES_PER_DIR):
     """The Node tree a Compatible scan of the synthetic volume would produce,
     with the same fields scanner.scan() sets, rolled up."""
     from storage_scanner.models import Node
@@ -62,7 +66,7 @@ def build_node_tree(n_files):
 
     root = Node(VOLUME_ROOT, VOLUME_ROOT)
     nodes = {(): root}
-    for parts, count in layout(n_files):
+    for parts, count in layout(n_files, files_per_dir):
         if parts:
             parent = nodes[parts[:-1]]
             folder = Node(os.path.join(parent.path, parts[-1]), parts[-1])

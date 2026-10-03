@@ -1,26 +1,32 @@
 """The scanned-tree data model.
 
 A folder is a Node. The files directly inside it are not objects of their
-own: each is one row of the folder's parallel columns (file_names,
-file_sizes, file_allocs, file_mtimes, file_atimes, file_flags), and a
-FileNode is a two-field view onto one row, made only when something asks
-for it (node.children, node.files(), a search result, a duplicate group).
-Both expose the same read-only attributes -- path, name, is_dir, size,
-alloc_size, file_count, mtime, atime, error, is_link, hardlink_dup,
-is_cloud_placeholder, children, has_children -- so code that only reads
-the tree doesn't care which one it holds. Code that walks every file
-(search, cleanup, duplicates, roll-up) reads the columns directly instead,
-through iter_file_rows(), and makes a FileNode only for a row it keeps.
+own: each is one row of the folder's columns (file_names; file_ints, which
+holds each row's logical then on-disk size; file_times, its mtime then
+atime; file_flags), and a FileNode is a two-field view onto one row, made
+only when something asks for it (node.children, node.files(), a search
+result, a duplicate group). Both expose the same read-only attributes --
+path, name, is_dir, size, alloc_size, file_count, mtime, atime, error,
+is_link, hardlink_dup, is_cloud_placeholder, children, has_children -- so
+code that only reads the tree doesn't care which one it holds. Code that
+walks every file (search, cleanup, duplicates, roll-up) reads the columns
+instead, through iter_file_rows(): file_sizes, file_allocs, file_mtimes
+and file_atimes are copies of one field per row, taken once per folder,
+and set_file_size() changes a row's sizes. It makes a FileNode only for a
+row it keeps.
 
 Why columns: a Python object per file (its slots, its own path and name
 strings, an empty children list, boxed ints and floats) cost ~400 bytes a
 file. A row costs its name string plus 33 bytes of packed numbers, and a
 file's path isn't stored at all -- it's its folder's path joined with its
-name. benchmarks/scale.py's tree_bytes_per_file gates the total.
+name. Two fields share an array because a real drive averages about four
+files a folder, where each array's own ~64 bytes counts: four arrays cost
+a folder about 160 bytes more than two. benchmarks/scale.py's
+tree_bytes_per_file and tree_real_layout_bytes_per_file gate the total.
 
 Only a folder that holds files gets columns: until its first add_file()
 they're shared empty sentinels (never appended to -- add_file() swaps in
-real ones first), since six empty containers would cost over 400 bytes on
+real ones first), since four empty containers would cost over 250 bytes on
 every folder that has only subfolders.
 
 A deleted file's row is never physically removed: remove_child() flags it
@@ -82,10 +88,8 @@ class Node:
         "is_cloud_placeholder",
         "dirs",
         "file_names",
-        "file_sizes",
-        "file_allocs",
-        "file_mtimes",
-        "file_atimes",
+        "file_ints",
+        "file_times",
         "file_flags",
         "removed_files",
     )
@@ -112,14 +116,12 @@ class Node:
         # add_file(), so its length is the row count a reader can trust
         # while a scan is still appending (see scanner.scan's live tree).
         self.file_names = _NO_NAMES
-        self.file_sizes = _NO_INTS  # logical bytes
-        # On-disk bytes: differs from the logical size for sparse and
-        # compressed files and cloud-placeholder stubs.
-        self.file_allocs = _NO_INTS
-        self.file_mtimes = _NO_FLOATS
-        # Many filesystems update access times lazily or not at all, so
-        # treat it as a weak "not touched" signal.
-        self.file_atimes = _NO_FLOATS
+        # Per row: logical bytes, then on-disk bytes (which differ for
+        # sparse and compressed files and cloud-placeholder stubs).
+        self.file_ints = _NO_INTS
+        # Per row: mtime, then atime. Many filesystems update access times
+        # lazily or not at all, so treat atime as a weak "not touched" signal.
+        self.file_times = _NO_FLOATS
         self.file_flags = _NO_FLAGS  # FLAG_* bits
         self.removed_files = 0  # rows flagged FLAG_REMOVED
 
@@ -130,19 +132,40 @@ class Node:
         """Append a file row; returns its index."""
         names = self.file_names
         if names is _NO_NAMES:
-            self.file_sizes = array("Q")
-            self.file_allocs = array("Q")
-            self.file_mtimes = array("d")
-            self.file_atimes = array("d")
+            self.file_ints = array("Q")
+            self.file_times = array("d")
             self.file_flags = bytearray()
             names = self.file_names = []
-        self.file_sizes.append(size)
-        self.file_allocs.append(alloc_size)
-        self.file_mtimes.append(mtime)
-        self.file_atimes.append(atime)
+        ints, times = self.file_ints, self.file_times
+        ints.append(size)
+        ints.append(alloc_size)
+        times.append(mtime)
+        times.append(atime)
         self.file_flags.append(flags)
         names.append(name)  # last -- see __init__
         return len(names) - 1
+
+    # One field of every row, copied: read once per folder, not per row.
+    @property
+    def file_sizes(self):
+        return self.file_ints[0::2]
+
+    @property
+    def file_allocs(self):
+        return self.file_ints[1::2]
+
+    @property
+    def file_mtimes(self):
+        return self.file_times[0::2]
+
+    @property
+    def file_atimes(self):
+        return self.file_times[1::2]
+
+    def set_file_size(self, index, size, alloc_size):
+        """Change row `index`'s logical and on-disk sizes."""
+        self.file_ints[2 * index] = size
+        self.file_ints[2 * index + 1] = alloc_size
 
     def file_rows(self):
         """Indexes of this folder's files that are still in the tree."""
@@ -216,19 +239,19 @@ class FileNode:
 
     @property
     def size(self):
-        return self.parent.file_sizes[self.index]
+        return self.parent.file_ints[2 * self.index]
 
     @property
     def alloc_size(self):
-        return self.parent.file_allocs[self.index]
+        return self.parent.file_ints[2 * self.index + 1]
 
     @property
     def mtime(self):
-        return self.parent.file_mtimes[self.index]
+        return self.parent.file_times[2 * self.index]
 
     @property
     def atime(self):
-        return self.parent.file_atimes[self.index]
+        return self.parent.file_times[2 * self.index + 1]
 
     @property
     def error(self):

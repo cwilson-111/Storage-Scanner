@@ -270,8 +270,7 @@ def finalize_subtree(subtree_root, row_frns):
         folder.file_flags[index] &= ~FLAG_HARDLINK_DUP
         for folder, index in duplicates:
             folder.file_flags[index] |= FLAG_HARDLINK_DUP
-            folder.file_sizes[index] = 0
-            folder.file_allocs[index] = 0
+            folder.set_file_size(index, 0, 0)
 
     _rollup(subtree_root)
     return subtree_root

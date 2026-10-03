@@ -9,7 +9,9 @@ its own subprocess, so each reports its own peak memory. The scan-history
 scenarios are in scale_history.py.
 
 Scenarios:
-  tree_memory       the scanned tree held in memory (storage_scanner.models.Node)
+  tree_memory       the scanned tree held in memory (storage_scanner.models.Node),
+                    at FILES_PER_DIR files a folder and at REAL_FILES_PER_DIR
+                    (a real system drive's shape, where folders cost the most)
   history           scan history after SCHEDULED_SCANS repeat scans of one folder
   history_retention scan history after DAILY_SCANS daily scheduled scans (over
                     two years, simulated clock): what retention keeps
@@ -56,6 +58,8 @@ from scale_history import (
     scenario_history_retention,
 )
 from scale_volume import (
+    FILES_PER_DIR,
+    REAL_FILES_PER_DIR,
     VOLUME_ROOT,
     build_node_tree,
     database_bytes,
@@ -75,6 +79,7 @@ BASELINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseli
 TOLERANCE = 0.15
 GATED = (
     "tree_bytes_per_file",
+    "tree_real_layout_bytes_per_file",
     "history_bytes_per_scan",
     "history_daily_scans_kept",
     "history_daily_scans_db_bytes",
@@ -95,15 +100,23 @@ def scenario_tree_memory(n_files, _workdir):
     import storage_scanner.models  # noqa: F401
     import storage_scanner.scanner  # noqa: F401
 
-    tracemalloc.start()
-    start = time.perf_counter()
-    root = build_node_tree(n_files)
-    elapsed = time.perf_counter() - start
-    held, _peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    assert root.file_count == n_files
+    def traced_tree(files_per_dir):
+        tracemalloc.start()
+        start = time.perf_counter()
+        root = build_node_tree(n_files, files_per_dir)
+        elapsed = time.perf_counter() - start
+        held, _peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        assert root.file_count == n_files
+        return held, elapsed
+
+    held, elapsed = traced_tree(FILES_PER_DIR)
+    # The same files four to a folder, like a real system drive: this one
+    # is mostly folders, so it's the figure that shows a folder's cost.
+    real_held, _elapsed = traced_tree(REAL_FILES_PER_DIR)
     return {
         "tree_bytes_per_file": round(held / n_files, 1),
+        "tree_real_layout_bytes_per_file": round(real_held / n_files, 1),
         "tree_build_seconds": round(elapsed, 3),
     }
 

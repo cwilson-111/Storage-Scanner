@@ -70,8 +70,8 @@ def files_with_extension(root, ext, limit):
         for i in indexes
         if extension_of(folder.file_names[i]) == ext
     ]
-    size = sum(folder.file_sizes[i] for folder, i in matches)
-    top = heapq.nlargest(limit, matches, key=lambda row: row[0].file_sizes[row[1]])
+    size = sum(folder.file_ints[2 * i] for folder, i in matches)
+    top = heapq.nlargest(limit, matches, key=lambda row: row[0].file_ints[2 * row[1]])
     return FileList([FileNode(folder, i) for folder, i in top], len(matches), size)
 
 

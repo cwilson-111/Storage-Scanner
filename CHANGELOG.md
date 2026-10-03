@@ -48,6 +48,8 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   delete) and takes several rows; in File Types, double-click a type to
   list its files, largest first, with the same menu. Both close when a new
   scan starts.
+- A scan holds less memory on drives with many small folders: about 14%
+  less at a million files spread four to a folder, like a system drive.
 
 ### Treemap
 
