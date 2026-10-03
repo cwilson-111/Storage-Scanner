@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner import mft_scan_cli
-from storage_scanner.file_ops import _relay_progress_file
+from storage_scanner.elevation import _relay_progress_file
 from storage_scanner.models import Node
 from storage_scanner.scan_progress import Phase
 from storage_scanner.turbo_read import MftRead

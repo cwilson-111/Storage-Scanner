@@ -27,7 +27,7 @@ from storage_scanner import (
     turbo_cache,
     update_check,
 )
-from storage_scanner.file_ops import (
+from storage_scanner.elevation import (
     relaunch_elevated_windows,
     run_elevated_scan_linux,
     run_elevated_scan_macos,

@@ -24,7 +24,7 @@ from storage_scanner import (
     turbo_scan,
 )
 from storage_scanner.drive_info import is_ntfs_fixed_drive
-from storage_scanner.file_ops import (
+from storage_scanner.elevation import (
     relaunch_elevated_windows,
 )
 from storage_scanner.formatting import human_size

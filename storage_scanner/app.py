@@ -250,7 +250,7 @@ def _open_history():
 
 
 def main():
-    # A headless privileged-scan request (see storage_scanner/file_ops.py's
+    # A headless privileged-scan request (see storage_scanner/elevation.py's
     # run_elevated_scan_macos): runs the scan as root and exits, never
     # touching Tk, so it never needs a window-server connection it can't get.
     if len(sys.argv) >= 3 and sys.argv[1] == "--priv-scan":
@@ -268,7 +268,7 @@ def main():
         sys.exit(run_cli(sys.argv[2:]))
 
     # A headless elevated Turbo Scan request (see storage_scanner/
-    # file_ops.py's run_elevated_scan_windows): reads the NTFS MFT as
+    # elevation.py's run_elevated_scan_windows): reads the NTFS MFT as
     # admin and writes the result to --output, never touching Tk. Windows'
     # elevation broker can't hand this process's stdout back to the
     # unprivileged caller the way macOS's --priv-scan can, hence a file

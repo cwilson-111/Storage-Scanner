@@ -14,7 +14,7 @@ platform — keep it that way when behavior changes:
   elsewhere.
 - Permissions: scanner._scan_one()/_rollup() and main_window's ⚠ rows and
   inaccessible-paths banner; main_window._request_elevation().
-- Cloud placeholders: scanner.is_cloud_placeholder_attrs() only ever sees
+- Cloud placeholders: alloc_size.is_cloud_placeholder_attrs() only ever sees
   Windows file attributes, so placeholders are only recognized there;
   DuplicatesMixin._find_duplicate_files skips them.
 - Protected locations: settings.DEFAULT_DUPLICATE_EXCLUDES, via
