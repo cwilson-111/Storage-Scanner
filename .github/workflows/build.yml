@@ -80,7 +80,7 @@ jobs:
         run: black --check .
 
       - name: Type check (mypy)
-        run: mypy storage_scanner/ history.py
+        run: mypy storage_scanner/
 
       - name: Run test suite with coverage
         run: pytest tests/

@@ -37,7 +37,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-APP_DATA_FOLDER = "NeuralStorageMatrix"  # history.py's APP_NAME
+APP_DATA_FOLDER = "NeuralStorageMatrix"  # storage_scanner/history_db.py's APP_NAME
 FILES = {"a.txt": 1000, os.path.join("sub", "b.bin"): 5000, os.path.join("sub", "c.bin"): 250}
 TIMEOUT_SECONDS = 180
 

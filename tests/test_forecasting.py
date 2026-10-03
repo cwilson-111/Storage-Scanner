@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history as history_db
+from storage_scanner import history_db, history_queries, history_store
 from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.ui.history_window import HistoryMixin
 
@@ -185,12 +185,12 @@ def test_a_disconnected_drive_forecasts_from_the_free_space_its_last_scan_saw(
 ):
     monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
     history_db.init_history_db()
-    history_db.save_scan_snapshot("q:\\media", 1, 1, 1, 1, {}, drive_free=70 * GB)
-    history_db.save_scan_snapshot("q:\\media", 2, 1, 1, 1, {})  # its drive couldn't be read
+    history_store.save_scan_snapshot("q:\\media", 1, 1, 1, 1, {}, drive_free=70 * GB)
+    history_store.save_scan_snapshot("q:\\media", 2, 1, 1, 1, {})  # its drive couldn't be read
 
     free, as_of = HistoryMixin()._free_space_for_forecast(str(tmp_path / "gone"), "q:\\media")
 
-    created_at, _free = history_db.get_latest_drive_free("q:\\media")
+    created_at, _free = history_queries.get_latest_drive_free("q:\\media")
     assert free == 70 * GB
     assert as_of == f" at the scan of {created_at.split('T')[0]}"
 

@@ -5,8 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
-from storage_scanner import update_check
+from storage_scanner import history_db, update_check
 
 
 def test_parse_version_handles_leading_v():
@@ -40,11 +39,11 @@ def test_is_newer_false_when_either_side_is_unparseable():
 
 def test_check_for_update_skips_network_call_within_min_interval(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    history.set_app_metadata(update_check._LAST_CHECK_KEY, recent)
+    history_db.set_app_metadata(update_check._LAST_CHECK_KEY, recent)
 
     called = []
     monkeypatch.setattr(
@@ -61,8 +60,8 @@ def test_check_for_update_skips_network_call_within_min_interval(tmp_path, monke
 
 def test_check_for_update_fetches_when_due_and_reports_newer_version(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     monkeypatch.setattr(update_check, "_fetch_latest_release_tag", lambda: "v2.0.0")
 
@@ -71,13 +70,13 @@ def test_check_for_update_fetches_when_due_and_reports_newer_version(tmp_path, m
     assert result == "v2.0.0"
     # The "last checked" timestamp must have been recorded so the next
     # call within 24h skips the network call.
-    assert history.get_app_metadata(update_check._LAST_CHECK_KEY) is not None
+    assert history_db.get_app_metadata(update_check._LAST_CHECK_KEY) is not None
 
 
 def test_check_for_update_returns_none_when_already_current(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     monkeypatch.setattr(update_check, "_fetch_latest_release_tag", lambda: "v1.0.0")
 
@@ -86,8 +85,8 @@ def test_check_for_update_returns_none_when_already_current(tmp_path, monkeypatc
 
 def test_check_for_update_never_raises_when_fetch_explodes(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     def boom():
         raise RuntimeError("network is on fire")
@@ -99,8 +98,8 @@ def test_check_for_update_never_raises_when_fetch_explodes(tmp_path, monkeypatch
 
 
 def _fresh_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
 
 
 def _record_requests(monkeypatch, tag="v99.0.0"):
@@ -119,16 +118,16 @@ def test_a_run_that_is_not_a_release_makes_no_request_and_records_nothing(tmp_pa
         assert update_check.check_for_update(current_version=version) is None
 
     assert calls == []
-    assert history.get_app_metadata("last_update_check_at") is None
+    assert history_db.get_app_metadata("last_update_check_at") is None
 
 
 def test_turning_the_check_off_stops_the_request(tmp_path, monkeypatch):
     _fresh_db(tmp_path, monkeypatch)
     calls = _record_requests(monkeypatch)
 
-    history.set_app_metadata(update_check.ENABLED_KEY, "0")
+    history_db.set_app_metadata(update_check.ENABLED_KEY, "0")
     assert update_check.check_for_update(current_version="v1.0.0") is None
-    history.set_app_metadata(update_check.ENABLED_KEY, "1")
+    history_db.set_app_metadata(update_check.ENABLED_KEY, "1")
     monkeypatch.setenv(update_check.DISABLE_ENV_VAR, "1")
     assert update_check.check_for_update(current_version="v1.0.0") is None
 

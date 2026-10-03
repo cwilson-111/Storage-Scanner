@@ -1,9 +1,9 @@
-"""The scan-history database layout (history.py's tables) and its
-migrations.
+"""The scan-history database layout (the tables history_db, history_store,
+history_queries and history_records use) and its migrations.
 
-Kept apart from history.py's queries and free of any import from it:
-history.py opens the connection and the transaction, this only issues the
-DDL. (history.py can't be imported from here anyway -- it's what
+Kept apart from those modules' queries and free of any import from them:
+history_db opens the connection and the transaction, this only issues the
+DDL. (history_db can't be imported from here anyway -- it's what
 storage_scanner.logging_setup imports APP_DATA_DIR from.)
 
 Schema versions, recorded as app_metadata's "schema_version":
@@ -78,7 +78,7 @@ _TABLES = (
     ON scans(scan_path)
     """,
     # No AUTOINCREMENT: an id is only ever freed once nothing refers to it
-    # (see history._prune_scans), so reusing it is harmless.
+    # (see history_store._prune_scans), so reusing it is harmless.
     """
     CREATE TABLE IF NOT EXISTS folder_paths (
         id INTEGER PRIMARY KEY,

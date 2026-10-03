@@ -6,7 +6,7 @@ as text.
 openpyxl is NOT a required runtime dependency of this app, same reasoning
 as csv_to_parquet.py's pyarrow dependency -- most users of a disk-usage
 tool will never touch this feature, so it's imported lazily (module-level
-try/except, same convention history.py uses for matplotlib) and its
+try/except, as in csv_to_parquet.py) and its
 absence is reported as a normal ExcelResult failure rather than an
 ImportError crashing the app.
 """

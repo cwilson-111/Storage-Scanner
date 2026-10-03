@@ -1,9 +1,9 @@
-"""Files kept beside the scan-history database (history.py): the copy made
+"""Files kept beside the scan-history database (history_db): the copy made
 before a migration, and a damaged database moved out of the way so the app
 can start a new one.
 
-Free of any import from history.py for the same reason as history_schema:
-storage_scanner.logging_setup imports history, so the database path is
+Free of any import from history_db for the same reason as history_schema:
+storage_scanner.logging_setup imports history_db, so the database path is
 passed in, and the log is reached by the logger's name.
 """
 

@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
+from storage_scanner import history_db, history_queries, history_store
 from storage_scanner.scan_history import normalize_scan_path
 from storage_scanner.ui.history_window import HistoryMixin
 
@@ -28,22 +28,22 @@ class _App(HistoryMixin):
 
 
 def _db_with_scans(tmp_path, monkeypatch, *paths):
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
     for path in paths:
-        history.save_scan_snapshot(normalize_scan_path(path), 1, 1, 1, 1, {})
+        history_store.save_scan_snapshot(normalize_scan_path(path), 1, 1, 1, 1, {})
 
 
 def test_most_recent_scan_path_is_the_newest_scan_of_anything(tmp_path, monkeypatch):
     _db_with_scans(tmp_path, monkeypatch, r"C:\Data", r"D:\Media", r"C:\Data")
 
-    assert history.get_most_recent_scan_path() == normalize_scan_path(r"C:\Data")
+    assert history_queries.get_most_recent_scan_path() == normalize_scan_path(r"C:\Data")
 
 
 def test_most_recent_scan_path_is_none_before_any_scan(tmp_path, monkeypatch):
     _db_with_scans(tmp_path, monkeypatch)
 
-    assert history.get_most_recent_scan_path() is None
+    assert history_queries.get_most_recent_scan_path() is None
 
 
 @pytest.mark.windows

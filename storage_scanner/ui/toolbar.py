@@ -18,7 +18,6 @@ from tkinter import (
     ttk,
 )
 
-from history import get_app_metadata, set_app_metadata
 from storage_scanner import (
     appearance,
     diagnostics,
@@ -33,6 +32,7 @@ from storage_scanner.file_ops import (
     run_elevated_scan_macos,
 )
 from storage_scanner.formatting import human_size
+from storage_scanner.history_db import get_app_metadata, set_app_metadata
 from storage_scanner.platform_support import (
     IS_LINUX,
     IS_MACOS,
@@ -152,7 +152,7 @@ class ToolbarMixin:
         self._refresh_tools_state()  # no tree yet: scan-only items start greyed out
 
         # Settings persist the same way as the schema_version key, via
-        # history.py's app_metadata table (there's no other settings storage
+        # history_db's app_metadata table (there's no other settings storage
         # in this app to reuse). Turbo Scan (NTFS MFT fast path) is
         # Windows-only and off by default.
         settings_menu = Menu(self.tools_menu, tearoff=0)

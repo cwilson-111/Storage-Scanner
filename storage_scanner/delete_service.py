@@ -33,7 +33,6 @@ import os
 from datetime import datetime
 from typing import Callable, NamedTuple, Optional, Protocol
 
-from history import record_audit_entry
 from storage_scanner import delete_guard, duplicate_finder, file_ops, recycle_windows
 from storage_scanner.cleanup_cache import CachedNode
 from storage_scanner.delete_outcome import (
@@ -44,6 +43,7 @@ from storage_scanner.delete_outcome import (
     UNVERIFIED,
     is_removed,
 )
+from storage_scanner.history_records import record_audit_entry
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_WINDOWS
 

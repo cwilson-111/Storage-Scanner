@@ -17,7 +17,7 @@ REMOVE_LABEL = "Remove this scan"
 
 
 def build_scans_tab(frame, scan_choices, on_remove):
-    """Fill `frame` with the scans in `scan_choices` (history.
+    """Fill `frame` with the scans in `scan_choices` (history_queries.
     list_scans_for_path rows: id, created_at, total_size, file_count;
     newest first). The button, the Delete key and the row menu call
     on_remove(scan_id, date_text) for the selected scan."""

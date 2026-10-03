@@ -22,7 +22,7 @@ platform — keep it that way when behavior changes:
   delete_guard.refusal_reason().
 """
 
-from history import get_app_metadata, set_app_metadata
+from storage_scanner.history_db import get_app_metadata, set_app_metadata
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_LINUX, IS_MACOS, IS_ROOT
 

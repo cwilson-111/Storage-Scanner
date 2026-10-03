@@ -144,7 +144,7 @@ def scan_subtree_using_cache(record_source, volume_root, target_path, progress_q
         # -- called here rather than once at app startup because this same
         # function is also the entry point for mft_scan_cli.py's headless
         # elevated-helper subprocess, which never runs app.py's own
-        # startup (see history.init_history_db()'s call site there) at all.
+        # startup (see history_db.init_history_db()'s call site there) at all.
         turbo_cache.init_cache_db()
         cached = turbo_cache.get_cached_volume(volume_serial)
         reason = "first scan of this drive"
