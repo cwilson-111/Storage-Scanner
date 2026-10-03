@@ -12,8 +12,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
-from storage_scanner import history_schema
+from storage_scanner import (
+    history_db,
+    history_queries,
+    history_records,
+    history_schema,
+    history_store,
+)
 from storage_scanner.delete_outcome import FAILED, UNVERIFIED
 
 # The version 1 DDL exactly as init_history_db() created it.
@@ -172,7 +177,7 @@ def _everything(db_path):
 @pytest.fixture
 def v1_db(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
     return db_path
 
 
@@ -183,9 +188,9 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
     scans_before = _query(v1_db, "SELECT * FROM scans ORDER BY id")
     scan_columns = "id, scan_path, total_size, drive_capacity, file_count, folder_count, created_at"
 
-    history.init_history_db()
+    history_db.init_history_db()
 
-    assert history.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
+    assert history_db.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
     names = {name for (name,) in _query(v1_db, "SELECT name FROM sqlite_master")}
     assert not names & {"folder_snapshots_v1", "idx_folder_scan", "idx_folder_path"}
     columns = [row[1] for row in _query(v1_db, "PRAGMA table_info(folder_snapshots)")]
@@ -197,7 +202,7 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
         (None, None, None)
     ] * len(scans_before)
     for (current, previous), rows in growth_before.items():
-        migrated = history.get_folder_growth(current, previous)
+        migrated = history_queries.get_folder_growth(current, previous)
         # growth_before only knew the current scan's folders; folders only the
         # previous scan had (current size 0) are listed now too (P2-5).
         assert [row[:4] + row[6:] for row in migrated if row[2] > 0] == rows
@@ -205,27 +210,27 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
     assert _query(v1_db, "SELECT COUNT(*) FROM folder_snapshots") == [(folder_rows,)]
     assert "c:\\orphan" not in {path for (path,) in _query(v1_db, "SELECT path FROM folder_paths")}
 
-    assert history.list_budgets() == [(1, "c:\\data", 5000, "2026-01-01T00:00:00")]
+    assert history_records.list_budgets() == [(1, "c:\\data", 5000, "2026-01-01T00:00:00")]
     # A version 1 row only knew the delete call returned success -- which a
     # silent permanent delete also did -- so it can't claim "recycled".
-    assert [row[6:] for row in history.get_audit_log()] == [(1, None, UNVERIFIED)]
+    assert [row[6:] for row in history_records.get_audit_log()] == [(1, None, UNVERIFIED)]
     assert _query(v1_db, "SELECT COUNT(*) FROM known_install_locations") == [(1,)]
     if with_app_metadata:
-        assert history.get_app_metadata("turbo_scan_enabled") == "1"
+        assert history_db.get_app_metadata("turbo_scan_enabled") == "1"
 
 
 def test_a_migrated_database_is_left_alone_by_every_later_start(v1_db):
     _make_v1_database(v1_db)
-    history.init_history_db()
+    history_db.init_history_db()
     migrated = _everything(v1_db)
 
-    history.init_history_db()
+    history_db.init_history_db()
 
     assert _everything(v1_db) == migrated
 
 
 def test_a_version_2_audit_log_gets_outcomes_that_never_claim_recycled(v1_db):
-    history.init_history_db()
+    history_db.init_history_db()
     conn = sqlite3.connect(v1_db)
     conn.execute("DROP TABLE audit_log")
     conn.execute(V1_TABLES[2])  # version 2's audit_log was version 1's
@@ -240,10 +245,10 @@ def test_a_version_2_audit_log_gets_outcomes_that_never_claim_recycled(v1_db):
     conn.commit()
     conn.close()
 
-    history.init_history_db()
+    history_db.init_history_db()
 
-    assert history.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
-    assert [(row[3], row[6], row[8]) for row in history.get_audit_log()] == [
+    assert history_db.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
+    assert [(row[3], row[6], row[8]) for row in history_records.get_audit_log()] == [
         ("C:\\locked.txt", 0, FAILED),
         ("Q:\\gone.txt", 1, UNVERIFIED),
     ]
@@ -256,15 +261,15 @@ def test_a_version_2_audit_log_gets_outcomes_that_never_claim_recycled(v1_db):
     )
     conn.commit()
     conn.close()
-    assert history.get_audit_log()[0][8] == UNVERIFIED
+    assert history_records.get_audit_log()[0][8] == UNVERIFIED
 
 
 def test_scans_saved_after_migrating_compare_with_migrated_ones(v1_db):
     _make_v1_database(v1_db)
-    history.init_history_db()
+    history_db.init_history_db()
     (paths_before,) = _query(v1_db, "SELECT COUNT(*) FROM folder_paths")
 
-    scan_id = history.save_scan_snapshot(
+    scan_id = history_store.save_scan_snapshot(
         "c:\\data",
         900,
         1000000,
@@ -277,7 +282,7 @@ def test_scans_saved_after_migrating_compare_with_migrated_ones(v1_db):
     )
 
     assert _query(v1_db, "SELECT COUNT(*) FROM folder_paths") == [(paths_before[0] + 1,)]
-    rows = history.get_folder_growth(scan_id, 4)
+    rows = history_queries.get_folder_growth(scan_id, 4)
     assert [(row[0], row[1], row[2]) for row in rows] == [
         ("c:\\data\\brand_new", 0, 440),
         ("c:\\data\\a", 450, 460),
@@ -296,13 +301,13 @@ def test_a_failed_migration_leaves_the_version_1_database_as_it_was(v1_db, monke
 
     monkeypatch.setattr(history_schema, "_copy_v1_folder_rows", fail)
     with pytest.raises(sqlite3.OperationalError):
-        history.init_history_db()
+        history_db.init_history_db()
 
     assert _everything(v1_db) == original
     monkeypatch.undo()
-    monkeypatch.setattr(history, "DB_NAME", str(v1_db))
-    history.init_history_db()
-    assert history.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
+    monkeypatch.setattr(history_db, "DB_NAME", str(v1_db))
+    history_db.init_history_db()
+    assert history_db.get_app_metadata("schema_version") == str(history_schema.SCHEMA_VERSION)
 
 
 def test_migrating_reclaims_the_old_layouts_space(v1_db):
@@ -310,6 +315,6 @@ def test_migrating_reclaims_the_old_layouts_space(v1_db):
     _make_v1_database(v1_db, folders_per_scan=many)
     size_before = os.path.getsize(v1_db)
 
-    history.init_history_db()
+    history_db.init_history_db()
 
     assert os.path.getsize(v1_db) < size_before / 2

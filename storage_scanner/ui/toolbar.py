@@ -18,7 +18,6 @@ from tkinter import (
     ttk,
 )
 
-from history import get_app_metadata, set_app_metadata
 from storage_scanner import (
     appearance,
     diagnostics,
@@ -27,18 +26,20 @@ from storage_scanner import (
     turbo_cache,
     update_check,
 )
-from storage_scanner.file_ops import (
+from storage_scanner.elevation import (
     relaunch_elevated_windows,
     run_elevated_scan_linux,
     run_elevated_scan_macos,
 )
 from storage_scanner.formatting import human_size
+from storage_scanner.history_db import get_app_metadata, set_app_metadata
 from storage_scanner.platform_support import (
     IS_LINUX,
     IS_MACOS,
     IS_ROOT,
     IS_WINDOWS,
 )
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.main_window import TREEMAP_SHADED_KEY, TREEMAP_SHOWN_KEY
 
 # Settings ▸ Keep Every Saved Scan For: (label, stored value).
@@ -51,7 +52,7 @@ _HISTORY_KEEP_ALL_CHOICES = (
 )
 
 
-class ToolbarMixin:
+class ToolbarMixin(AppMixin):
     def _build_toolbar(self):
         bar_frame = ttk.Frame(self.root, padding=(10, 10, 10, 6))
         bar_frame.pack(side=TOP, fill=X)
@@ -113,7 +114,7 @@ class ToolbarMixin:
 
         # (menu, entry index) for every Tools item that works on the tree
         # from a scan in this session, rather than on saved data.
-        self._scan_only_tools = []
+        self._scan_only_tools: list[tuple[Menu, int]] = []
 
         def add_scan_only(menu, label, command):
             menu.add_command(label=label, command=command)
@@ -156,7 +157,7 @@ class ToolbarMixin:
         self._refresh_tools_state()  # no tree yet: scan-only items start greyed out
 
         # Settings persist the same way as the schema_version key, via
-        # history.py's app_metadata table (there's no other settings storage
+        # history_db's app_metadata table (there's no other settings storage
         # in this app to reuse). Turbo Scan (NTFS MFT fast path) is
         # Windows-only and off by default.
         settings_menu = Menu(self.tools_menu, tearoff=0)

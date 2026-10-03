@@ -1,7 +1,7 @@
 """Windows drive-type and filesystem detection for Turbo Scan eligibility.
 
 Pure stdlib ctypes, matching the rest of the codebase's zero-third-party-
-runtime-dependency policy (see scanner.py/file_ops.py). Every public
+runtime-dependency policy (see alloc_size.py/elevation.py). Every public
 function here follows their convention of never raising on a Win32 call
 failure -- a capability probe failing just means "not eligible", not a
 reason to crash the whole scan.

@@ -1,4 +1,4 @@
-"""Tests for storage_scanner.file_ops.run_elevated_scan_windows against a
+"""Tests for storage_scanner.elevation.run_elevated_scan_windows against a
 faked ctypes.windll.{shell32,kernel32} -- the same technique already used
 by tests/test_elevation.py for relaunch_elevated_windows.
 
@@ -20,9 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import storage_scanner.file_ops as file_ops
+import storage_scanner.elevation as elevation
 from storage_scanner import mft_scan_cli
-from storage_scanner.file_ops import run_elevated_scan_windows
+from storage_scanner.elevation import run_elevated_scan_windows
 from storage_scanner.scan_progress import Phase
 
 _FAKE_PROCESS_HANDLE = 777
@@ -37,7 +37,7 @@ class _FakeShellExecuteExW:
         self.calls = []
 
     def __call__(self, info_ref):
-        info = ctypes.cast(info_ref, ctypes.POINTER(file_ops._SHELLEXECUTEINFOW)).contents
+        info = ctypes.cast(info_ref, ctypes.POINTER(elevation._SHELLEXECUTEINFOW)).contents
         self.calls.append(
             {
                 "lpVerb": info.lpVerb,
@@ -142,7 +142,7 @@ def _patch_mkstemp(monkeypatch, output_path, progress_path):
             return progress_fd, str(progress_path)
         return output_fd, str(output_path)
 
-    monkeypatch.setattr(file_ops.tempfile, "mkstemp", _mkstemp)
+    monkeypatch.setattr(elevation.tempfile, "mkstemp", _mkstemp)
 
 
 def test_successful_scan_returns_parsed_json_and_cleans_up_the_temp_files(monkeypatch, tmp_path):
@@ -218,11 +218,11 @@ def test_progress_file_updates_are_relayed_to_progress_q(monkeypatch, tmp_path):
     # The wait for the UAC prompt, each distinct phase the helper wrote
     # once, then reading its result back.
     assert posted == [
-        ("phase", Phase(file_ops.PHASE_WAITING_FOR_ELEVATION)),
+        ("phase", Phase(elevation.PHASE_WAITING_FOR_ELEVATION)),
         ("phase", reading_a),
         ("phase", reading_b),
         ("phase", saving),
-        ("phase", Phase(file_ops.PHASE_LOADING_RESULTS)),
+        ("phase", Phase(elevation.PHASE_LOADING_RESULTS)),
     ]
 
 

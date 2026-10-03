@@ -15,6 +15,7 @@ answers.
 
 from tkinter import BOTH, BOTTOM, LEFT, RIGHT, TOP, Canvas, PhotoImage, StringVar, X, ttk
 from tkinter import font as tkfont
+from typing import TYPE_CHECKING, Optional
 
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import date_text
@@ -24,6 +25,7 @@ from storage_scanner.treemap_cushion import render, shade
 from storage_scanner.treemap_model import (
     MODES,
     SIZE,
+    Tile,
     area_of,
     chain,
     hit_test,
@@ -31,20 +33,24 @@ from storage_scanner.treemap_model import (
     tile_color,
 )
 
+if TYPE_CHECKING:
+    from storage_scanner.models import Node
+    from storage_scanner.ui.app_state import AppState
+
 _REDRAW_DELAY_MS = 60  # resizes and selection changes come in bursts
 
 
 class TreemapPane:
     """The pane; `frame` is what the main window places."""
 
-    def __init__(self, app, master):
+    def __init__(self, app: "AppState", master):
         self.app = app
         self.frame = ttk.Frame(master)
-        self.chain = []  # nodes from the scan's root down to the folder shown
-        self.tiles = []
-        self.image = None  # the shaded tiles; the canvas only holds its name
+        self.chain: list[Node] = []  # nodes from the scan's root down to the folder shown
+        self.tiles: list[Tile] = []
+        self.image: Optional[PhotoImage] = None  # the shaded tiles; the canvas only holds its name
         self.highlight = None  # the node whose tile is outlined
-        self._pending = None
+        self._pending: Optional[str] = None  # the scheduled redraw's after() id
 
         bar = ttk.Frame(self.frame, padding=(8, 4, 8, 2))
         bar.pack(side=TOP, fill=X)

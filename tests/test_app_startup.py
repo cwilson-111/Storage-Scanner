@@ -10,14 +10,15 @@ sys.path.insert(0, str(ROOT))
 
 from smoke_test_build import _isolated_env
 
-# In a process of its own: history.py fixes its data folder when it's
-# imported, and a second Tk interpreter in the test process is unreliable
-# (tests/test_main_tree_rows.py). Prints how many panes the main window
-# has (the tree, and the treemap unless it's hidden) and the menu's tick.
+# In a process of its own: storage_scanner.history_db fixes its data folder
+# when it's imported, and a second Tk interpreter in the test process is
+# unreliable (tests/test_main_tree_rows.py). Prints how many panes the main
+# window has (the tree, and the treemap unless it's hidden) and the menu's
+# tick.
 _START_WITH_TREEMAP_HIDDEN = """
-import history
-history.init_history_db()
-history.set_app_metadata("show_treemap", "0")
+from storage_scanner import history_db
+history_db.init_history_db()
+history_db.set_app_metadata("show_treemap", "0")
 from tkinter import Tk
 from storage_scanner.app import StorageScannerApp
 root = Tk()

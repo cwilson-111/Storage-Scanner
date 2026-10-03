@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner import mft_parser
+from storage_scanner import mft_records
 from storage_scanner.mft_parser import _pack_frn, parse_base_record
 
 RECORD_SIZE = 1024
@@ -132,7 +132,7 @@ def _attribute_list_value(entries):
 def _stamp_fixups(record, usn=b"\x01\x00"):
     """Simulate real NTFS on-disk storage: relocate each sector-end's real
     bytes into the USA and overwrite them with a shared USN -- the exact
-    inverse of what mft_parser._apply_fixups reverses."""
+    inverse of what mft_records._apply_fixups reverses."""
     record = bytearray(record)
     record[USA_OFFSET : USA_OFFSET + 2] = usn
     for i in range(1, USA_SIZE):
@@ -158,7 +158,7 @@ def _assemble_record(
 ):
     """Frame a complete on-disk-shaped record around pre-built, already-
     ordered attribute bytes (`attrs`, sans the 0xFFFFFFFF end marker)."""
-    attrs = bytes(attrs) + struct.pack("<I", mft_parser._ATTR_END_MARKER)
+    attrs = bytes(attrs) + struct.pack("<I", mft_records._ATTR_END_MARKER)
 
     bytes_in_use = FIRST_ATTR_OFFSET + len(attrs)
     if bytes_in_use > record_size:
@@ -166,9 +166,9 @@ def _assemble_record(
 
     flags = 0
     if in_use:
-        flags |= mft_parser._RECORD_FLAG_IN_USE
+        flags |= mft_records._RECORD_FLAG_IN_USE
     if is_directory:
-        flags |= mft_parser._RECORD_FLAG_IS_DIRECTORY
+        flags |= mft_records._RECORD_FLAG_IS_DIRECTORY
 
     header = struct.pack(
         "<4sHHQHHHHIIQHHI",
@@ -224,17 +224,17 @@ def build_record(
     """
     attrs = bytearray()
     if attribute_list_value is not None:
-        attrs += _build_resident_attr(mft_parser._ATTR_ATTRIBUTE_LIST, attribute_list_value, 0)
+        attrs += _build_resident_attr(mft_records._ATTR_ATTRIBUTE_LIST, attribute_list_value, 0)
     if std_info_value is not None:
-        attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, std_info_value, 0)
+        attrs += _build_resident_attr(mft_records._ATTR_STANDARD_INFORMATION, std_info_value, 0)
     for value, attribute_id in file_names:
-        attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, value, attribute_id)
+        attrs += _build_resident_attr(mft_records._ATTR_FILE_NAME, value, attribute_id)
     if data_attr is not None:
         attrs += data_attr
     attrs += extra_attrs
     if reparse_tag is not None:
         reparse_value = struct.pack("<IHH", reparse_tag, 0, 0)  # tag, data length, reserved
-        attrs += _build_resident_attr(mft_parser._ATTR_REPARSE_POINT, reparse_value, 9)
+        attrs += _build_resident_attr(mft_records._ATTR_REPARSE_POINT, reparse_value, 9)
     return _assemble_record(record_number, attrs, **assemble_kwargs)
 
 
@@ -247,7 +247,7 @@ def test_minimal_resident_record_parses():
         5,
         std_info_value=_std_info_value(file_attributes=0x20),
         file_names=[(_file_name_value(100, "hello.txt"), 1)],
-        data_attr=_build_resident_attr(mft_parser._ATTR_DATA, b"hi", 2),
+        data_attr=_build_resident_attr(mft_records._ATTR_DATA, b"hi", 2),
     )
     parsed = parse_base_record(5, _single_record_source(5, record))
 
@@ -278,7 +278,7 @@ def test_directory_flag_and_empty_data():
 
 def test_nonresident_data_uses_header_fields_not_content():
     data_attr = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=65536,
         real_size=50000,
         initialized_size=50000,
@@ -307,7 +307,7 @@ def test_compressed_nonresident_attribute_does_not_misalign_the_next_one():
     # attribute comes FIRST, so std_info/$FILE_NAME parsing right after it
     # is the thing actually being verified here.
     compressed_data = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=4096,
         real_size=9000,
         initialized_size=9000,
@@ -317,9 +317,11 @@ def test_compressed_nonresident_attribute_does_not_misalign_the_next_one():
     attrs = (
         compressed_data
         + _build_resident_attr(
-            mft_parser._ATTR_STANDARD_INFORMATION, _std_info_value(file_attributes=0x21), 0
+            mft_records._ATTR_STANDARD_INFORMATION, _std_info_value(file_attributes=0x21), 0
         )
-        + _build_resident_attr(mft_parser._ATTR_FILE_NAME, _file_name_value(1, "compressed.bin"), 1)
+        + _build_resident_attr(
+            mft_records._ATTR_FILE_NAME, _file_name_value(1, "compressed.bin"), 1
+        )
     )
     record = _assemble_record(11, attrs)
     parsed = parse_base_record(11, _single_record_source(11, record))
@@ -427,9 +429,9 @@ def test_fixups_use_the_record_sources_real_sector_size_not_a_hardcoded_512():
     std_info = _std_info_value(file_attributes=0x20)
     file_name = _file_name_value(1, "hello.txt")
     attrs = bytearray()
-    attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, std_info, 0)
-    attrs += _build_resident_attr(mft_parser._ATTR_FILE_NAME, file_name, 1)
-    attrs += struct.pack("<I", mft_parser._ATTR_END_MARKER)
+    attrs += _build_resident_attr(mft_records._ATTR_STANDARD_INFORMATION, std_info, 0)
+    attrs += _build_resident_attr(mft_records._ATTR_FILE_NAME, file_name, 1)
+    attrs += struct.pack("<I", mft_records._ATTR_END_MARKER)
 
     first_attr_offset = ((usa_offset + usa_size * 2) + 7) // 8 * 8
     bytes_in_use = first_attr_offset + len(attrs)
@@ -442,7 +444,7 @@ def test_fixups_use_the_record_sources_real_sector_size_not_a_hardcoded_512():
         1,
         1,
         first_attr_offset,
-        mft_parser._RECORD_FLAG_IN_USE,
+        mft_records._RECORD_FLAG_IN_USE,
         bytes_in_use,
         record_size,
         0,
@@ -516,10 +518,10 @@ def test_attribute_list_merges_a_file_name_from_an_extension_record():
         base_record_number,
         std_info_value=_std_info_value(),
         file_names=[(_file_name_value(100, "primary.txt"), 1)],
-        data_attr=_build_resident_attr(mft_parser._ATTR_DATA, b"abc", 3),
+        data_attr=_build_resident_attr(mft_records._ATTR_DATA, b"abc", 3),
         attribute_list_value=_attribute_list_value(
             [
-                (mft_parser._ATTR_FILE_NAME, 2, ext_frn),
+                (mft_records._ATTR_FILE_NAME, 2, ext_frn),
             ]
         ),
     )
@@ -550,7 +552,7 @@ def test_attribute_list_entry_for_a_missing_extension_record_is_ignored():
         file_names=[(_file_name_value(100, "primary.txt"), 1)],
         attribute_list_value=_attribute_list_value(
             [
-                (mft_parser._ATTR_FILE_NAME, 2, missing_ext_frn),
+                (mft_records._ATTR_FILE_NAME, 2, missing_ext_frn),
             ]
         ),
     )
@@ -579,7 +581,7 @@ def test_attribute_list_entry_with_stale_sequence_number_is_ignored():
         file_names=[(_file_name_value(100, "primary.txt"), 1)],
         attribute_list_value=_attribute_list_value(
             [
-                (mft_parser._ATTR_FILE_NAME, 2, stale_ext_frn),
+                (mft_records._ATTR_FILE_NAME, 2, stale_ext_frn),
             ]
         ),
     )
@@ -616,7 +618,7 @@ def test_attribute_list_entry_for_a_freed_not_reused_extension_record_is_ignored
         file_names=[(_file_name_value(100, "primary.txt"), 1)],
         attribute_list_value=_attribute_list_value(
             [
-                (mft_parser._ATTR_FILE_NAME, 2, ext_frn),
+                (mft_records._ATTR_FILE_NAME, 2, ext_frn),
             ]
         ),
     )
@@ -677,11 +679,11 @@ def test_nonresident_attribute_list_merges_a_file_name_from_an_extension_record(
 
     attr_list_value = _attribute_list_value(
         [
-            (mft_parser._ATTR_FILE_NAME, 2, ext_frn),
+            (mft_records._ATTR_FILE_NAME, 2, ext_frn),
         ]
     )
     attribute_list_attr = _build_nonresident_attr(
-        mft_parser._ATTR_ATTRIBUTE_LIST,
+        mft_records._ATTR_ATTRIBUTE_LIST,
         allocated_size=bytes_per_cluster,
         real_size=len(attr_list_value),
         initialized_size=len(attr_list_value),
@@ -690,11 +692,11 @@ def test_nonresident_attribute_list_merges_a_file_name_from_an_extension_record(
     )
     attrs = bytearray()
     attrs += attribute_list_attr
-    attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
+    attrs += _build_resident_attr(mft_records._ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
     attrs += _build_resident_attr(
-        mft_parser._ATTR_FILE_NAME, _file_name_value(100, "primary.txt"), 1
+        mft_records._ATTR_FILE_NAME, _file_name_value(100, "primary.txt"), 1
     )
-    attrs += _build_resident_attr(mft_parser._ATTR_DATA, b"abc", 3)
+    attrs += _build_resident_attr(mft_records._ATTR_DATA, b"abc", 3)
     base_record = _assemble_record(base_record_number, attrs)
 
     ext_record = build_record(
@@ -729,7 +731,7 @@ def test_nonresident_attribute_list_without_cluster_reader_is_ignored():
     # resolved, but the base record's own attributes still parse fine.
     base_record_number = 90
     attribute_list_attr = _build_nonresident_attr(
-        mft_parser._ATTR_ATTRIBUTE_LIST,
+        mft_records._ATTR_ATTRIBUTE_LIST,
         allocated_size=64,
         real_size=26,
         initialized_size=26,
@@ -738,9 +740,9 @@ def test_nonresident_attribute_list_without_cluster_reader_is_ignored():
     )
     attrs = bytearray()
     attrs += attribute_list_attr
-    attrs += _build_resident_attr(mft_parser._ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
+    attrs += _build_resident_attr(mft_records._ATTR_STANDARD_INFORMATION, _std_info_value(), 0)
     attrs += _build_resident_attr(
-        mft_parser._ATTR_FILE_NAME, _file_name_value(100, "primary.txt"), 1
+        mft_records._ATTR_FILE_NAME, _file_name_value(100, "primary.txt"), 1
     )
     base_record = _assemble_record(base_record_number, attrs)
 
@@ -843,7 +845,7 @@ def test_an_ntfs_compressed_file_is_billed_its_compressed_size():
     # units (4,063,232, 16x the real figure); GetCompressedFileSizeW -- the
     # Compatible engine's On Disk -- measured 253,952.
     data_attr = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=4_063_232,
         real_size=4_000_000,
         initialized_size=4_000_000,
@@ -862,7 +864,7 @@ def test_a_sparse_file_is_billed_only_the_clusters_it_has():
     # attributes have CompressionUnit 0 but still carry CompressedSize.
     size = 512 * 1024**3
     data_attr = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=size,
         real_size=size,
         initialized_size=size,
@@ -881,7 +883,7 @@ def test_a_compact_os_file_is_billed_its_compressed_stream():
     # stream is sparse and holds nothing -- billing only it would show 0;
     # the compressed bytes live in the WofCompressedData stream.
     unnamed = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=6_602_752,
         real_size=6_600_000,
         initialized_size=6_600_000,
@@ -890,7 +892,7 @@ def test_a_compact_os_file_is_billed_its_compressed_stream():
         compressed_size=0,
     )
     wof_stream = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=458_752,
         real_size=457_310,
         initialized_size=457_310,
@@ -907,9 +909,9 @@ def test_a_compact_os_file_is_billed_its_compressed_stream():
 def test_a_named_stream_counts_only_on_a_compact_os_file():
     # Alternate data streams stay out of scope; only Compact OS's own
     # stream, on a file with its reparse tag, is part of the file's size.
-    data_attr = _build_resident_attr(mft_parser._ATTR_DATA, b"hello", 2)
+    data_attr = _build_resident_attr(mft_records._ATTR_DATA, b"hello", 2)
     ads = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=65_536,
         real_size=60_000,
         initialized_size=60_000,
@@ -934,7 +936,7 @@ def test_a_named_stream_counts_only_on_a_compact_os_file():
 def test_decode_single_run():
     # header 0x21: length field 1 byte, LCN-offset field 2 bytes.
     runs = b"\x21" + bytes([10]) + (1000).to_bytes(2, "little", signed=True) + b"\x00"
-    assert mft_parser.decode_data_runs(runs) == [(10, 1000)]
+    assert mft_records.decode_data_runs(runs) == [(10, 1000)]
 
 
 def test_decode_two_runs_with_relative_lcn_deltas():
@@ -948,7 +950,7 @@ def test_decode_two_runs_with_relative_lcn_deltas():
         + (50).to_bytes(1, "little", signed=True)
         + b"\x00"
     )
-    assert mft_parser.decode_data_runs(runs) == [(5, 100), (8, 150)]
+    assert mft_records.decode_data_runs(runs) == [(5, 100), (8, 150)]
 
 
 def test_decode_negative_lcn_delta_moves_backward():
@@ -961,7 +963,7 @@ def test_decode_negative_lcn_delta_moves_backward():
         + (-200).to_bytes(2, "little", signed=True)
         + b"\x00"
     )
-    assert mft_parser.decode_data_runs(runs) == [(5, 1000), (3, 800)]
+    assert mft_records.decode_data_runs(runs) == [(5, 1000), (3, 800)]
 
 
 def test_decode_sparse_run_is_omitted_but_does_not_shift_later_lcns():
@@ -975,19 +977,19 @@ def test_decode_sparse_run_is_omitted_but_does_not_shift_later_lcns():
         + (300).to_bytes(2, "little", signed=True)
         + b"\x00"
     )
-    assert mft_parser.decode_data_runs(runs) == [(5, 300)]
+    assert mft_records.decode_data_runs(runs) == [(5, 300)]
 
 
 def test_decode_empty_or_immediately_terminated_runs():
-    assert mft_parser.decode_data_runs(b"") == []
-    assert mft_parser.decode_data_runs(b"\x00") == []
+    assert mft_records.decode_data_runs(b"") == []
+    assert mft_records.decode_data_runs(b"\x00") == []
 
 
 def test_decode_multi_byte_length_field():
     # header 0x13: length field 3 bytes (a run large enough to need it),
     # LCN-offset field 1 byte.
     runs = b"\x13" + (100000).to_bytes(3, "little", signed=False) + bytes([5]) + b"\x00"
-    assert mft_parser.decode_data_runs(runs) == [(100000, 5)]
+    assert mft_records.decode_data_runs(runs) == [(100000, 5)]
 
 
 # -- get_nonresident_data_runs_bytes ----------------------------------------- #
@@ -1014,7 +1016,7 @@ def test_get_data_runs_round_trips_through_decode():
         + b"\x00"
     )
     data_attr = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=0,
         real_size=0,
         initialized_size=0,
@@ -1023,21 +1025,21 @@ def test_get_data_runs_round_trips_through_decode():
     )
     record = _record_with_data_attr(70, data_attr)
 
-    found = mft_parser.get_nonresident_data_runs_bytes(record)
+    found = mft_records.get_nonresident_data_runs_bytes(record)
 
     assert found is not None
-    assert mft_parser.decode_data_runs(found) == expected_runs
+    assert mft_records.decode_data_runs(found) == expected_runs
 
 
 def test_get_data_runs_returns_none_for_resident_data():
-    data_attr = _build_resident_attr(mft_parser._ATTR_DATA, b"tiny", 2)
+    data_attr = _build_resident_attr(mft_records._ATTR_DATA, b"tiny", 2)
     record = _record_with_data_attr(71, data_attr)
-    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+    assert mft_records.get_nonresident_data_runs_bytes(record) is None
 
 
 def test_get_data_runs_returns_none_for_a_named_stream():
     data_attr = _build_nonresident_attr(
-        mft_parser._ATTR_DATA,
+        mft_records._ATTR_DATA,
         allocated_size=0,
         real_size=0,
         initialized_size=0,
@@ -1045,7 +1047,7 @@ def test_get_data_runs_returns_none_for_a_named_stream():
         name_length=1,  # a named alternate data stream
     )
     record = _record_with_data_attr(72, data_attr)
-    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+    assert mft_records.get_nonresident_data_runs_bytes(record) is None
 
 
 def test_get_data_runs_returns_none_when_no_data_attribute_exists():
@@ -1054,7 +1056,7 @@ def test_get_data_runs_returns_none_when_no_data_attribute_exists():
         std_info_value=_std_info_value(),
         file_names=[(_file_name_value(1, "x"), 1)],
     )
-    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+    assert mft_records.get_nonresident_data_runs_bytes(record) is None
 
 
 def test_get_data_runs_returns_none_for_a_corrupt_record():
@@ -1064,4 +1066,4 @@ def test_get_data_runs_returns_none_for_a_corrupt_record():
         std_info_value=_std_info_value(),
         file_names=[(_file_name_value(1, "x"), 1)],
     )
-    assert mft_parser.get_nonresident_data_runs_bytes(record) is None
+    assert mft_records.get_nonresident_data_runs_bytes(record) is None

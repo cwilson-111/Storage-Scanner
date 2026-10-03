@@ -878,7 +878,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
 - Not done: the Data build's own copy of the code arrives with the next
   merge into `data`.
 
-**P2-11. Toast notifications: why none ever appeared here.**
+**P2-11. Toast notifications: why none ever appeared here — ✅ done
+(2026-10-03)**
 - Why: notifications are turned off for this whole account
   (`GlobalToastEnabled=0`; PowerShell's ToastNotifier setting says
   DisabledForUser), so the "never visibly verified" follow-up can't be
@@ -890,6 +891,29 @@ or the path has a `%` — ✅ done (2026-09-29)**
   shortcut (needs an installer) so toasts carry the app's name; turn
   notifications on and verify once.
 - Size: S to verify, M for the app ID.
+- Done: `notify.check_windows_toasts` asks `ToastNotifier.Setting` through
+  PowerShell (the app's own ID, else PowerShell's or the Settings app's,
+  ignoring their per-app switch), so account-wide, per-app and Group Policy
+  blocks are all caught; the registry-only read is gone. The toast script
+  posts only when nothing blocks, and Schedule Scans says the answer and
+  where to fix it (checked on a worker thread). Toasts use the app's own ID
+  `cwilson-111.StorageScanner`, registered per user in
+  `HKCU\Software\Classes\AppUserModelId` (DisplayName, IconUri = the
+  largest PNG from icon.ico in app data) on every `--notify` run and
+  removed with the last scheduled scan; no shortcut or installer needed.
+- Verified: by 2026-10-03 notifications were on again for this account
+  (ToastEnabled=1); the real check returned Enabled in 0.23 s. A real
+  per-app block (an ID Windows reports as DisabledForApplication) was
+  reported with its Settings path and nothing was posted. The real Schedule
+  Scans window shows both lines (longest UI stall 110 ms). A real toast
+  posted in 0.35 s with the banner headed "Storage Scanner".
+  `tests/test_notify.py` maps every Setting value for the toast and the
+  check.
+- Not done: DisabledForUser and Group Policy not reproduced live (settings
+  left alone). The toast icon is unconfirmed: Windows caches an app ID's
+  first icon lookup for the logon session and the first test toast used the
+  .ico, so the PNG shows after a sign-out. Do Not Disturb isn't reported by
+  `ToastNotifier.Setting`.
 
 **P2-12. Archiving blocks the window — ✅ done (2026-09-29)**
 - Why: `archive_file` compresses at the highest level and verifies on the
@@ -945,8 +969,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
   files is untested until v1.13.0. A `data-v1.12.0` install never hears of
   a newer version (the README and CHANGELOG say so).
 
-**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` — every UI
-file under 500 lines ✅ (2026-10-01); Protocol and history.py move not yet.**
+**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` — ✅ done
+(2026-10-03): every module under 500 lines, shared app attributes declared.**
 - Why: 1,284 and 912 lines against the 500-line rule, 14% and 39% covered.
   The duplicate engine (about 280 lines of hashing and matching) lives in a
   UI module, and the 370-line `_show_duplicates_window` of closures is where
@@ -990,10 +1014,28 @@ file under 500 lines ✅ (2026-10-01); Protocol and history.py move not yet.**
   listed a 106 MB 400-day-old log and a duplicate, archived the log through
   the worker (zip written, original removed, row gone) and deleted one copy
   of the duplicate (file gone, group dissolved).
-- Not done: a Protocol for the shared app attributes; `history.py` into
-  the package. Outside `ui/`, `history.py` (956), `mft_parser.py` (689),
-  `turbo_cache.py` (538), `scanner.py` (514) and `file_ops.py` (508) are
-  over 500 lines.
+- Done (4, 2026-10-03): `history.py` (956 lines) is in the package as
+  `history_db` (connection, schema, app metadata; 194), `history_store`
+  (170), `history_queries` (409) and `history_records` (225); no top-level
+  `history` module is left. The engine files over 500 lines were split by
+  pure moves: `alloc_size.py` (on-disk size and cloud-placeholder checks,
+  from `scanner.py`), `mft_records.py` (record header, fixups, attribute
+  walk, data runs, from `mft_parser.py`), `turbo_cache_schema.py` (table
+  layout, record↔row mapping) and `elevation.py` (elevated scans and
+  relaunch, from `file_ops.py`). Largest package module now 499 lines.
+- Done (5, 2026-10-03): the attributes and methods the main window's
+  mixins share are declared once in `ui/app_state.py` (`AppState`, a plain
+  class seen only while type checking; a Protocol let each mixin redeclare
+  its attributes with narrower types, so it checked nothing). Every UI mixin
+  derives from `AppMixin` (`object` at run time); the five windows take
+  `app: AppState`; `check_untyped_defs` covers `storage_scanner.app` and
+  `storage_scanner.ui.*`. Its 44 errors were fixed in code; one was a
+  latent crash (Duplicate Files read `root_node.path` when a new scan had
+  cleared both trees).
+- Verified (4–5): ruff, black, mypy (95 files), 771 tests, scale check,
+  `--selftest-gui`, a CLI scan; the real app on its mainloop: a 43-file
+  scan, all 119 declared names present on the running app, Find Duplicates,
+  an archive, Cleanup closed mid-search, a delete with the tree redraw.
 
 **P2-15. Run the tests on Linux and macOS, and settle the Python range — ✅
 done (2026-09-29)**
@@ -1023,8 +1065,8 @@ done (2026-09-29)**
   `logging.FileHandler`, which P3-5 had replaced, so it had stopped
   checking the log; it now checks `logging_setup.log_dir`.
 
-**P2-16. Build provenance and pinned build tools — pins, attestation and
-GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
+**P2-16. Build provenance and pinned build tools — ✅ done (pins,
+attestation, GUI self-test 2026-10-01; one build per tagged commit 2026-10-02).**
 - Why: there's no artifact attestation. `requirements-dev.txt` uses `>=`, so
   each release can bundle a different PyInstaller. Pushing a tag and main at
   the same commit builds everything twice. The smoke test never creates a Tk
@@ -1058,7 +1100,17 @@ GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
 - Verified (CI, 7535ad6): all four build jobs passed "Smoke-test" (now with
   `--selftest-gui`; Linux under xvfb, macOS on the .app) and "Attest build
   provenance".
-- Not done: a tag and main at the same commit still build twice.
+- Done (3): one build per commit when a tag and main share it. Pushes join
+  a `concurrency` group per commit and a tag's run cancels a main run in
+  progress there (tag pushed after main); a first job, `tagged`, asks
+  `git ls-remote` whether a `v*` tag already points at the commit and, for
+  a push to main, skips every other job (tag pushed first; a main run that
+  queued behind the tag's run ends up here too). Pull requests and manual
+  runs never share a group.
+- Verified (3): the `tagged` script against the real remote: main push of
+  8c2315b (v1.13.0's commit) → skip=true, of untagged 6442ee4 → false, the
+  tag push and a pull request → false; the workflow parses (PyYAML) with
+  test and test-other-os needing `tagged` and every build behind them.
 
 **P2-17. The sampled-duplicate warning hard-codes "1 MB" — ✅ done
 (2026-09-29)**

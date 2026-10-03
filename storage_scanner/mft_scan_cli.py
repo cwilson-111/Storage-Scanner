@@ -4,11 +4,11 @@
 Windows' ShellExecuteExW "runas" elevation has no equivalent to macOS's
 `do shell script ... with administrator privileges`, which conveniently
 hands the elevated child's stdout back as its own return value (see
-storage_scanner/priv_scan_cli.py and file_ops.run_elevated_scan_macos) --
+storage_scanner/priv_scan_cli.py and elevation.run_elevated_scan_macos) --
 the OS elevation broker calls CreateProcess for the new process, not us,
 so there's no pipe we can attach as its stdout. Instead this helper writes
 its JSON result to the `--output` file the caller told it to use and
-exits; the caller (storage_scanner.file_ops.run_elevated_scan_windows)
+exits; the caller (storage_scanner.elevation.run_elevated_scan_windows)
 reads that file back once the elevated process exits.
 
 Distinct from priv_scan_cli.py's `--priv-scan` and cli.py's `--cli`: this
@@ -47,7 +47,7 @@ from storage_scanner.turbo_read import scan_subtree_using_cache
 EXIT_OK = 0
 EXIT_SCAN_ERROR = 1
 
-# The GUI (file_ops._relay_progress_file) opens the progress file to read it
+# The GUI (elevation._relay_progress_file) opens the progress file to read it
 # five times a second, and Windows refuses to replace a file while any
 # handle is open on it -- even one opened with FILE_SHARE_DELETE. Each
 # collision lasts only as long as one small read, so a short retry clears
@@ -209,7 +209,7 @@ def build_arg_parser():
 
 def _write_error(output_path, exc):
     """Best effort: the error, and its traceback for the log, where the GUI
-    looks for the result (see file_ops.run_elevated_scan_windows)."""
+    looks for the result (see elevation.run_elevated_scan_windows)."""
     envelope = {
         "error": f"{exc.__class__.__name__}: {exc}",
         "traceback": traceback.format_exc(),

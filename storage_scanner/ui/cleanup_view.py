@@ -22,19 +22,15 @@ from tkinter import (
     messagebox,
     ttk,
 )
+from typing import TYPE_CHECKING
 
-from history import (
-    get_installed_install_locations,
-    get_known_install_location_count,
-    get_orphaned_install_locations,
-    record_install_locations_snapshot,
-)
 from storage_scanner import cleanup_cache
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE,
     CATEGORY_ORPHANED_INSTALL,
     CATEGORY_PROTECTED,
     CATEGORY_REVIEW,
+    Recommendation,
     _drop_nested_under,
     build_duplicate_recommendations,
     find_orphaned_install_folders,
@@ -43,6 +39,12 @@ from storage_scanner.cleanup_recommendations import (
 )
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
+from storage_scanner.history_records import (
+    get_installed_install_locations,
+    get_known_install_location_count,
+    get_orphaned_install_locations,
+    record_install_locations_snapshot,
+)
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
@@ -52,6 +54,9 @@ from storage_scanner.platform_support import (
 )
 from storage_scanner.settings import COLORS, px
 from storage_scanner.ui.cleanup_archive import archive_review_candidates
+
+if TYPE_CHECKING:
+    from storage_scanner.ui.app_state import AppState
 
 _CATEGORY_TAGS = {
     CATEGORY_PROTECTED: "protected",
@@ -86,12 +91,12 @@ class CleanupWindow:
     selection and confirmation, and Protected rows can never be deleted at
     all."""
 
-    def __init__(self, app, scan_path):
+    def __init__(self, app: "AppState", scan_path):
         self.app = app
         self.scan_path = scan_path
         self.live = app.root_node is not None
         self.scan_tree = app.root_node  # what live rows are from; cached rows are from no tree
-        self.iid_to_rec = {}
+        self.iid_to_rec: dict[str, Recommendation] = {}
 
         self.win = Toplevel(app.root)
         self.win.configure(bg=COLORS["bg"])
@@ -236,12 +241,17 @@ class CleanupWindow:
             self.win.protocol("WM_DELETE_WINDOW", self.win.destroy)
         else:
             cancel_event = threading.Event()
-            result_q = queue.Queue()
+            result_q: queue.Queue[tuple] = queue.Queue()
             threading.Thread(
                 target=self._find_duplicates, args=(cancel_event, result_q), daemon=True
             ).start()
             self.win.after(150, self._poll_duplicates, cancel_event, result_q, metadata_recs)
-            self.win.protocol("WM_DELETE_WINDOW", lambda: (cancel_event.set(), self.win.destroy()))
+
+            def cancel_and_close():
+                cancel_event.set()
+                self.win.destroy()
+
+            self.win.protocol("WM_DELETE_WINDOW", cancel_and_close)
 
     def _find_duplicates(self, cancel_event, result_q):
         """Worker thread: hash for duplicates, then look for orphaned
@@ -283,8 +293,8 @@ class CleanupWindow:
         any folder matching a location whose owning app is no longer
         installed. ([], "") on any other platform. The second value is
         a note for the summary: on the very first snapshot ever taken
-        (nothing to compare against yet -- see history.py's
-        known_install_locations docstring for why that first-run gap is
+        (nothing to compare against yet -- see history_records'
+        record_install_locations_snapshot docstring for why that first-run gap is
         the accepted tradeoff for staying exact-match-only), or when
         the registry read came back short and was ignored.
         """

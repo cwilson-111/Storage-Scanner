@@ -13,7 +13,8 @@ implying a live reading.
 from collections import namedtuple
 from datetime import datetime, timezone
 
-from history import get_latest_scan_snapshot, list_budgets
+from storage_scanner.history_queries import get_latest_scan_snapshot
+from storage_scanner.history_records import list_budgets
 
 BudgetBreach = namedtuple(
     "BudgetBreach",

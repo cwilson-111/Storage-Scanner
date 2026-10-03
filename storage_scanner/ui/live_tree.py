@@ -46,6 +46,7 @@ from tkinter import END, messagebox
 
 from storage_scanner.live_tree_model import SCANNING_ICON, resorted, row_display
 from storage_scanner.models import FileNode
+from storage_scanner.ui.app_state import AppMixin
 
 PLACEHOLDER_TEXT = "…(loading)"
 _RESORT_SECONDS = 0.5
@@ -66,7 +67,7 @@ class _Level:
         self.files_seen = 0  # file rows already given a row
 
 
-class LiveTreeMixin:
+class LiveTreeMixin(AppMixin):
     def _live_reset(self):
         self._live_tracker = None  # scan_progress.WalkTracker of the scan's tree
         self._live_root_iid = None  # the target's row
@@ -225,7 +226,7 @@ class LiveTreeMixin:
         self._live_frozen = True
 
     def _show_live_step(self, step):
-        if step == self._live_step:
+        if step == self._live_step or self._live_root_iid is None:
             return
         self._live_step = step
         text = f"{self._live_root_text} — {step}" if step else self._live_root_text
@@ -241,6 +242,9 @@ class LiveTreeMixin:
         """Give rows to the folders and files found under `level` since the
         last call: at most `budget` of them, and none once `deadline`
         (a time.perf_counter() value) has passed. Returns how many it added."""
+        tracker = self._live_tracker
+        if tracker is None:  # no scan's tree on screen
+            return 0
         node = level.node
         new_dirs = node.dirs[level.dirs_seen : level.dirs_seen + budget]
         file_rows = len(node.file_names)  # rows only ever grow during a scan
@@ -249,7 +253,7 @@ class LiveTreeMixin:
         )
         if not new_dirs and not new_files:
             return 0
-        [parent, *folders] = self._live_tracker.folders([node, *new_dirs])
+        [parent, *folders] = tracker.folders([node, *new_dirs])
         parent_size = parent[0] or 1
         added = 0
         for child, (size, alloc_size, file_count, state) in zip(new_dirs, folders):
@@ -388,6 +392,9 @@ class LiveTreeMixin:
         return rows
 
     def _live_refresh_visible(self):
+        tracker = self._live_tracker
+        if tracker is None:  # no scan's tree on screen
+            return
         tree = self.tree
         node_by_iid = self.node_by_iid
         rows = [
@@ -405,7 +412,7 @@ class LiveTreeMixin:
             if parent_iid:
                 parent = node_by_iid[parent_iid]
                 folders[id(parent)] = parent
-        totals = dict(zip(folders, self._live_tracker.folders(list(folders.values()))))
+        totals = dict(zip(folders, tracker.folders(list(folders.values()))))
 
         for iid, node in rows:
             parent_iid = self._live_parent[iid]

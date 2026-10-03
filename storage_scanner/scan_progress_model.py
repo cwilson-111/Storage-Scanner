@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-import history
+from storage_scanner import history_queries
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.scan_history import normalize_scan_path
@@ -64,7 +64,7 @@ class ScanEstimate:
 def choose_estimate(last_scan, volume_used_bytes):
     """The best estimate available, or None.
 
-    `last_scan` is history.get_latest_scan_snapshot()'s row (created_at,
+    `last_scan` is history_queries.get_latest_scan_snapshot()'s row (created_at,
     total_size, file_count, folder_count) for the target, or None;
     `volume_used_bytes` is the drive's used space when the target is a
     volume root, else None. The last scan wins: it counted what this scanner
@@ -91,7 +91,7 @@ def load_estimate(target):
     scan. Reads the history database, so call it off the UI thread."""
     last_scan = None
     try:
-        last_scan = history.get_latest_scan_snapshot(normalize_scan_path(target))
+        last_scan = history_queries.get_latest_scan_snapshot(normalize_scan_path(target))
     except Exception:  # noqa: BLE001 - an estimate is optional
         logger.warning("Could not read scan history to estimate %r", target, exc_info=True)
 

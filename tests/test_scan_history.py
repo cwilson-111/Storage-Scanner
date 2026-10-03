@@ -6,18 +6,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
-from storage_scanner import scan_history
+from storage_scanner import history_db, history_queries, history_records, scan_history
 from storage_scanner.models import Node
 
 MB = 1024 * 1024
 
 
 def _db(tmp_path, monkeypatch):
-    # Deliberately NOT calling history.init_history_db() here: record_scan
+    # Deliberately NOT calling history_db.init_history_db() here: record_scan
     # must create the tables itself, because the CLI never runs the GUI's
     # startup that normally does it.
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
 
 
 def _tree(root_path, big_size=60 * MB, small_size=1 * MB):
@@ -50,7 +49,7 @@ def test_record_scan_works_on_a_database_that_was_never_initialized(tmp_path, mo
     assert recorded.previous_scan_id is None
     assert recorded.growth_rows == []
     scan_path = scan_history.normalize_scan_path(str(tmp_path))
-    assert history.get_latest_scan_id(scan_path) == recorded.scan_id
+    assert history_queries.get_latest_scan_id(scan_path) == recorded.scan_id
 
 
 def test_second_scan_of_the_same_path_reports_growth_against_the_first(tmp_path, monkeypatch):
@@ -66,8 +65,8 @@ def test_second_scan_of_the_same_path_reports_growth_against_the_first(tmp_path,
 
 def test_record_scan_reports_a_budget_breach(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
-    history.init_history_db()
-    history.set_budget(scan_history.normalize_scan_path(str(tmp_path)), 10 * MB)
+    history_db.init_history_db()
+    history_records.set_budget(scan_history.normalize_scan_path(str(tmp_path)), 10 * MB)
 
     recorded = scan_history.record_scan(_tree(str(tmp_path)))
 
@@ -83,8 +82,8 @@ def test_record_scan_saves_the_on_disk_size_and_the_drives_free_space(tmp_path, 
     scan_history.record_scan(root)
 
     scan_path = scan_history.normalize_scan_path(str(tmp_path))
-    ((_created_at, total_size, allocated_size),) = history.get_forecast_history(scan_path)
+    ((_created_at, total_size, allocated_size),) = history_queries.get_forecast_history(scan_path)
     assert (total_size, allocated_size) == (root.size, 64 * MB)
-    _created_at, drive_free = history.get_latest_drive_free(scan_path)
+    _created_at, drive_free = history_queries.get_latest_drive_free(scan_path)
     usage = shutil.disk_usage(tmp_path)
     assert 0 < drive_free <= usage.total

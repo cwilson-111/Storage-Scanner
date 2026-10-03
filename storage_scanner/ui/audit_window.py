@@ -11,16 +11,17 @@ look for there, and which items were never sent there.
 
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, Toplevel, X, ttk
 
-from history import get_audit_log
 from storage_scanner.delete_outcome import DELETED_PERMANENTLY, LABELS, RECYCLED, is_removed
 from storage_scanner.file_ops import open_trash
 from storage_scanner.formatting import human_size
+from storage_scanner.history_records import get_audit_log
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class AuditMixin:
+class AuditMixin(AppMixin):
     def show_audit_log(self):
         existing = getattr(self, "_audit_win", None)
         if existing is not None and existing.winfo_exists():

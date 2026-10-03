@@ -11,7 +11,7 @@ exercised end-to-end on a real, elevated Windows session against a real
 NTFS volume -- but the chunk-caching, extent-resolution, and offset
 arithmetic around them (RecordSource's real logic) is unit-tested in
 tests/test_mft_volume.py against a faked ctypes.windll.kernel32, the same
-technique already used for storage_scanner.drive_info/file_ops.
+technique already used for storage_scanner.drive_info/elevation.
 
 An earlier version of this module treated the $MFT as one contiguous span
 starting at MftStartLcn for MftValidDataLength bytes. That's wrong for any
@@ -24,14 +24,14 @@ from the scanned tree, because most of a real, fragmented $MFT was never
 being read at all. Record #0 ($MFT's own record) is always physically at
 the start of the first extent, so reading *it* via the naive single-
 extent assumption is always safe; decoding its own $DATA attribute's data
-runs (mft_parser.decode_data_runs) then gives the $MFT's true, possibly
+runs (mft_records.decode_data_runs) then gives the $MFT's true, possibly
 multi-extent layout, which is what RecordSource now actually uses.
 """
 
 import ctypes
 from ctypes import wintypes
 
-from storage_scanner import mft_parser
+from storage_scanner import mft_records
 from storage_scanner.logging_setup import logger
 
 _GENERIC_READ = 0x80000000
@@ -92,7 +92,7 @@ def _open_volume(volume_root):
     kernel32 = ctypes.windll.kernel32
     # HANDLE is pointer-sized -- without this, ctypes' default 32-bit
     # signed-int return type would truncate/misinterpret it on 64-bit
-    # Windows (the same class of bug file_ops.py's ShellExecuteW binding
+    # Windows (the same class of bug elevation.py's ShellExecuteW binding
     # already works around for its own pointer-sized HINSTANCE return).
     kernel32.CreateFileW.restype = ctypes.c_void_p
     handle = kernel32.CreateFileW(
@@ -191,7 +191,7 @@ def _resolve_mft_extents(handle, mft_start_lcn, bytes_per_cluster, record_size, 
     record0_offset = mft_start_lcn * bytes_per_cluster
     record0_bytes = _read_bytes(handle, record0_offset, record_size)
 
-    runs_bytes = mft_parser.get_nonresident_data_runs_bytes(
+    runs_bytes = mft_records.get_nonresident_data_runs_bytes(
         record0_bytes,
         sector_size=bytes_per_sector,
     )
@@ -210,7 +210,7 @@ def _resolve_mft_extents(handle, mft_start_lcn, bytes_per_cluster, record_size, 
 
     extents = []
     next_record = 0
-    for length_clusters, lcn in mft_parser.decode_data_runs(runs_bytes):
+    for length_clusters, lcn in mft_records.decode_data_runs(runs_bytes):
         record_count = length_clusters * records_per_cluster
         if record_count > 0:
             extents.append((next_record, record_count, lcn))
@@ -273,7 +273,7 @@ class RecordSource:
             self._bytes_per_cluster = volume_data.BytesPerCluster
             # Public: mft_parser.parse_base_record reads this off the
             # record source to apply fixups at the volume's real sector
-            # size instead of assuming 512 -- see mft_parser._apply_fixups.
+            # size instead of assuming 512 -- see mft_records._apply_fixups.
             self.bytes_per_sector = volume_data.BytesPerSector
             self._extents = _resolve_mft_extents(
                 self._handle,

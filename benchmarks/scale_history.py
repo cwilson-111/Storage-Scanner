@@ -18,8 +18,8 @@ HISTORY_FOLDERS = 20_000
 
 class VmSteps:
     """Counts SQLite virtual-machine instructions run on every connection
-    opened while active (history.py opens its own per call): the work a
-    query does, repeatable where its timing isn't."""
+    opened while active (the history modules open their own per call): the
+    work a query does, repeatable where its timing isn't."""
 
     PER_TICK = 100
 
@@ -49,11 +49,10 @@ class VmSteps:
 
 
 def scenario_history(n_files, workdir):
-    import history
-    from storage_scanner import scan_history
+    from storage_scanner import history_db, scan_history
 
-    history.DB_NAME = os.path.join(workdir, "storage_history.db")
-    history.init_history_db()
+    history_db.DB_NAME = os.path.join(workdir, "storage_history.db")
+    history_db.init_history_db()
     root = build_node_tree(n_files)
     folder_rows = len(scan_history.collect_folder_sizes(root)[0])
 
@@ -63,7 +62,7 @@ def scenario_history(n_files, workdir):
         scan_history.record_scan(root)
         timings.append(time.perf_counter() - start)
 
-    db_bytes = database_bytes(history.DB_NAME)
+    db_bytes = database_bytes(history_db.DB_NAME)
     return {
         "history_bytes_per_scan": round(db_bytes / SCHEDULED_SCANS),
         "history_rows_per_scan": folder_rows,
@@ -76,8 +75,7 @@ def scenario_history_retention(n_files, workdir):
     simulated clock: how many scans retention keeps, and the database they
     fill. Saves the same folder sizes every day (walking the tree 800 times
     would only measure the walk; the `history` scenario covers that)."""
-    import history
-    from storage_scanner import scan_history
+    from storage_scanner import history_db, history_store, scan_history
 
     class SimulatedClock(datetime):
         today = datetime(2024, 1, 1, 3, 0)
@@ -86,23 +84,23 @@ def scenario_history_retention(n_files, workdir):
         def now(cls, tz=None):
             return cls.today
 
-    history.DB_NAME = os.path.join(workdir, "storage_history.db")
-    history.datetime = SimulatedClock
-    history.init_history_db()
+    history_db.DB_NAME = os.path.join(workdir, "storage_history.db")
+    history_store.datetime = SimulatedClock
+    history_db.init_history_db()
     folder_sizes, folder_count = scan_history.collect_folder_sizes(build_node_tree(n_files))
     first_day = SimulatedClock.today
     start = time.perf_counter()
     for day in range(DAILY_SCANS):
         SimulatedClock.today = first_day + timedelta(days=day)
-        history.save_scan_snapshot(VOLUME_ROOT, 1, 1, 1, folder_count, folder_sizes)
+        history_store.save_scan_snapshot(VOLUME_ROOT, 1, 1, 1, folder_count, folder_sizes)
     elapsed = time.perf_counter() - start
 
-    conn = sqlite3.connect(history.DB_NAME)
+    conn = sqlite3.connect(history_db.DB_NAME)
     (kept,) = conn.execute("SELECT COUNT(*) FROM scans").fetchone()
     conn.close()
     return {
         "history_daily_scans_kept": kept,
-        "history_daily_scans_db_bytes": database_bytes(history.DB_NAME),
+        "history_daily_scans_db_bytes": database_bytes(history_db.DB_NAME),
         "history_daily_save_seconds": round(elapsed / DAILY_SCANS, 4),
     }
 
@@ -130,21 +128,21 @@ def _history_20k_folder_sizes():
 def scenario_history_20k(_n_files, workdir):
     """What scan_history.record_scan does with a 20,001-folder scan: save
     it, then compare it with the previous scan of the same path."""
-    import history
+    from storage_scanner import history_db, history_queries, history_store
 
-    history.DB_NAME = os.path.join(workdir, "storage_history.db")
-    history.init_history_db()
+    history_db.DB_NAME = os.path.join(workdir, "storage_history.db")
+    history_db.init_history_db()
     first, second = _history_20k_folder_sizes()
-    history.save_scan_snapshot(VOLUME_ROOT, 1, 1, 1, len(first), first)
+    history_store.save_scan_snapshot(VOLUME_ROOT, 1, 1, 1, len(first), first)
 
     with VmSteps() as save_steps:
         start = time.perf_counter()
-        scan_id = history.save_scan_snapshot(VOLUME_ROOT, 1, 1, 1, len(second), second)
+        scan_id = history_store.save_scan_snapshot(VOLUME_ROOT, 1, 1, 1, len(second), second)
         save_seconds = time.perf_counter() - start
-    previous_id = history.get_previous_scan_id(VOLUME_ROOT, scan_id)
+    previous_id = history_queries.get_previous_scan_id(VOLUME_ROOT, scan_id)
     with VmSteps() as growth_steps:
         start = time.perf_counter()
-        rows = history.get_folder_growth(scan_id, previous_id, limit=50)
+        rows = history_queries.get_folder_growth(scan_id, previous_id, limit=50)
         growth_seconds = time.perf_counter() - start
     assert rows[0][0].startswith(os.path.join(VOLUME_ROOT, "new"))
 
@@ -152,7 +150,7 @@ def scenario_history_20k(_n_files, workdir):
         "history_20k_folder_rows": len(second),
         "history_20k_save_seconds": round(save_seconds, 3),
         "history_20k_growth_seconds": round(growth_seconds, 3),
-        "history_20k_bytes_per_scan": round(database_bytes(history.DB_NAME) / 2),
+        "history_20k_bytes_per_scan": round(database_bytes(history_db.DB_NAME) / 2),
         "history_20k_save_steps_per_row": round(save_steps.steps / len(second), 1),
         "history_20k_growth_steps_per_row": round(growth_steps.steps / len(second), 1),
     }
