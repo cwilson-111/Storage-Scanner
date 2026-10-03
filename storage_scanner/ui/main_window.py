@@ -43,8 +43,10 @@ from storage_scanner.search import parse_size
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, px
 from storage_scanner.ui.treemap_pane import TreemapPane
 
-# app_metadata key: whether the treemap pane is shown ("1", the default) or not.
+# app_metadata keys: whether the treemap pane is shown, and whether its tiles
+# are shaded as cushions ("1", the default for both) or not.
 TREEMAP_SHOWN_KEY = "show_treemap"
+TREEMAP_SHADED_KEY = "shade_treemap"
 
 
 class MainWindowMixin:
@@ -239,6 +241,11 @@ class MainWindowMixin:
         elif not self.show_treemap_var.get() and shown:
             self.main_panes.forget(self.treemap_pane.frame)
         set_app_metadata(TREEMAP_SHOWN_KEY, "1" if self.show_treemap_var.get() else "0")
+
+    def _toggle_treemap_shading(self):
+        """Tools ▸ Explore ▸ Shade Treemap Tiles: cushions, or flat boxes."""
+        set_app_metadata(TREEMAP_SHADED_KEY, "1" if self.shade_treemap_var.get() else "0")
+        self.treemap_pane.schedule()
 
     def _show_menu(self, event):
         """Right-click: the menu for the selection if the row is part of it,
