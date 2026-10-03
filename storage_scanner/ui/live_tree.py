@@ -132,6 +132,7 @@ class LiveTreeMixin:
         self.duplicates = None
         self._previous_folder_sizes = {}  # the Change column waits for this scan's save
         self.changed_only_check.state(["disabled"])  # and so does its filter
+        self._owner_reset()  # and the Owner column for the finished tree
         self.treemap_pane.clear()
         self._duplicates_scan_root = None
         self.cart.clear()
@@ -144,7 +145,11 @@ class LiveTreeMixin:
         suffix = "\\" if os.path.isdir(path) and not name.endswith("\\") else ""
         self._live_root_text = f"{SCANNING_ICON} {name}{suffix}"
         self._live_root_iid = self.tree.insert(
-            "", END, text=self._live_root_text, values=("…", "…", "", "…"), tags=("dir", "even")
+            "",
+            END,
+            text=self._live_root_text,
+            values=("…", "…", "", "…", "…"),
+            tags=("dir", "even"),
         )
 
     def _scan_running(self):
@@ -188,8 +193,8 @@ class LiveTreeMixin:
         self._live_tracker = tracker
         root = tracker.root
         self.tree.delete(self._live_root_iid)
-        [(size, alloc_size, file_count, state)] = tracker.folders([root])
-        display = row_display(root, size, alloc_size, file_count, size or 1, state)
+        [(size, alloc_size, file_count, folder_count, state)] = tracker.folders([root])
+        display = row_display(root, size, alloc_size, file_count, folder_count, size or 1, state)
         tags = self._row_tags(display, 0)
         iid = self.tree.insert("", END, text=display.text, values=display.values, tags=tags)
         self.node_by_iid[iid] = root
@@ -252,10 +257,12 @@ class LiveTreeMixin:
         [parent, *folders] = self._live_tracker.folders([node, *new_dirs])
         parent_size = parent[0] or 1
         added = 0
-        for child, (size, alloc_size, file_count, state) in zip(new_dirs, folders):
+        for child, (size, alloc_size, file_count, folder_count, state) in zip(new_dirs, folders):
             if deadline is not None and time.perf_counter() > deadline:
                 return added
-            display = row_display(child, size, alloc_size, file_count, parent_size, state)
+            display = row_display(
+                child, size, alloc_size, file_count, folder_count, parent_size, state
+            )
             self._live_insert(parent_iid, level, child, display)
             level.dirs_seen += 1
             added += 1
@@ -263,7 +270,7 @@ class LiveTreeMixin:
             if deadline is not None and time.perf_counter() > deadline:
                 return added
             child = FileNode(node, index)
-            display = row_display(child, child.size, child.alloc_size, 1, parent_size)
+            display = row_display(child, child.size, child.alloc_size, 1, 0, parent_size)
             self._live_insert(parent_iid, level, child, display)
             level.files_seen = index + 1
             added += 1
@@ -410,15 +417,23 @@ class LiveTreeMixin:
         for iid, node in rows:
             parent_iid = self._live_parent[iid]
             if node.is_dir:
-                size, alloc_size, file_count, state = totals[id(node)]
+                size, alloc_size, file_count, folder_count, state = totals[id(node)]
             else:
-                size, alloc_size, file_count, state = node.size, node.alloc_size, 1, None
+                size, alloc_size, file_count, folder_count, state = (
+                    node.size,
+                    node.alloc_size,
+                    1,
+                    0,
+                    None,
+                )
             if parent_iid:
                 parent_size = totals[id(node_by_iid[parent_iid])][0] or 1
                 index = self._live_levels[parent_iid].position.get(iid, 0)
             else:
                 parent_size, index = size or 1, 0
-            display = row_display(node, size, alloc_size, file_count, parent_size, state)
+            display = row_display(
+                node, size, alloc_size, file_count, folder_count, parent_size, state
+            )
             tags = self._row_tags(display, index)
             shown = (display.text, display.values, tags)
             if self._live_shown.get(iid) != shown:

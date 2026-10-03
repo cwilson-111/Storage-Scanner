@@ -63,4 +63,7 @@ def _dict_to_folder(d):
                 child["atime"],
                 _flags(child),
             )
+    # Not in the dict (the JSON export's shape predates it): counted here,
+    # as scanner._rollup does.
+    node.folder_count = len(node.dirs) + sum(child.folder_count for child in node.dirs)
     return node

@@ -6,14 +6,14 @@ holds each row's logical then on-disk size; file_times, its mtime then
 atime; file_flags), and a FileNode is a two-field view onto one row, made
 only when something asks for it (node.children, node.files(), a search
 result, a duplicate group). Both expose the same read-only attributes --
-path, name, is_dir, size, alloc_size, file_count, mtime, atime, error,
-is_link, hardlink_dup, is_cloud_placeholder, children, has_children -- so
-code that only reads the tree doesn't care which one it holds. Code that
-walks every file (search, cleanup, duplicates, roll-up) reads the columns
-instead, through iter_file_rows(): file_sizes, file_allocs, file_mtimes
-and file_atimes are copies of one field per row, taken once per folder,
-and set_file_size() changes a row's sizes. It makes a FileNode only for a
-row it keeps.
+path, name, is_dir, size, alloc_size, file_count, folder_count, mtime,
+atime, error, is_link, hardlink_dup, is_cloud_placeholder, children,
+has_children -- so code that only reads the tree doesn't care which one it
+holds. Code that walks every file (search, cleanup, duplicates, roll-up)
+reads the columns instead, through iter_file_rows(): file_sizes,
+file_allocs, file_mtimes and file_atimes are copies of one field per row,
+taken once per folder, and set_file_size() changes a row's sizes. It makes
+a FileNode only for a row it keeps.
 
 Why columns: a Python object per file (its slots, its own path and name
 strings, an empty children list, boxed ints and floats) cost ~400 bytes a
@@ -82,6 +82,7 @@ class Node:
         "size",
         "alloc_size",
         "file_count",
+        "folder_count",
         "mtime",
         "atime",
         "error",
@@ -107,6 +108,7 @@ class Node:
         self.size = 0  # total logical bytes (recursive, once rolled up)
         self.alloc_size = 0  # actual on-disk bytes (recursive, once rolled up)
         self.file_count = 0  # files contained (recursive, once rolled up)
+        self.folder_count = 0  # folders contained (recursive, once rolled up)
         self.mtime = 0.0  # last-modified time, epoch seconds (0 if unknown)
         self.atime = 0.0  # last-accessed time, epoch seconds (0 if unknown)
         self.error = False  # couldn't be (fully) read; rolled up to ancestors
@@ -209,6 +211,7 @@ class FileNode:
 
     is_dir = False
     file_count = 1
+    folder_count = 0
     children = ()
     has_children = False
 
@@ -336,14 +339,22 @@ def _folders_holding(root, node):
     return None
 
 
+def subtract_totals(folder, node):
+    """Take a deleted `node`'s size and its file and folder counts out of
+    `folder`, one of the folders above it. A deleted folder takes itself
+    out of the folder count as well as every folder inside it."""
+    folder.size -= node.size
+    folder.file_count -= node.file_count
+    folder.folder_count -= (node.folder_count + 1) if node.is_dir else 0
+
+
 def remove_from_tree(root, node):
-    """Unlink a deleted file or folder from `root`'s tree, taking its size
-    and file count out of every folder above it. False if it wasn't there."""
+    """Unlink a deleted file or folder from `root`'s tree, taking its totals
+    out of every folder above it (subtract_totals). False if it wasn't there."""
     chain = _folders_holding(root, node)
     if chain is None:
         return False
     for folder in chain:
-        folder.size -= node.size
-        folder.file_count -= node.file_count
+        subtract_totals(folder, node)
     chain[-1].remove_child(node)
     return True

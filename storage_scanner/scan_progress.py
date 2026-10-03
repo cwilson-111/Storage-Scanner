@@ -104,10 +104,10 @@ class WalkTracker:
     record() when it has counts to add -- every FLUSH_EVERY_ENTRIES entries
     and once when the directory is done. record() adds the counts to the
     directory's own Node and to every folder above it, so at any moment a
-    folder's size, alloc_size and file_count are what has been read under
-    it so far. It takes the lock once per call: a directory costs one lock
-    round trip (plus one per 1,000 entries) and one pass up its chain of
-    ancestors, whatever depth anyone is looking at.
+    folder's size, alloc_size, file_count and folder_count are what has
+    been read under it so far. It takes the lock once per call: a directory
+    costs one lock round trip (plus one per 1,000 entries) and one pass up
+    its chain of ancestors, whatever depth anyone is looking at.
 
     A folder is done once every directory under it has been read. _pending
     counts, per folder, the directories in its subtree not fully read yet,
@@ -141,7 +141,8 @@ class WalkTracker:
         """Add counts for `node`, the directory `worker` is reading;
         `chain` is every folder above it, the scan root first. `new_dirs`
         are subdirectories found since the last call, about to be queued."""
-        change = len(new_dirs) - (1 if finished else 0)
+        found = len(new_dirs)
+        change = found - (1 if finished else 0)
         with self._lock:
             self._files += files
             self._bytes += nbytes
@@ -149,12 +150,14 @@ class WalkTracker:
             if finished:
                 self._folders += 1
             pending = self._pending
-            if files or change:
+            if files or found or change:
                 for folder in (*chain, node):
                     if files:
                         folder.size += nbytes
                         folder.alloc_size += nalloc
                         folder.file_count += files
+                    if found:
+                        folder.folder_count += found
                     if change:
                         left = pending[folder] + change
                         if left:
@@ -169,9 +172,9 @@ class WalkTracker:
             self._active[worker][2] += entries
 
     def folders(self, nodes):
-        """(size, alloc_size, file_count, state) for each folder in
-        `nodes`, read together under the lock so a row never mixes two
-        moments. A folder is QUEUED until a worker starts reading it,
+        """(size, alloc_size, file_count, folder_count, state) for each
+        folder in `nodes`, read together under the lock so a row never mixes
+        two moments. A folder is QUEUED until a worker starts reading it,
         SCANNING until its whole subtree has been read, then DONE."""
         active = {id(entry[0]) for entry in list(self._active) if entry is not None}
         with self._lock:
@@ -181,6 +184,7 @@ class WalkTracker:
                     node.size,
                     node.alloc_size,
                     node.file_count,
+                    node.folder_count,
                     _state(node, pending, active),
                 )
                 for node in nodes

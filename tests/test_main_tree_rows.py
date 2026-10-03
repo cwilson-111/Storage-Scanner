@@ -15,6 +15,7 @@ from storage_scanner import scanner
 from storage_scanner.app import StorageScannerApp
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import date_text, node_display
+from storage_scanner.owner import OwnerLookup
 from storage_scanner.settings import apply_theme
 from storage_scanner.ui import main_tree
 
@@ -39,6 +40,7 @@ class _TreeOnly(StorageScannerApp):
         self._heat_tags = set()
         self._sort_key = "size"
         self._sort_reverse = True
+        self._init_owner_column()
         self.status_var = StringVar(master=root)
         apply_theme(root)
         self._build_tree()
@@ -338,3 +340,49 @@ def test_a_big_level_shows_a_page_then_more_on_request_and_sorts_its_true_top(
     ]
     assert shown == ["A.txt", "d.txt", "b.txt", "E.txt"]
     assert any(iid in app._more_rows for iid in app.tree.get_children(root_iid))
+
+
+def test_the_folders_column_counts_every_folder_inside_and_a_delete_takes_them_off(app, tmp_path):
+    (tmp_path / "a" / "b" / "c").mkdir(parents=True)
+    (tmp_path / "d").mkdir()
+    _write(tmp_path / "a", {"f.bin": 10})
+    root_node = scanner.scan(str(tmp_path), queue.Queue(), threading.Event())
+    app.root_node = root_node
+    root_iid = app._insert_node("", root_node, parent_size=root_node.size or 1)
+    app._populate_children(root_iid, root_node)
+    a_iid = _row(app, root_iid, "a")
+    app._populate_children(a_iid, app.node_by_iid[a_iid])
+
+    assert app.tree.set(root_iid, "folders") == "4"
+    assert app.tree.set(a_iid, "folders") == "2"
+    assert app.tree.set(_row(app, a_iid, "f.bin"), "folders") == ""  # a file
+    app._sort_by("folders")  # most first
+    assert _names(app, root_iid) == ["a", "d"]
+
+    os.rmdir(tmp_path / "a" / "b" / "c")
+    os.rmdir(tmp_path / "a" / "b")
+    app._remove_main_tree_row(_row(app, a_iid, "b"))
+
+    assert app.tree.set(a_iid, "folders") == "0"
+    assert app.tree.set(root_iid, "folders") == "2"
+
+
+def test_sorting_by_owner_looks_up_every_listed_row_then_orders_them_a_to_z(app, scanned):
+    root_iid = scanned
+    owners = {"Zed": "alice", "c.txt": "", "E.txt": "Bob", "b.txt": "zoe"}
+    owners.update({"d.txt": "Alice", "A.txt": "bob", "sub": "carol"})
+    app._owner_lookup = OwnerLookup(lambda path: owners.get(os.path.basename(path), "dave"))
+
+    app._sort_by("owner")
+    deadline = time.monotonic() + 5
+    while (app._owner_rows or app._owner_polling) and time.monotonic() < deadline:
+        app.root.update()
+        time.sleep(0.005)
+
+    # Ties keep the order they had (biggest first); a blank owner goes last.
+    assert _names(app, root_iid) == ["Zed", "d.txt", "E.txt", "A.txt", "sub", "b.txt", "c.txt"]
+    assert app.tree.set(_row(app, root_iid, "A.txt"), "owner") == "bob"
+    assert app.tree.set(_row(app, root_iid, "c.txt"), "owner") == ""
+    sub_iid = _row(app, root_iid, "sub")
+    assert app.tree.set(_row(app, sub_iid, "X.bin"), "owner") == "dave"  # an open level too
+    _assert_striped(app, root_iid)

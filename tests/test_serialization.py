@@ -20,6 +20,8 @@ def _build_tree():
     sub.mtime = 789.0
     sub.add_file("inner.bin", 7, 4096)
     sub.size, sub.alloc_size, sub.file_count = 7, 4096, 1
+    sub.dirs.append(Node("/root/sub/empty", "empty"))
+    sub.folder_count = 1
     root.dirs.append(sub)
     root.add_file(
         "file.txt",
@@ -31,6 +33,7 @@ def _build_tree():
     root.size = 130
     root.alloc_size = 8192
     root.file_count = 2
+    root.folder_count = 2
     root.error = True
     return root
 
@@ -43,6 +46,7 @@ def _fields(node):
         node.size,
         node.alloc_size,
         node.file_count,
+        node.folder_count,
         node.mtime,
         node.error,
         node.is_link,
