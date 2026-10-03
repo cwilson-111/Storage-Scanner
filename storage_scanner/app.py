@@ -17,9 +17,9 @@ import threading
 import time
 from tkinter import TOP, Tk, X, messagebox, ttk
 
-from history import get_app_metadata, open_history_db
 from storage_scanner import appearance
 from storage_scanner.cart import CartManager
+from storage_scanner.history_db import get_app_metadata, open_history_db
 from storage_scanner.history_schema import NewerDatabaseError
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path

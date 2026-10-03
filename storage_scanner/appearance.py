@@ -1,7 +1,7 @@
 """Light or dark, and sharp on high-DPI screens.
 
 Settings ▸ Appearance stores "system", "light" or "dark" (SETTING_KEY in
-history.py's app_metadata); "system" follows the operating system's own
+history_db's app_metadata); "system" follows the operating system's own
 setting. The palettes themselves are settings.LIGHT_COLORS and DARK_COLORS.
 A change applies the next time the app starts: every window takes its
 colours when it's built.

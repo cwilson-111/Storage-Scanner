@@ -33,8 +33,8 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
-from history import APP_DATA_DIR
 from storage_scanner import history_files
+from storage_scanner.history_db import APP_DATA_DIR
 from storage_scanner.logging_setup import logger
 from storage_scanner.mft_parser import _FRN_RECORD_NUMBER_MASK, FileNameAttr, ParsedRecord
 

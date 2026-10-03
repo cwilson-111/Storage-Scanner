@@ -8,9 +8,10 @@ each one's last known scan, and lets you remove one.
 
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, Toplevel, X, messagebox, ttk
 
-from history import delete_budget, get_latest_scan_snapshot, list_budgets
 from storage_scanner.budgets import check_all_budgets
 from storage_scanner.formatting import human_size
+from storage_scanner.history_queries import get_latest_scan_snapshot
+from storage_scanner.history_records import delete_budget, list_budgets
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
 from storage_scanner.settings import COLORS, px

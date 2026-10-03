@@ -29,9 +29,10 @@ from tkinter import (
     ttk,
 )
 
-from history import set_app_metadata, set_budget
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
+from storage_scanner.history_db import set_app_metadata
+from storage_scanner.history_records import set_budget
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,

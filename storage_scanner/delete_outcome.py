@@ -1,6 +1,6 @@
 """What happened to one delete request: the audit ledger's outcome column.
 
-No imports on purpose: history.py/history_schema.py (the ledger itself),
+No imports on purpose: history_records.py/history_schema.py (the ledger itself),
 recycle_windows.py (which reports what the shell actually did) and
 delete_service.py (which decides) all need the same four words.
 """

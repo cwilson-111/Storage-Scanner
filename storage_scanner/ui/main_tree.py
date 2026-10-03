@@ -8,8 +8,8 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 import os
 from tkinter import END
 
-from history import get_folder_sizes
 from storage_scanner.formatting import human_size
+from storage_scanner.history_queries import get_folder_sizes
 from storage_scanner.live_tree_model import (
     change_text,
     node_display,

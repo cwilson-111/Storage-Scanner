@@ -22,10 +22,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from history import get_app_metadata
 from storage_scanner import mft_volume, scanner
 from storage_scanner.drive_info import get_volume_root, is_ntfs_fixed_drive
 from storage_scanner.file_ops import run_elevated_scan_windows
+from storage_scanner.history_db import get_app_metadata
 from storage_scanner.logging_setup import logger
 from storage_scanner.mft_scan import LinkedFolderError
 from storage_scanner.platform_support import IS_ROOT, IS_WINDOWS

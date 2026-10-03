@@ -5,7 +5,7 @@ first. See cleanup_window.show_cleanup_recommendations and
 ui/cleanup_view.py's CleanupWindow for how this gets populated and consulted.
 
 Same %LOCALAPPDATA%\\NeuralStorageMatrix\\ directory, own DB file, and
-per-call-connection/WAL/PRAGMA conventions as history.py/turbo_cache.py.
+per-call-connection/WAL/PRAGMA conventions as history_db.py/turbo_cache.py.
 
 Stores the *computed* cleanup_recommendations.Recommendation rows
 themselves, not the raw scanned file tree -- deliberately simpler than
@@ -20,8 +20,8 @@ three runs ago must never linger next to fresh ones.
 import sqlite3
 from datetime import datetime
 
-from history import APP_DATA_DIR
 from storage_scanner.cleanup_recommendations import Recommendation
+from storage_scanner.history_db import APP_DATA_DIR
 from storage_scanner.logging_setup import logger
 
 DB_NAME = APP_DATA_DIR / "cleanup_cache.db"

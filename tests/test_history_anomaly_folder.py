@@ -1,7 +1,7 @@
 """Tests for HistoryMixin._likely_folder_for_anomaly: best-effort
 correlation of a scan-level size anomaly (which only knows the root path's
 total changed) back to the specific tracked folder most likely responsible,
-via history.get_folder_growth for the same pair of scans the anomaly itself
+via history_queries.get_folder_growth for the same pair of scans the anomaly itself
 compares.
 """
 

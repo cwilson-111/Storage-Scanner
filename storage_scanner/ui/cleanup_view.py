@@ -23,12 +23,6 @@ from tkinter import (
     ttk,
 )
 
-from history import (
-    get_installed_install_locations,
-    get_known_install_location_count,
-    get_orphaned_install_locations,
-    record_install_locations_snapshot,
-)
 from storage_scanner import cleanup_cache
 from storage_scanner.cleanup_recommendations import (
     CATEGORY_DUPLICATE,
@@ -43,6 +37,12 @@ from storage_scanner.cleanup_recommendations import (
 )
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
+from storage_scanner.history_records import (
+    get_installed_install_locations,
+    get_known_install_location_count,
+    get_orphaned_install_locations,
+    record_install_locations_snapshot,
+)
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
@@ -283,8 +283,8 @@ class CleanupWindow:
         any folder matching a location whose owning app is no longer
         installed. ([], "") on any other platform. The second value is
         a note for the summary: on the very first snapshot ever taken
-        (nothing to compare against yet -- see history.py's
-        known_install_locations docstring for why that first-run gap is
+        (nothing to compare against yet -- see history_records'
+        record_install_locations_snapshot docstring for why that first-run gap is
         the accepted tradeoff for staying exact-match-only), or when
         the registry read came back short and was ignored.
         """

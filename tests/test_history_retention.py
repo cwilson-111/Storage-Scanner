@@ -1,5 +1,5 @@
 """History retention: which scans storage_scanner.history_retention keeps,
-what history.save_scan_snapshot does with the rest, and that forecasting
+what history_store.save_scan_snapshot does with the rest, and that forecasting
 and anomaly detection read a thinned history the way they read a full one."""
 
 import os
@@ -13,8 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
-from storage_scanner import scan_history
+from storage_scanner import history_db, history_queries, history_store, scan_history
 from storage_scanner.anomaly_detection import detect_size_anomalies
 from storage_scanner.forecasting import forecast_days_until_full
 from storage_scanner.history_retention import (
@@ -160,15 +159,15 @@ class _Clock(datetime):
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    monkeypatch.setattr(history, "datetime", _Clock)
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    monkeypatch.setattr(history_store, "datetime", _Clock)
+    history_db.init_history_db()
     return db_path
 
 
 def _save_at(when, scan_path, folders):
     _Clock.current = when
-    return history.save_scan_snapshot(
+    return history_store.save_scan_snapshot(
         scan_path,
         sum(folders.values()),
         10 * GB,
@@ -179,7 +178,7 @@ def _save_at(when, scan_path, folders):
 
 
 def _scan_ids(scan_path):
-    return [row[0] for row in history.list_scans_for_path(scan_path)]
+    return [row[0] for row in history_queries.list_scans_for_path(scan_path)]
 
 
 def _query(db_path, sql, params=()):
@@ -242,7 +241,7 @@ def test_a_folder_path_is_forgotten_once_no_kept_scan_has_it(db):
 )
 def test_the_keep_all_setting_decides_how_long_every_scan_is_kept(db, setting, age_days, pruned):
     if setting is not None:
-        history.set_app_metadata(KEEP_ALL_DAYS_KEY, setting)
+        history_db.set_app_metadata(KEEP_ALL_DAYS_KEY, setting)
     day = NOW - _days(age_days)
     _save_at(NOW - _days(500), "C:\\a", {"C:\\a": 1})
     earlier_same_day = _save_at(day - timedelta(hours=1), "C:\\a", {"C:\\a": 2})

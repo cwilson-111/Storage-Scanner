@@ -7,8 +7,10 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 import os
 from tkinter import messagebox
 
-from history import (
-    delete_scan,
+from storage_scanner.anomaly_detection import detect_size_anomalies
+from storage_scanner.forecasting import forecast_days_until_full, format_forecast_range
+from storage_scanner.formatting import human_size
+from storage_scanner.history_queries import (
     get_folder_growth,
     get_forecast_history,
     get_growth_summary,
@@ -21,9 +23,7 @@ from history import (
     get_scan_ids_by_created_at,
     list_scans_for_path,
 )
-from storage_scanner.anomaly_detection import detect_size_anomalies
-from storage_scanner.forecasting import forecast_days_until_full, format_forecast_range
-from storage_scanner.formatting import human_size
+from storage_scanner.history_store import delete_scan
 from storage_scanner.logging_setup import logger
 from storage_scanner.scan_history import (
     collect_folder_sizes,
@@ -171,7 +171,7 @@ class HistoryMixin:
         """Best-effort: which currently-tracked folder (>=50MB, see
         _collect_folder_sizes_for_history) most likely drove this anomaly's
         scan-to-scan change, found the same way the Growth Details tab
-        already ranks folder changes (history.get_folder_growth) — just for
+        already ranks folder changes (history_queries.get_folder_growth) — just for
         the specific pair of scans this anomaly compares, instead of the
         two most recent.
 
