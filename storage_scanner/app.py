@@ -44,7 +44,6 @@ from storage_scanner.ui.scan_lifecycle import ScanLifecycleMixin
 from storage_scanner.ui.scan_progress_panel import ScanProgressMixin
 from storage_scanner.ui.search_window import SearchMixin
 from storage_scanner.ui.toolbar import ToolbarMixin
-from storage_scanner.ui.treemap_window import TreemapMixin
 from storage_scanner.update_check import check_for_update, release_page_url
 
 # How long closing waits for a history save that's still running. A save
@@ -66,7 +65,6 @@ class StorageScannerApp(
     DuplicatesMixin,
     FileWindowsMixin,
     SearchMixin,
-    TreemapMixin,
     CleanupMixin,
     AuditMixin,
     BudgetMixin,

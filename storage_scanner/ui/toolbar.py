@@ -39,6 +39,7 @@ from storage_scanner.platform_support import (
     IS_ROOT,
     IS_WINDOWS,
 )
+from storage_scanner.ui.main_window import TREEMAP_SHOWN_KEY
 
 # Settings ▸ Keep Every Saved Scan For: (label, stored value).
 _HISTORY_KEEP_ALL_CHOICES = (
@@ -119,7 +120,14 @@ class ToolbarMixin:
             self._scan_only_tools.append((menu, menu.index("end")))
 
         explore_menu = Menu(self.tools_menu, tearoff=0)
-        add_scan_only(explore_menu, "Treemap", self.show_treemap)
+        # The treemap pane under the tree (ui/treemap_pane.py), on unless
+        # it was turned off.
+        self.show_treemap_var = BooleanVar(value=get_app_metadata(TREEMAP_SHOWN_KEY, "1") != "0")
+        explore_menu.add_checkbutton(
+            label="Show Treemap", variable=self.show_treemap_var, command=self._toggle_treemap
+        )
+        if not self.show_treemap_var.get():
+            self.main_panes.forget(self.treemap_pane.frame)
         add_scan_only(explore_menu, "Search & Filter", self.show_search_window)
         add_scan_only(explore_menu, "Largest Files", self.show_top_files)
         add_scan_only(explore_menu, "File Types Breakdown", self.show_file_types)

@@ -79,6 +79,7 @@ def app(capsys):
         # refuses ("main thread is not in main loop") after a 1 s wait.
         app.status_var = None
         app.changed_only_var = None
+        app.treemap_pane = None  # its StringVars
 
 
 def _write(folder, files):

@@ -185,3 +185,4 @@ class DeletionMixin:
                 f"{self.root_node.path}  —  {human_size(self.root_node.size)} "
                 f"in {self.root_node.file_count:,} files"
             )
+            self.treemap_pane.refresh()

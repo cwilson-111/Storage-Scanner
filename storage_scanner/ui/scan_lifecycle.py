@@ -299,6 +299,7 @@ class ScanLifecycleMixin:
         root_iid = self._insert_node("", node, parent_size=node.size or 1)
         self.tree.item(root_iid, open=True)
         self._populate_children(root_iid, node)
+        self.treemap_pane.show([node])
         if view_state is not None:
             self._restore_view_state(view_state)
         logger.debug(

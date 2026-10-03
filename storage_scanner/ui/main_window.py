@@ -16,6 +16,7 @@ from tkinter import (
     BOTTOM,
     LEFT,
     TOP,
+    VERTICAL,
     BooleanVar,
     E,
     Menu,
@@ -28,7 +29,7 @@ from tkinter import (
     ttk,
 )
 
-from history import set_budget
+from history import set_app_metadata, set_budget
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
@@ -40,13 +41,23 @@ from storage_scanner.platform_support import (
 )
 from storage_scanner.search import parse_size
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, px
+from storage_scanner.ui.treemap_pane import TreemapPane
+
+# app_metadata key: whether the treemap pane is shown ("1", the default) or not.
+TREEMAP_SHOWN_KEY = "show_treemap"
 
 
 class MainWindowMixin:
 
     def _build_tree(self):
-        container = ttk.Frame(self.root, padding=(8, 4))
-        container.pack(side=TOP, fill=BOTH, expand=True)
+        # The tree above, the treemap of the selected folder below
+        # (ui/treemap_pane.py); the sash between them can be dragged.
+        self.main_panes = ttk.PanedWindow(self.root, orient=VERTICAL)
+        self.main_panes.pack(side=TOP, fill=BOTH, expand=True)
+        container = ttk.Frame(self.main_panes, padding=(8, 4))
+        self.main_panes.add(container, weight=3)
+        self.treemap_pane = TreemapPane(self, self.main_panes)
+        self.main_panes.add(self.treemap_pane.frame, weight=2)
 
         # Data order is what live_tree_model.row_display gives, then Change;
         # on screen Change comes before the dates.
@@ -120,6 +131,7 @@ class MainWindowMixin:
 
         # Lazy load children when a node is expanded.
         self.tree.bind("<<TreeviewOpen>>", self._on_open)
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self._sync_treemap())
         self.tree.bind("<Double-1>", self._on_double_click)
         self._live_reset()
         self._live_bind(self.tree, vsb)
@@ -154,7 +166,7 @@ class MainWindowMixin:
         status = ttk.Frame(self.root, padding=(8, 2))
         # Packed ahead of the tree, so it and the strips packed after it keep
         # their height and a small window shrinks the tree instead.
-        status.pack(side=BOTTOM, fill=X, before=self.tree.master)
+        status.pack(side=BOTTOM, fill=X, before=self.main_panes)
         self._statusbar_frame = status
         self.status_var = StringVar(value="Pick a drive or folder, then click Scan.")
         ttk.Label(status, textvariable=self.status_var, anchor=W).pack(
@@ -202,6 +214,29 @@ class MainWindowMixin:
             f"Send these {len(nodes):,} items to the {TRASH_NAME}?\n\n{listed}{more}\n\n"
             f"{human_size(total)} in all"
         )
+
+    def _sync_treemap(self):
+        """The treemap follows the focused row of a finished scan's tree."""
+        if self._live_tracker is not None:
+            return
+        iid = self.tree.focus()
+        nodes = []
+        while iid:
+            node = self.node_by_iid.get(iid)
+            if node is None:
+                return  # a "more" or placeholder row
+            nodes.append(node)
+            iid = self.tree.parent(iid)
+        self.treemap_pane.follow(nodes[::-1])
+
+    def _toggle_treemap(self):
+        """Tools ▸ Explore ▸ Show Treemap: put the pane back or take it away."""
+        shown = str(self.treemap_pane.frame) in self.main_panes.panes()
+        if self.show_treemap_var.get() and not shown:
+            self.main_panes.add(self.treemap_pane.frame, weight=2)
+        elif not self.show_treemap_var.get() and shown:
+            self.main_panes.forget(self.treemap_pane.frame)
+        set_app_metadata(TREEMAP_SHOWN_KEY, "1" if self.show_treemap_var.get() else "0")
 
     def _show_menu(self, event):
         """Right-click: the menu for the selection if the row is part of it,

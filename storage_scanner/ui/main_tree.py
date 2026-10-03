@@ -295,6 +295,7 @@ class MainTreeMixin:
                 self.tree.set(iid, "change", self._change_cell(node))
         if self._sort_key == "change":
             self._resort_tree()
+        self.treemap_pane.refresh()  # its Growth colours
 
     def _changed_only(self):
         """Whether the finished tree lists only changed folders: Changed
@@ -348,6 +349,42 @@ class MainTreeMixin:
             tree.delete(*rows)
             self._populate_children(top_iid, node)
             reopen(top_iid)
+
+    # -- Selecting a node from elsewhere (the treemap) ------------------------- #
+    def _select_in_tree(self, nodes):
+        """Select the row of the last of `nodes` (a path of nodes from the
+        scan's root down), opening folders and loading their pages on the
+        way. Stops at the deepest one with a row (Changed folders only can
+        hide some)."""
+        tree = self.tree
+        iid = next((i for i in tree.get_children("") if self.node_by_iid.get(i) is nodes[0]), None)
+        if iid is None:
+            return
+        for node in nodes[1:]:
+            self._populate_children(iid, self.node_by_iid[iid])
+            tree.item(iid, open=True)
+            child = self._find_child_row(iid, node)
+            if child is None:
+                break
+            iid = child
+        tree.selection_set(iid)
+        tree.focus(iid)
+        tree.see(iid)
+
+    def _find_child_row(self, parent_iid, node):
+        """The row under `parent_iid` showing `node`, loading "more" pages
+        until it turns up; None if it has no row."""
+        while True:
+            more = None
+            for iid in self.tree.get_children(parent_iid):
+                shown = self.node_by_iid.get(iid)
+                if shown is not None and (shown is node or shown == node):
+                    return iid
+                if iid in self._more_rows:
+                    more = iid
+            if more is None:
+                return None
+            self._show_more_rows(more)
 
     # -- Constraints Functions --------------------------------------------- #
     def _forget_subtree(self, iid):
@@ -420,3 +457,4 @@ class MainTreeMixin:
                 f"{self.root_node.path}  —  {human_size(self.root_node.size)} "
                 f"in {self.root_node.file_count:,} files"
             )
+        self.treemap_pane.refresh()

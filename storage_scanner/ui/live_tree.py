@@ -132,6 +132,7 @@ class LiveTreeMixin:
         self.duplicates = None
         self._previous_folder_sizes = {}  # the Change column waits for this scan's save
         self.changed_only_check.state(["disabled"])  # and so does its filter
+        self.treemap_pane.clear()
         self._duplicates_scan_root = None
         self.cart.clear()
         self._refresh_cart_indicator()
