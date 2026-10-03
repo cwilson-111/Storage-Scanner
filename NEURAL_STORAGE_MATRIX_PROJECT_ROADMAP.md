@@ -1272,12 +1272,15 @@ and `StorageScanner.exe <folder>` 2026-09-29; Scoop and winget 2026-10-02).**
   (`bucket/storage-scanner.json`: the portable ZIP, a `pre_install` that
   lifts the v1.13.0+ `StorageScanner\` folder so both ZIP layouts install
   alike, `StorageScanner` command, Start menu shortcut, checkver/autoupdate
-  from `SHA256SUMS.txt`), and winget manifests for v1.12.0
-  (`packaging/winget/…/1.12.0`, portable exe). README has the commands and
-  the submit steps.
-- Verified: both hashes equal v1.12.0's `SHA256SUMS.txt`; `winget
-  validate` passes; ReleaseDate matches the release's published_at.
-- Not done: Scoop not installed here, so the bucket isn't install-tested;
+  from `SHA256SUMS.txt`), and winget manifests (`packaging/winget/…/`,
+  portable exe), moved to v1.13.0 once it was released. README has the
+  commands and the submit steps.
+- Verified: hashes equal v1.12.0's and then v1.13.0's `SHA256SUMS.txt`;
+  `winget validate` passes; ReleaseDate matches the release's
+  published_at (UTC). The v1.13.0 ZIP holds `StorageScanner\`; the
+  bucket's `pre_install` run in PowerShell on it left `StorageScanner.exe`
+  and `_internal` at the top, and that exe scanned.
+- Not done: Scoop itself isn't installed here, so `scoop install` wasn't run;
   submitting to microsoft/winget-pkgs is an owner action (needs a GitHub
   token); the folder entry wasn't clicked in Explorer. Signing (P1-9)
   would avoid SmartScreen on winget installs.

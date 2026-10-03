@@ -61,13 +61,13 @@ been merged. To submit them (needs a GitHub token with `public_repo` scope):
 
 ```powershell
 winget install Microsoft.WingetCreate
-wingetcreate submit --token <token> packaging\winget\manifests\c\cwilson-111\StorageScanner\1.12.0
+wingetcreate submit --token <token> packaging\winget\manifests\c\cwilson-111\StorageScanner\1.13.0
 ```
 
 Or by hand: fork microsoft/winget-pkgs, copy that folder to the same path
-(`manifests\c\cwilson-111\StorageScanner\1.12.0\`) in the fork, and open a
+(`manifests\c\cwilson-111\StorageScanner\1.13.0\`) in the fork, and open a
 pull request. Later releases then need one command each, e.g.
-`wingetcreate update cwilson-111.StorageScanner --version 1.13.0 --urls https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.13.0/StorageScanner.exe --submit --token <token>`.
+`wingetcreate update cwilson-111.StorageScanner --version 1.14.0 --urls https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.14.0/StorageScanner.exe --submit --token <token>`.
 
 **macOS** — open `StorageScanner.dmg` and drag Storage Scanner into
 Applications.
