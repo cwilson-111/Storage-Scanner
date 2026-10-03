@@ -307,12 +307,13 @@ version, so download the Data build once from the latest release.
   Linux it gives you the line to add with `crontab -e`. Scheduled scans run
   without admin rights, so folders only an administrator can read are
   skipped, and the app doesn't need to be open. If a scanned folder is over
-  its budget, you get a desktop notification: a Windows toast (shown as
-  coming from "Windows PowerShell", which delivers it), a macOS
-  notification, or `notify-send` on Linux (which usually needs extra setup
-  under cron). Schedules created before this existed need to be saved again
-  to get notifications. On Windows the same window lists every scheduled
-  scan with its last run, result and next run, and flags any that need
+  its budget, you get a desktop notification: a Windows toast from
+  "Storage Scanner", a macOS notification, or `notify-send` on Linux
+  (which usually needs extra setup under cron). On Windows the Schedule
+  Scans window says whether Windows will show it, and if not, why and where
+  to turn it back on. Schedules created before this existed need to be
+  saved again to get notifications. On Windows the same window lists every
+  scheduled scan with its last run, result and next run, and flags any that need
   attention (saved before notifications, the app moved since, or disabled
   in Task Scheduler). Select one to load it into the form, then save it
   again or remove it.
@@ -379,7 +380,7 @@ pip install -r requirements-dev.txt
 pytest tests/          # also enforces the coverage floor
 ruff check .           # lint + import order
 black --check .        # formatting (drop --check to apply)
-mypy storage_scanner/ history.py  # type checking
+mypy storage_scanner/  # type checking
 ```
 
 All four read their settings from `pyproject.toml`, and CI runs the same

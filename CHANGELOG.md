@@ -13,6 +13,32 @@ message, copied as written. Where the tag is a lightweight one (no message
 of its own), the text is the message of the commit it points at. Tags
 before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
+## Unreleased
+
+### Notifications
+
+- Over-budget notifications on Windows now come from "Storage Scanner"
+  instead of "Windows PowerShell" (no installer or Start-menu shortcut
+  needed).
+- Schedule Scans says whether Windows will show the notifications, and if
+  not, why and where to turn them back on: notifications off for the
+  account, off for Storage Scanner, or blocked by Group Policy.
+
+### Fixes
+
+- Fixed a possible crash opening Duplicate Files when a new scan had
+  cleared the results the search was for.
+
+### Developer
+
+- `history.py` moved into the package (`storage_scanner.history_db`,
+  `history_store`, `history_queries`, `history_records`); the engine
+  modules over 500 lines were split (`alloc_size`, `mft_records`,
+  `turbo_cache_schema`, `elevation`). Every module is under 500 lines.
+- The attributes and methods the main window's parts share are declared
+  once (`storage_scanner/ui/app_state.py`), and mypy checks the bodies of
+  the UI and app code (`check_untyped_defs`).
+
 ## v1.13.0 — 2026-10-02
 
 ### Main tree
