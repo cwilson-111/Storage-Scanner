@@ -21,16 +21,19 @@ from tkinter import (
     messagebox,
     ttk,
 )
+from typing import Union
 
 from storage_scanner.cleanup_recommendations import sampled_match_warning
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
+from storage_scanner.models import FileNode, Node
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class CartMixin:
+class CartMixin(AppMixin):
     def _refresh_cart_indicator(self):
         """Update the toolbar's cart button text and the cart window's own
         header/title, if either currently exists. Called after every
@@ -96,7 +99,7 @@ class CartMixin:
         tv.tag_configure("even", background=COLORS["panel"])
         tv.tag_configure("odd", background=COLORS["stripe"])
 
-        iid_to_node = {}
+        iid_to_node: dict[str, Union[Node, FileNode]] = {}
 
         def populate():
             tv.delete(*tv.get_children())

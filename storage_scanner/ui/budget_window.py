@@ -7,6 +7,7 @@ each one's last known scan, and lets you remove one.
 """
 
 from tkinter import BOTH, BOTTOM, END, LEFT, RIGHT, TOP, Toplevel, X, messagebox, ttk
+from typing import Optional
 
 from history import delete_budget, get_latest_scan_snapshot, list_budgets
 from storage_scanner.budgets import check_all_budgets
@@ -14,9 +15,10 @@ from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import resource_path
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class BudgetMixin:
+class BudgetMixin(AppMixin):
     def _check_budgets_on_launch(self):
         breaches = check_all_budgets()
         if breaches:
@@ -28,7 +30,7 @@ class BudgetMixin:
             existing.destroy()
 
         banner = ttk.Frame(self.root, padding=(10, 6))
-        self._budget_banner = banner
+        self._budget_banner: Optional[ttk.Frame] = banner
 
         count = len(breaches)
         noun = "budget" if count == 1 else "budgets"
@@ -104,7 +106,7 @@ class BudgetMixin:
         tv.tag_configure("ok", foreground=COLORS["good"])
         tv.tag_configure("unknown", foreground=COLORS["muted"])
 
-        id_by_iid = {}
+        id_by_iid: dict[str, int] = {}
 
         def populate():
             tv.delete(*tv.get_children())

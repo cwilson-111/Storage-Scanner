@@ -38,9 +38,10 @@ from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class ScanLifecycleMixin:
+class ScanLifecycleMixin(AppMixin):
     # What _ask_turbo_scan_mode returns.
     TURBO_RESTART_AS_ADMIN = "restart"
 

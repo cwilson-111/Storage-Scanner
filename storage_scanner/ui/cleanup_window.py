@@ -11,10 +11,11 @@ rows can never be deleted at all.
 from tkinter import messagebox
 
 from storage_scanner import cleanup_cache
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.cleanup_view import CleanupWindow
 
 
-class CleanupMixin:
+class CleanupMixin(AppMixin):
     def show_cleanup_recommendations(self):
         cleanup_cache.init_cleanup_cache_db()
 
@@ -25,9 +26,9 @@ class CleanupMixin:
         # self.root_node was None). See cleanup_cache.py's own docstring
         # for why this persists the *computed* recommendation rows, not
         # the raw scanned tree.
-        live = self.root_node is not None
+        root = self.root_node
         display_scan_path = (
-            self.root_node.path if live else cleanup_cache.get_most_recently_cached_scan_path()
+            root.path if root is not None else cleanup_cache.get_most_recently_cached_scan_path()
         )
         if display_scan_path is None:
             messagebox.showinfo(

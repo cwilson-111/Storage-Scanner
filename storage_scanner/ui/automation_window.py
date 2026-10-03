@@ -32,8 +32,9 @@ from storage_scanner.export import export_to_file
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_WINDOWS, resource_path
-from storage_scanner.scheduled_tasks import list_windows_tasks
+from storage_scanner.scheduled_tasks import RegisteredTask, list_windows_tasks
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 _EXPORT_FILE_TYPES = {
     "csv": [("CSV (one row per file and folder)", "*.csv")],
@@ -50,7 +51,7 @@ def _moment_text(moment):
     return moment.strftime("%Y-%m-%d %H:%M") if moment is not None else "—"
 
 
-class AutomationMixin:
+class AutomationMixin(AppMixin):
     # -- Export Results ---------------------------------------------------- #
 
     def export_results(self):
@@ -332,8 +333,8 @@ class AutomationMixin:
         tv.tag_configure("odd", background=COLORS["stripe"])
         tv.tag_configure("attention", foreground=COLORS["warning"])
 
-        iid_to_task = {}
-        results = queue.Queue()
+        iid_to_task: dict[str, RegisteredTask] = {}
+        results: queue.Queue[tuple] = queue.Queue()
 
         def show_tasks(tasks, error):
             tv.delete(*tv.get_children())
@@ -381,7 +382,7 @@ class AutomationMixin:
             win.after(150, poll_tasks)
 
         def select_task(_event=None):
-            task = iid_to_task.get(next(iter(tv.selection()), None))
+            task = iid_to_task.get(next(iter(tv.selection()), ""))
             if task is None or task.scheduled is None:
                 return
 
@@ -396,7 +397,7 @@ class AutomationMixin:
             )
 
         def remove_task():
-            task = iid_to_task.get(next(iter(tv.selection()), None))
+            task = iid_to_task.get(next(iter(tv.selection()), ""))
             if task is None:
                 status_var.set("Select a scheduled scan in the list to remove it.")
                 return

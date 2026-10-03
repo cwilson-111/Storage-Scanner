@@ -15,6 +15,7 @@ import os
 from tkinter import Menu, filedialog, messagebox
 
 from storage_scanner.formatting import human_size
+from storage_scanner.ui.app_state import AppMixin
 
 
 def available_tools():
@@ -42,7 +43,7 @@ def _ask_paths(title, default_output, extension, label):
     return (csv_path, output_path) if output_path else None
 
 
-class DataToolsMixin:
+class DataToolsMixin(AppMixin):
     def _add_data_tools_menu(self, tools_menu):
         """Add Tools ▸ Data Tools with whichever converters are installed
         (nothing at all when neither is). Works on any CSV on disk, so it's

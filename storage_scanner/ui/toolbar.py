@@ -39,6 +39,7 @@ from storage_scanner.platform_support import (
     IS_ROOT,
     IS_WINDOWS,
 )
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.main_window import TREEMAP_SHOWN_KEY
 
 # Settings ▸ Keep Every Saved Scan For: (label, stored value).
@@ -51,7 +52,7 @@ _HISTORY_KEEP_ALL_CHOICES = (
 )
 
 
-class ToolbarMixin:
+class ToolbarMixin(AppMixin):
     def _build_toolbar(self):
         bar_frame = ttk.Frame(self.root, padding=(10, 10, 10, 6))
         bar_frame.pack(side=TOP, fill=X)
@@ -113,7 +114,7 @@ class ToolbarMixin:
 
         # (menu, entry index) for every Tools item that works on the tree
         # from a scan in this session, rather than on saved data.
-        self._scan_only_tools = []
+        self._scan_only_tools: list[tuple[Menu, int]] = []
 
         def add_scan_only(menu, label, command):
             menu.add_command(label=label, command=command)

@@ -17,6 +17,7 @@ from tkinter import (
     X,
     ttk,
 )
+from typing import Optional
 
 from storage_scanner import (
     turbo_scan,
@@ -27,13 +28,14 @@ from storage_scanner.platform_support import (
     resource_path,
 )
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 # The scan-details strip's second row: what the scan found, as opposed to
 # how it ran. One row of everything outgrew the default window width.
 _SCAN_OUTCOME_FIELDS = ("Unreadable paths", "Result")
 
 
-class ScanBannersMixin:
+class ScanBannersMixin(AppMixin):
     def _show_scan_details(self, report, inaccessible_nodes):
         frame = self._scan_details_frame
         for child in frame.winfo_children():
@@ -77,7 +79,7 @@ class ScanBannersMixin:
         self._dismiss_turbo_fallback_banner()
 
         banner = ttk.Frame(self.root, padding=(10, 6))
-        self._turbo_fallback_banner = banner
+        self._turbo_fallback_banner: Optional[ttk.Frame] = banner
 
         def dismiss():
             self._dismiss_turbo_fallback_banner()
@@ -116,7 +118,7 @@ class ScanBannersMixin:
         self._last_inaccessible_paths = inaccessible_nodes
 
         banner = ttk.Frame(self.root, padding=(10, 6))
-        self._inaccessible_paths_banner = banner
+        self._inaccessible_paths_banner: Optional[ttk.Frame] = banner
 
         count = len(inaccessible_nodes)
         noun = "path" if count == 1 else "paths"

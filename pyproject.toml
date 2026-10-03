@@ -37,6 +37,13 @@ target-version = ["py39"]
 ignore_missing_imports = true
 exclude = ["build/", "dist/"]
 
+[[tool.mypy.overrides]]
+# The main window and its windows: their functions are untyped, so without
+# this mypy skips their bodies, and with them every use of the attributes
+# and methods the mixins share (declared in storage_scanner/ui/app_state.py).
+module = ["storage_scanner.app", "storage_scanner.ui.*"]
+check_untyped_defs = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Coverage floor, set just under the measured Windows total: a full local run

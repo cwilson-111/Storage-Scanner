@@ -8,12 +8,17 @@ from any window reaches this one through forget_deleted.
 
 import contextlib
 from tkinter import BOTH, END, TOP, E, Menu, StringVar, TclError, Toplevel, W, X, messagebox, ttk
+from typing import TYPE_CHECKING
 
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS, heat_color, px
+
+if TYPE_CHECKING:
+    from storage_scanner.models import FileNode
+    from storage_scanner.ui.app_state import AppState
 
 
 class FileListWindow:
@@ -29,14 +34,16 @@ class FileListWindow:
     list (a folder, or a file that matches but wasn't shown); if so the list
     is collected again."""
 
-    def __init__(self, app, attr, *, source, scan_tree, collect, title, heading, recount_for=None):
+    def __init__(
+        self, app: "AppState", attr, *, source, scan_tree, collect, title, heading, recount_for=None
+    ):
         self.app = app
         self.source = source
         self.scan_tree = scan_tree  # what every row here is from
         self.collect = collect
         self.title = title
         self.recount_for = recount_for
-        self.iid_to_node = {}
+        self.iid_to_node: dict[str, FileNode] = {}
         self.count = 0
         self.size = 0
 
