@@ -159,7 +159,7 @@ def windows_blocked_reason(setting):
 
 
 def _icon_copy_path():
-    from history import APP_DATA_DIR
+    from storage_scanner.history_db import APP_DATA_DIR
 
     return APP_DATA_DIR / ICON_FILE_NAME
 
