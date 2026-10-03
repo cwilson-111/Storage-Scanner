@@ -41,6 +41,34 @@ It starts about 2 seconds faster than the single `.exe`, which unpacks
 itself to a temporary folder on every launch. It won't run from inside the
 ZIP without extracting first.
 
+**Windows, with Scoop or winget** — Scoop installs the portable folder
+straight from this repository's `bucket/` folder, with a `StorageScanner`
+command and a Start menu shortcut:
+
+```powershell
+scoop bucket add storage-scanner https://github.com/cwilson-111/Storage-Scanner
+scoop install storage-scanner/storage-scanner
+```
+
+Your scan history and settings live in `%LOCALAPPDATA%\NeuralStorageMatrix`,
+outside Scoop's folders, so `scoop update` keeps them and `scoop uninstall`
+leaves them behind.
+
+`winget install cwilson-111.StorageScanner` only works once the owner has
+submitted the manifests in `packaging/winget/` to
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) and they've
+been merged. To submit them (needs a GitHub token with `public_repo` scope):
+
+```powershell
+winget install Microsoft.WingetCreate
+wingetcreate submit --token <token> packaging\winget\manifests\c\cwilson-111\StorageScanner\1.12.0
+```
+
+Or by hand: fork microsoft/winget-pkgs, copy that folder to the same path
+(`manifests\c\cwilson-111\StorageScanner\1.12.0\`) in the fork, and open a
+pull request. Later releases then need one command each, e.g.
+`wingetcreate update cwilson-111.StorageScanner --version 1.13.0 --urls https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.13.0/StorageScanner.exe --submit --token <token>`.
+
 **macOS** — open `StorageScanner.dmg` and drag Storage Scanner into
 Applications.
 
@@ -160,9 +188,13 @@ version, so download the Data build once from the latest release.
 ### Finding things
 - **Search & Filter** — filter the current scan by name, extension, size
   range, and modified-date range, with sortable results.
-- **Treemap explorer** — a drill-down, click-to-zoom treemap where
-  rectangle area represents size and color represents relative heat, with
-  breadcrumb navigation and hover details.
+- **Treemap** — under the tree, the selected folder as nested tiles three
+  levels deep, each tile's area its size on disk. Colour by size, file
+  type, last modified, or growth since the last scan. It follows the tree,
+  and the tree follows it: click a tile (or its label) to select that row,
+  double-click a folder to show it, a file to reveal it, right-click for the
+  row's menu. Tools ▸ Explore ▸ Show Treemap hides it; drag the bar above
+  it to resize.
 - **Largest Files** and **File Types Breakdown** views. Double-click a type
   to list its files, largest first; both lists have a right-click menu
   (reveal, copy path, add to cart, delete) and take several rows at once.
@@ -415,9 +447,9 @@ The full plan, with what's done and what's next, is in
 2026-09-26)" near the top of the roadmap). The delete-safety fixes (P0) and
 the next-release fixes (P1), including Turbo Scan's size and link
 handling, are done, except two: checking Turbo Scan on real hardware and
-code signing. After those comes showing what changed since the last scan
-in the main tree and treemap. The scale work (bounded history, a compact
-in-memory tree) is done.
+code signing. Showing what changed since the last scan, in the main tree
+and the treemap, is done, as is the scale work (bounded history, a compact
+in-memory tree).
 
 **Later, on real demand: enterprise monitoring for computers and
 databases** (Phase 5 in the roadmap). The desktop app stays free and

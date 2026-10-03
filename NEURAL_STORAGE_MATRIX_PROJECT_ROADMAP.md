@@ -1032,7 +1032,7 @@ GUI self-test ✅ (2026-10-01); double build on a tag not yet.**
   sampled_match_warning`, which formats the constant ("1.0 MB" today).
 
 **P2-18. Show what changed since the last scan in the main tree — column
-and filter ✅ done (2026-10-01); treemap colour is P2-19.**
+and filter ✅ done (2026-10-01); treemap colour ✅ with P2-19 (2026-10-02).**
 - Why: the main tree has Name, Size, On Disk, % of Parent and Files
   (`ui/main_window.py:239-243`). Growth against the previous scan exists
   only inside Growth History, and it's the thing TreeSize Free and WizTree
@@ -1068,10 +1068,10 @@ and filter ✅ done (2026-10-01); treemap colour is P2-19.**
   ticked shows only it (its subfolder inside, "+10.0 MB (+16.7%)"),
   unticked restores every row with it still open, a new scan disables the
   box.
-- Not done: growth as a treemap colour (P2-19).
+- Growth as a treemap colour: done with P2-19.
 
 **P2-19. Treemap: nested, in the main window, coloured by type, age or
-growth.**
+growth — ✅ done (2026-10-02).**
 - Why: `ui/treemap_window.py` draws one level at a time in a separate
   window, coloured by size relative to the largest sibling, which repeats
   what the area already shows (lines 3-6, 121-126). Clicking a label does
@@ -1084,6 +1084,34 @@ growth.**
   growth), selection synced with the tree, labels bound, click and
   double-click kept apart, and area from on-disk size.
 - Size: L.
+- Done: `ui/treemap_window.py` is gone. `ui/treemap_pane.py` sits under
+  the main tree in a `ttk.PanedWindow` (drag to resize; Tools ▸ Explore ▸
+  Show Treemap hides it, kept in app_metadata `show_treemap`). The layout
+  and colours are Tk-free in `storage_scanner/treemap_model.py`: three
+  nested levels with a label strip per folder; area is `alloc_size`; at
+  most 200 items a level (the rest one "N more" tile, picked from the
+  folder's size column with `heapq.nlargest`, so only shown files become
+  FileNode views) and 3,000 tiles a drawing; colour by Size, File type
+  (seven kinds, else a colour per extension), Last modified (a year
+  fades), or Growth (`_folder_change`; a file takes its folder's).
+  Selecting a row shows that folder, or outlines the item if it's inside
+  the folder shown; a click hit-tests the whole canvas (labels included)
+  to the deepest tile and selects its row via `_select_in_tree`, opening
+  folders and loading "more" pages; double-click shows a folder or
+  reveals a file; right-click opens the tree's menu. Deletes refresh it,
+  including ones made from other windows that have no main-tree row
+  (`_remove_deleted_from_tree` didn't), and a deleted shown folder falls
+  back to its parent.
+- Verified: `tests/test_treemap_model.py` (on-disk area, nesting inside
+  the label strip, level limit, deepest hit and its path, "N more" count
+  and bytes, the tile cap, Growth colours). Real app on its mainloop,
+  20/20: nested 3 levels, click on a nested file and on a folder's label
+  select the row, a real double-click (two ButtonPress events) shows a
+  folder, Up, tree→pane follow, all four modes, the toggle and its saved
+  setting, a rowless delete and a deleted shown folder, Growth after a
+  20 MB rescan. Screenshots checked. 250k files directly in one folder:
+  0.19 → 0.12 s to lay out.
+- Not done: shading (cushions); per-monitor DPI.
 
 **P2-20. Everyday table stakes in the main window — ✅ done (2026-10-01);
 Owner and Folders columns left out.**
@@ -1188,8 +1216,8 @@ screen not tried.**
   menus and message boxes stay in the system's light style; switching
   needs a restart.
 
-**P2-22. Explorer integration and package managers — folder menu and
-`StorageScanner.exe <folder>` ✅ (2026-09-29); winget/Scoop not yet.**
+**P2-22. Explorer integration and package managers — ✅ done (folder menu
+and `StorageScanner.exe <folder>` 2026-09-29; Scoop and winget 2026-10-02).**
 - Why: no "Scan with Storage Scanner" folder menu, no winget or Scoop
   manifest, no installer. A path passed on the command line only fills the
   path box (`app.py:203`); it doesn't start a scan.
@@ -1210,8 +1238,19 @@ screen not tried.**
   the real key, unticking removed it (checked with `reg query`). A real
   launch with Explorer's command shape kept a spaced folder as one
   argument and turned `C:"` back into `C:\`.
-- Not done: winget and Scoop manifests (easier once signed, P1-9); the
-  entry itself wasn't clicked in Explorer.
+- Done (packages): a Scoop bucket in the repository
+  (`bucket/storage-scanner.json`: the portable ZIP, a `pre_install` that
+  lifts the v1.13.0+ `StorageScanner\` folder so both ZIP layouts install
+  alike, `StorageScanner` command, Start menu shortcut, checkver/autoupdate
+  from `SHA256SUMS.txt`), and winget manifests for v1.12.0
+  (`packaging/winget/…/1.12.0`, portable exe). README has the commands and
+  the submit steps.
+- Verified: both hashes equal v1.12.0's `SHA256SUMS.txt`; `winget
+  validate` passes; ReleaseDate matches the release's published_at.
+- Not done: Scoop not installed here, so the bucket isn't install-tested;
+  submitting to microsoft/winget-pkgs is an owner action (needs a GitHub
+  token); the folder entry wasn't clicked in Explorer. Signing (P1-9)
+  would avoid SmartScreen on winget installs.
 
 ### P3 — later or strategic
 

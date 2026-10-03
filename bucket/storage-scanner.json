@@ -1,0 +1,46 @@
+{
+    "version": "1.12.0",
+    "description": "Fast disk-usage analyzer: a size-sorted folder tree, duplicate finder, review-first cleanup, treemap and growth history.",
+    "homepage": "https://github.com/cwilson-111/Storage-Scanner",
+    "license": "MIT",
+    "notes": [
+        "Storage Scanner keeps its scan history, settings and logs in",
+        "%LOCALAPPDATA%\\NeuralStorageMatrix, outside Scoop's folders, so updates keep them",
+        "and 'scoop uninstall' leaves them behind. Delete that folder to remove them."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.12.0/StorageScanner-portable.zip",
+            "hash": "8b99f98dff5353f256a9c5e13506eb1f604410f302e202677845aa1a05c38996"
+        }
+    },
+    "pre_install": [
+        "# From v1.13.0 the ZIP holds a StorageScanner folder (a one-folder build: the exe plus",
+        "# _internal); up to v1.12.0 it held StorageScanner.exe alone. Lift the folder's contents",
+        "# up so both layouts install the same way. autoupdate can't add extract_dir to a",
+        "# manifest that doesn't already have one, so this can't be done with extract_dir.",
+        "if (Test-Path \"$dir\\StorageScanner\" -PathType Container) {",
+        "    Get-ChildItem \"$dir\\StorageScanner\" -Force | Move-Item -Destination \"$dir\"",
+        "    Remove-Item \"$dir\\StorageScanner\"",
+        "}"
+    ],
+    "bin": "StorageScanner.exe",
+    "shortcuts": [
+        [
+            "StorageScanner.exe",
+            "Storage Scanner"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/cwilson-111/Storage-Scanner/releases/download/v$version/StorageScanner-portable.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS.txt",
+            "regex": "$sha256\\s+$basename"
+        }
+    }
+}

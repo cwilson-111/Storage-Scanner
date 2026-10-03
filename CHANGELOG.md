@@ -49,6 +49,24 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   list its files, largest first, with the same menu. Both close when a new
   scan starts.
 
+### Treemap
+
+- The treemap is now a pane under the main tree instead of a separate
+  window: the selected folder as nested tiles three levels deep, each
+  tile's area its size on disk (it was the logical size). Colour by size,
+  file type, last modified, or growth since the last scan.
+- It stays in step with the tree both ways. Clicking a tile's label works
+  like clicking the tile, and double-clicking a folder no longer also
+  reveals whatever file lands under the pointer.
+- A folder with more than 200 items shows the largest 200 and one tile for
+  the rest. Tools ▸ Explore ▸ Show Treemap turns the pane off (remembered).
+
+### Installing
+
+- A Scoop bucket in this repository (`scoop bucket add storage-scanner
+  https://github.com/cwilson-111/Storage-Scanner`), and winget manifests in
+  `packaging/winget/` ready to submit to winget-pkgs.
+
 ### Appearance
 
 - A dark theme: Settings ▸ Appearance follows the system's light or dark
