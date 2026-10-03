@@ -8,8 +8,8 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 import os
 from tkinter import END
 
-from history import get_folder_sizes
 from storage_scanner.formatting import human_size
+from storage_scanner.history_queries import get_folder_sizes
 from storage_scanner.live_tree_model import (
     change_text,
     node_display,
@@ -21,13 +21,14 @@ from storage_scanner.live_tree_model import (
 from storage_scanner.models import subtract_totals
 from storage_scanner.scan_history import MIN_FOLDER_SIZE_FOR_HISTORY
 from storage_scanner.settings import heat_color
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.live_tree import PLACEHOLDER_TEXT
 
 # A folder's rows are inserted this many at a time (_insert_page).
 ROWS_PER_PAGE = 1000
 
 
-class MainTreeMixin:
+class MainTreeMixin(AppMixin):
     # -- Treeview population (lazy) ---------------------------------------- #
     def _heat_tag(self, fraction):
         """Return a treeview tag whose foreground is the heat color for
@@ -261,7 +262,7 @@ class MainTreeMixin:
         index, keeping its other tags. Tk's "tag add"/"tag remove" take a
         list of rows, so this is four Tk calls however many rows there are
         (tkinter doesn't wrap either, hence tk.call)."""
-        by_stripe = {"even": [], "odd": []}
+        by_stripe: dict[str, list[str]] = {"even": [], "odd": []}
         for iid, index in rows:
             by_stripe["odd" if index % 2 else "even"].append(iid)
         tree = self.tree

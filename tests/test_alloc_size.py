@@ -11,8 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from storage_scanner import scanner
-from storage_scanner.scanner import _measure_alloc_size, _windows_alloc_size, scan
+from storage_scanner import alloc_size
+from storage_scanner.alloc_size import _measure_alloc_size, _windows_alloc_size
+from storage_scanner.scanner import scan
 
 
 @pytest.fixture(autouse=True)
@@ -23,9 +24,9 @@ def _clear_cluster_size_cache():
     # or anything else run in the same process) can silently satisfy a
     # later test's fake ctypes.windll from the cache before the fake ever
     # gets consulted. Clear it before and after every test in this file.
-    scanner._cluster_size_cache.clear()
+    alloc_size._cluster_size_cache.clear()
     yield
-    scanner._cluster_size_cache.clear()
+    alloc_size._cluster_size_cache.clear()
 
 
 def _run_scan(path):
@@ -100,7 +101,7 @@ def test_windows_alloc_size_returns_compressed_size(monkeypatch):
     fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=512))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     monkeypatch.setattr(ctypes, "GetLastError", lambda: 0, raising=False)
-    monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: None)
+    monkeypatch.setattr(alloc_size, "_get_cluster_size", lambda path: None)
 
     assert _windows_alloc_size(r"C:\file.bin", fallback=4096) == 512
 
@@ -113,7 +114,7 @@ def test_windows_alloc_size_rounds_up_to_the_cluster_size(monkeypatch):
     fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=10976))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     monkeypatch.setattr(ctypes, "GetLastError", lambda: 0, raising=False)
-    monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: 4096)
+    monkeypatch.setattr(alloc_size, "_get_cluster_size", lambda path: 4096)
 
     assert _windows_alloc_size(r"C:\file.bin", fallback=0) == 12288  # ceil(10976/4096)*4096
 
@@ -122,7 +123,7 @@ def test_windows_alloc_size_already_cluster_aligned_is_unchanged(monkeypatch):
     fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=8192))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     monkeypatch.setattr(ctypes, "GetLastError", lambda: 0, raising=False)
-    monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: 4096)
+    monkeypatch.setattr(alloc_size, "_get_cluster_size", lambda path: 4096)
 
     assert _windows_alloc_size(r"C:\file.bin", fallback=0) == 8192
 
@@ -133,7 +134,7 @@ def test_windows_alloc_size_keeps_the_upper_32_bits_of_a_file_over_4_gib(monkeyp
     fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=459_014_144, high=2))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     monkeypatch.setattr(ctypes, "GetLastError", lambda: 0, raising=False)
-    monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: 4096)
+    monkeypatch.setattr(alloc_size, "_get_cluster_size", lambda path: 4096)
 
     assert _windows_alloc_size(r"C:\base.xpak", fallback=9_048_948_736) == 9_048_948_736
 
@@ -163,11 +164,11 @@ def test_windows_alloc_size_falls_back_when_ctypes_returns_the_signed_sentinel(m
 
 
 def test_measure_alloc_size_dispatches_to_windows_path_when_flagged(monkeypatch):
-    monkeypatch.setattr(scanner, "_IS_WINDOWS", True)
+    monkeypatch.setattr(alloc_size, "_IS_WINDOWS", True)
     fake_windll = SimpleNamespace(kernel32=_FakeKernel32(low=256))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
     monkeypatch.setattr(ctypes, "GetLastError", lambda: 0, raising=False)
-    monkeypatch.setattr(scanner, "_get_cluster_size", lambda path: None)
+    monkeypatch.setattr(alloc_size, "_get_cluster_size", lambda path: None)
 
     st_info = SimpleNamespace(st_size=4096)
     assert _measure_alloc_size(r"C:\file.bin", st_info) == 256
@@ -199,7 +200,7 @@ def test_get_cluster_size_multiplies_sectors_and_bytes_per_sector(monkeypatch):
     fake_windll = SimpleNamespace(kernel32=SimpleNamespace(GetDiskFreeSpaceW=fake_disk))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
 
-    assert scanner._get_cluster_size(r"C:\some\file.bin") == 4096
+    assert alloc_size._get_cluster_size(r"C:\some\file.bin") == 4096
     assert fake_disk.calls == ["C:\\"]
 
 
@@ -209,8 +210,8 @@ def test_get_cluster_size_is_cached_per_volume_root(monkeypatch):
     fake_windll = SimpleNamespace(kernel32=SimpleNamespace(GetDiskFreeSpaceW=fake_disk))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
 
-    scanner._get_cluster_size(r"C:\a.bin")
-    scanner._get_cluster_size(r"C:\b\c.bin")
+    alloc_size._get_cluster_size(r"C:\a.bin")
+    alloc_size._get_cluster_size(r"C:\b\c.bin")
 
     assert len(fake_disk.calls) == 1  # second call served from cache, not re-queried
 
@@ -220,7 +221,7 @@ def test_get_cluster_size_returns_none_on_failure(monkeypatch):
     fake_windll = SimpleNamespace(kernel32=SimpleNamespace(GetDiskFreeSpaceW=fake_disk))
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
 
-    assert scanner._get_cluster_size(r"C:\a.bin") is None
+    assert alloc_size._get_cluster_size(r"C:\a.bin") is None
 
 
 @pytest.mark.parametrize(
@@ -234,7 +235,7 @@ def test_get_cluster_size_returns_none_on_failure(monkeypatch):
     ],
 )
 def test_cloud_placeholder_attribute_bits(attrs, expected):
-    assert bool(attrs & scanner._CLOUD_PLACEHOLDER_ATTRS) is expected
+    assert bool(attrs & alloc_size._CLOUD_PLACEHOLDER_ATTRS) is expected
 
 
 _REPARSE_POINT = 0x00000400
@@ -267,4 +268,4 @@ _ARCHIVE = 0x00000020
     ],
 )
 def test_is_cloud_placeholder_attrs_requires_reparse_point(attrs, expected):
-    assert scanner.is_cloud_placeholder_attrs(attrs) is expected
+    assert alloc_size.is_cloud_placeholder_attrs(attrs) is expected

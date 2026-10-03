@@ -102,7 +102,7 @@ def forecast_days_until_full(history, free_bytes):
     """Forecast how many days the drive's free space lasts if it keeps
     shrinking as fast as this path grows.
 
-    `history` is history.get_forecast_history()'s output: (created_at_iso,
+    `history` is history_queries.get_forecast_history()'s output: (created_at_iso,
     total_size, allocated_size) rows, oldest first; allocated_size is None
     on scans saved before it was recorded. The growth rate is fitted to the
     on-disk sizes once MIN_POINTS_FOR_FORECAST scans have one, else to the

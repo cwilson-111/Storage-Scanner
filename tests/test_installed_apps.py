@@ -248,8 +248,9 @@ def test_get_installed_install_locations_normalizes_case_and_path_form(monkeypat
 
 def test_get_candidate_installed_apps_filters_but_keeps_raw_path_form(monkeypatch):
     """Unlike get_installed_install_locations, this keeps display names
-    and leaves paths un-normalized -- history.record_install_locations_
-    snapshot does that normalization itself, once, for every caller."""
+    and leaves paths un-normalized -- history_records.
+    record_install_locations_snapshot does that normalization itself, once,
+    for every caller."""
     subkeys, values = {}, {}
     _app_entry(
         subkeys, values, _HKLM, _HKLM_PATH, "InScope", "In Scope App", r"C:\Program Files\In Scope"

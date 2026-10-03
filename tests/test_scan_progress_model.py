@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
+from storage_scanner import history_db
 from storage_scanner.models import Node
 from storage_scanner.scan_history import record_scan
 from storage_scanner.scan_progress import Phase, WalkSnapshot
@@ -103,7 +103,7 @@ def test_the_last_scans_logical_size_is_never_what_the_scan_is_told_to_expect():
 
 
 def test_load_estimate_reads_the_last_saved_scan(tmp_path, monkeypatch):
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
     root_path = str(tmp_path / "scanned")
     root = Node(root_path, "scanned")
     big = Node(os.path.join(root_path, "Big"), "Big")
@@ -119,8 +119,8 @@ def test_load_estimate_reads_the_last_saved_scan(tmp_path, monkeypatch):
 
 
 def test_load_estimate_without_history_or_a_volume_root_is_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
 
     assert load_estimate(str(tmp_path)) is None
 

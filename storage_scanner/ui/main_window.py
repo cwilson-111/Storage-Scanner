@@ -29,9 +29,10 @@ from tkinter import (
     ttk,
 )
 
-from history import set_app_metadata, set_budget
 from storage_scanner.delete_service import DeleteRequest
 from storage_scanner.formatting import human_size
+from storage_scanner.history_db import set_app_metadata
+from storage_scanner.history_records import set_budget
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import (
     FILE_MANAGER_NAME,
@@ -41,13 +42,14 @@ from storage_scanner.platform_support import (
 )
 from storage_scanner.search import parse_size
 from storage_scanner.settings import COLORS, FONT_MONO_BOLD, px
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.treemap_pane import TreemapPane
 
 # app_metadata key: whether the treemap pane is shown ("1", the default) or not.
 TREEMAP_SHOWN_KEY = "show_treemap"
 
 
-class MainWindowMixin:
+class MainWindowMixin(AppMixin):
 
     def _build_tree(self):
         # The tree above, the treemap of the selected folder below

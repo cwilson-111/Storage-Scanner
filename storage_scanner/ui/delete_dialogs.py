@@ -19,6 +19,7 @@ from storage_scanner.logging_setup import logger
 from storage_scanner.models import remove_from_tree
 from storage_scanner.platform_support import TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 # How many refused/failed items one error dialog lists by name.
 _MAX_LISTED = 10
@@ -107,7 +108,7 @@ class TkConfirmer:
         )
 
 
-class DeletionMixin:
+class DeletionMixin(AppMixin):
     def _init_deletion(self):
         self.delete_service = DeleteService(
             scan_root=lambda: self.root_node.path if self.root_node is not None else None,
@@ -170,19 +171,19 @@ class DeletionMixin:
         row when they have one (which also fixes up every row above it),
         else from the tree itself, then redraw the rows that are shown."""
         iid_for_node = {node: iid for iid, node in self.node_by_iid.items()}
+        root = self.root_node
         redraw = False
         for node in deleted.nodes:
             iid = iid_for_node.get(node)
             if iid is not None and self.tree.exists(iid):
                 self._remove_main_tree_row(iid)
-            elif self.root_node is not None and remove_from_tree(self.root_node, node):
+            elif root is not None and remove_from_tree(root, node):
                 redraw = True
-        if redraw:
+        if redraw and root is not None:
             for iid in list(self.node_by_iid):
                 if self.tree.exists(iid):
                     self._refresh_row(iid)
             self.status_var.set(
-                f"{self.root_node.path}  —  {human_size(self.root_node.size)} "
-                f"in {self.root_node.file_count:,} files"
+                f"{root.path}  —  {human_size(root.size)} in {root.file_count:,} files"
             )
             self.treemap_pane.refresh()

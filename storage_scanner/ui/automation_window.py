@@ -32,8 +32,9 @@ from storage_scanner.export import export_to_file
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_WINDOWS, resource_path
-from storage_scanner.scheduled_tasks import list_windows_tasks
+from storage_scanner.scheduled_tasks import RegisteredTask, list_windows_tasks
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 _EXPORT_FILE_TYPES = {
     "csv": [("CSV (one row per file and folder)", "*.csv")],
@@ -50,7 +51,7 @@ def _moment_text(moment):
     return moment.strftime("%Y-%m-%d %H:%M") if moment is not None else "—"
 
 
-class AutomationMixin:
+class AutomationMixin(AppMixin):
     # -- Export Results ---------------------------------------------------- #
 
     def export_results(self):
@@ -127,6 +128,8 @@ class AutomationMixin:
                 "need to be saved again to get them."
             ),
         ).pack(side=TOP, fill=X)
+        if IS_WINDOWS:
+            self._show_notification_check(win)
 
         form = ttk.Frame(win, padding=(10, 0, 10, 6))
         form.pack(side=TOP, fill=X)
@@ -332,8 +335,8 @@ class AutomationMixin:
         tv.tag_configure("odd", background=COLORS["stripe"])
         tv.tag_configure("attention", foreground=COLORS["warning"])
 
-        iid_to_task = {}
-        results = queue.Queue()
+        iid_to_task: dict[str, RegisteredTask] = {}
+        results: queue.Queue[tuple] = queue.Queue()
 
         def show_tasks(tasks, error):
             tv.delete(*tv.get_children())
@@ -381,7 +384,7 @@ class AutomationMixin:
             win.after(150, poll_tasks)
 
         def select_task(_event=None):
-            task = iid_to_task.get(next(iter(tv.selection()), None))
+            task = iid_to_task.get(next(iter(tv.selection()), ""))
             if task is None or task.scheduled is None:
                 return
 
@@ -396,7 +399,7 @@ class AutomationMixin:
             )
 
         def remove_task():
-            task = iid_to_task.get(next(iter(tv.selection()), None))
+            task = iid_to_task.get(next(iter(tv.selection()), ""))
             if task is None:
                 status_var.set("Select a scheduled scan in the list to remove it.")
                 return
@@ -411,10 +414,23 @@ class AutomationMixin:
             ok, message = schedule.delete_windows_task(task.name)
             if ok:
                 status_var.set("Scheduled scan removed.")
+                if len(iid_to_task) == 1:
+                    forget_notification_app_id()
             else:
                 logger.warning("schtasks /Delete failed: %s", message)
                 status_var.set(f"Nothing removed: {message}")
             load_tasks()
+
+        def forget_notification_app_id():
+            # Scheduled scans are what shows notifications; with the last
+            # one gone, the app's notification name and icon go too. A
+            # `--notify` run started some other way registers them again.
+            from storage_scanner.notify import unregister_windows_app_id
+
+            try:
+                unregister_windows_app_id()
+            except OSError:
+                logger.warning("Removing the notification app ID failed", exc_info=True)
 
         tv.bind("<<TreeviewSelect>>", select_task)
 
@@ -425,3 +441,42 @@ class AutomationMixin:
 
         refresh()
         load_tasks()
+
+    def _show_notification_check(self, win):
+        """A line saying whether Windows will show the over-budget
+        notifications and, if not, why and where to turn them back on."""
+        from storage_scanner.notify import APP_DISPLAY_NAME, check_windows_toasts
+
+        text_var = StringVar(value="Asking Windows whether notifications will show…")
+        label = ttk.Label(
+            win,
+            textvariable=text_var,
+            padding=(10, 0, 10, 8),
+            foreground=COLORS["muted"],
+            wraplength=px(720),
+            justify=LEFT,
+        )
+        label.pack(side=TOP, fill=X)
+        checked: queue.Queue[tuple] = queue.Queue()  # (shown, reason) once
+        threading.Thread(target=lambda: checked.put(check_windows_toasts()), daemon=True).start()
+
+        def show_result():
+            if not win.winfo_exists():
+                return
+            try:
+                shown, reason = checked.get_nowait()
+            except queue.Empty:
+                win.after(150, show_result)
+                return
+
+            if shown:
+                text_var.set(f'Notifications are on; they come from "{APP_DISPLAY_NAME}".')
+                return
+            if shown is None:
+                logger.warning("Asking Windows about notifications failed: %s", reason)
+                text_var.set(f"Couldn't ask Windows whether notifications will show: {reason}")
+            else:
+                text_var.set(f"Over-budget notifications won't show: {reason}.")
+            label.config(foreground=COLORS["warning"])
+
+        win.after(150, show_result)

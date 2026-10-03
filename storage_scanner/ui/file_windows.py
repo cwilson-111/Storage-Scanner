@@ -17,6 +17,7 @@ from storage_scanner.logging_setup import logger
 from storage_scanner.models import FileNode, iter_file_rows
 from storage_scanner.platform_support import resource_path
 from storage_scanner.settings import COLORS, heat_color, px
+from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.file_list_view import FileListWindow
 
 NO_EXTENSION = "(no extension)"
@@ -40,8 +41,8 @@ def extension_of(name):
 
 def extension_totals(root):
     """({extension: bytes}, {extension: file count}) across `root`'s tree."""
-    sizes = defaultdict(int)
-    counts = defaultdict(int)
+    sizes: defaultdict[str, int] = defaultdict(int)
+    counts: defaultdict[str, int] = defaultdict(int)
     for folder, indexes in iter_file_rows(root):
         names, file_sizes = folder.file_names, folder.file_sizes
         for i in indexes:
@@ -75,7 +76,7 @@ def files_with_extension(root, ext, limit):
     return FileList([FileNode(folder, i) for folder, i in top], len(matches), size)
 
 
-class FileWindowsMixin:
+class FileWindowsMixin(AppMixin):
     def show_top_files(self, count=None):
         if not self.root_node:
             return

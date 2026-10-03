@@ -73,7 +73,7 @@ def _minimal_signed_bytes(value):
 
 def _encode_runs(extents):
     """`extents` is a list of (length_clusters, absolute_lcn) tuples, in
-    order -- the inverse of mft_parser.decode_data_runs (which is already
+    order -- the inverse of mft_records.decode_data_runs (which is already
     independently verified against hand-built bytes in
     tests/test_mft_parser.py, so reusing that same logic here as a
     fixture-building convenience doesn't weaken what's under test there)."""
@@ -123,7 +123,7 @@ def _build_record0(extents, record_size=_RECORD_SIZE):
     unnamed $DATA attribute whose data runs describe `extents` (a list of
     (length_clusters, absolute_lcn) tuples). No $STANDARD_INFORMATION or
     $FILE_NAME needed -- resolving extents only ever calls
-    mft_parser.get_nonresident_data_runs_bytes, never parse_base_record."""
+    mft_records.get_nonresident_data_runs_bytes, never parse_base_record."""
     runs_bytes = _encode_runs(extents)
     data_attr = _nonresident_data_attr(runs_bytes)
     attrs = data_attr + struct.pack("<I", _ATTR_END_MARKER)

@@ -11,8 +11,7 @@ import platform
 import sqlite3
 import sys
 
-import history
-from storage_scanner import logging_setup, turbo_cache, update_check
+from storage_scanner import history_db, logging_setup, turbo_cache, update_check
 from storage_scanner.formatting import human_size
 from storage_scanner.platform_support import IS_ROOT
 from storage_scanner.version import __version__
@@ -29,7 +28,7 @@ def _file_size(path):
 
 def _history_summary():
     try:
-        conn = sqlite3.connect(f"file:{history.DB_NAME}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{history_db.DB_NAME}?mode=ro", uri=True)
         try:
             scans = conn.execute("SELECT COUNT(*) FROM scans").fetchone()[0]
             paths = conn.execute("SELECT COUNT(DISTINCT scan_path) FROM scans").fetchone()[0]
@@ -37,14 +36,14 @@ def _history_summary():
             conn.close()
     except sqlite3.Error as exc:
         return f"unreadable ({exc})"
-    schema = history.get_app_metadata("schema_version", "?")
-    size = human_size(_file_size(history.DB_NAME))
+    schema = history_db.get_app_metadata("schema_version", "?")
+    size = human_size(_file_size(history_db.DB_NAME))
     return f"schema {schema}, {scans:,} scans of {paths:,} paths, {size}"
 
 
 def diagnostic_text():
     """The lines Copy Diagnostic Info puts on the clipboard."""
-    turbo = history.get_app_metadata("turbo_scan_enabled", "0") == "1"
+    turbo = history_db.get_app_metadata("turbo_scan_enabled", "0") == "1"
     cache = human_size(turbo_cache.cache_size_bytes())
     level = os.environ.get(logging_setup.LOG_LEVEL_ENV_VAR, "").strip().upper() or "INFO"
     lines = [

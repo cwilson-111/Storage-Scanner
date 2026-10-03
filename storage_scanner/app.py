@@ -16,10 +16,11 @@ import sys
 import threading
 import time
 from tkinter import TOP, Tk, X, messagebox, ttk
+from typing import Optional
 
-from history import get_app_metadata, open_history_db
 from storage_scanner import appearance
 from storage_scanner.cart import CartManager
+from storage_scanner.history_db import get_app_metadata, open_history_db
 from storage_scanner.history_schema import NewerDatabaseError
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import IS_ROOT, resource_path
@@ -190,7 +191,7 @@ class StorageScannerApp(
             return  # already showing one
 
         banner = ttk.Frame(self.root, padding=(10, 6))
-        self._update_banner = banner
+        self._update_banner: Optional[ttk.Frame] = banner
 
         def open_release_page():
             import webbrowser  # here, not at startup
@@ -253,7 +254,7 @@ def _open_history():
 
 
 def main():
-    # A headless privileged-scan request (see storage_scanner/file_ops.py's
+    # A headless privileged-scan request (see storage_scanner/elevation.py's
     # run_elevated_scan_macos): runs the scan as root and exits, never
     # touching Tk, so it never needs a window-server connection it can't get.
     if len(sys.argv) >= 3 and sys.argv[1] == "--priv-scan":
@@ -271,7 +272,7 @@ def main():
         sys.exit(run_cli(sys.argv[2:]))
 
     # A headless elevated Turbo Scan request (see storage_scanner/
-    # file_ops.py's run_elevated_scan_windows): reads the NTFS MFT as
+    # elevation.py's run_elevated_scan_windows): reads the NTFS MFT as
     # admin and writes the result to --output, never touching Tk. Windows'
     # elevation broker can't hand this process's stdout back to the
     # unprivileged caller the way macOS's --priv-scan can, hence a file

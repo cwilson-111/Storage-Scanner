@@ -217,7 +217,7 @@ def _run_one(name, n_files):
 
 def sandbox_env(sandbox):
     """The environment for a scenario subprocess, with its app-data folder
-    (history.APP_DATA_DIR, where the Turbo and cleanup caches live too) and
+    (history_db.APP_DATA_DIR, where the Turbo and cleanup caches live too) and
     its log inside `sandbox`, never the real ones. The same variables as
     smoke_test_build.py."""
     env = dict(os.environ)

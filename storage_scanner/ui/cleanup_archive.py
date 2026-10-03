@@ -125,8 +125,11 @@ class _ArchiveRun:
         self.dialog, self.progress_var, self.label_var, self.cancel_event = (
             _archive_progress_dialog(view.win)
         )
-        self.events = queue.Queue()
-        self.outcome = {"archived": 0, "partial": 0, "failed": [], "cancelled": False}
+        self.events: queue.Queue[tuple] = queue.Queue()
+        self.archived = 0
+        self.partial = 0  # archived, but the original couldn't be removed
+        self.failed: list[str] = []
+        self.cancelled = False
 
     def start(self):
         threading.Thread(target=self.work, daemon=True).start()
@@ -166,12 +169,12 @@ class _ArchiveRun:
         events.put(("done", None))
 
     def on_written(self, iid, rec, path):
-        view, outcome = self.view, self.outcome
+        view = self.view
         result = finish_archive(rec.node, "Cleanup Recommendations", path, self.remove_original)
-        outcome["archived"] += 1
+        self.archived += 1
         if not result.original_removed:
-            outcome["partial"] += 1
-            outcome["failed"].append(result.error)
+            self.partial += 1
+            self.failed.append(result.error)
         # A removed original's row is already gone (forget_deleted).
         if iid in view.iid_to_rec:
             del view.iid_to_rec[iid]
@@ -191,31 +194,29 @@ class _ArchiveRun:
                 self.progress_var.set(payload * 100)
             elif kind == "failed":
                 _iid, rec, error = payload
-                self.outcome["failed"].append(f"{rec.node.path}: {error}")
+                self.failed.append(f"{rec.node.path}: {error}")
             elif kind == "written":
                 self.on_written(*payload)
             else:
-                self.outcome["cancelled"] = self.cancel_event.is_set()
+                self.cancelled = self.cancel_event.is_set()
                 self.dialog.destroy()
                 self.report()
                 return
 
     def report(self):
-        view, outcome = self.view, self.outcome
-        if outcome["archived"]:
+        view = self.view
+        if self.archived:
             view.resave_cache()
-        status_bits = [f"Archived {outcome['archived']:,} file(s) (rescan to see the .zip files)."]
-        if outcome["partial"]:
-            status_bits.append(
-                f"{outcome['partial']} kept both copies (original couldn't be removed)."
-            )
-        if outcome["cancelled"]:
+        status_bits = [f"Archived {self.archived:,} file(s) (rescan to see the .zip files)."]
+        if self.partial:
+            status_bits.append(f"{self.partial} kept both copies (original couldn't be removed).")
+        if self.cancelled:
             status_bits.append("Cancelled; the rest were left as they were.")
         view.app.status_var.set(" ".join(status_bits))
-        if outcome["failed"]:
+        if self.failed:
             messagebox.showerror(
                 "Storage Scanner",
                 "Some files could not be archived, or kept their original:\n\n"
-                + "\n\n".join(outcome["failed"][:10]),
+                + "\n\n".join(self.failed[:10]),
                 parent=view.win,
             )

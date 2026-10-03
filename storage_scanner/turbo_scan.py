@@ -3,7 +3,7 @@ scan engines, and safely falls back to Compatible on any Turbo failure.
 
 `_run_turbo_in_process`/`_run_turbo_via_elevated_helper` are the two real
 seams into the rest of Turbo Scan (storage_scanner.mft_volume's raw-volume
-reader, and storage_scanner.file_ops.run_elevated_scan_windows's headless
+reader, and storage_scanner.elevation.run_elevated_scan_windows's headless
 elevated helper, respectively). Whatever goes wrong in either -- a denied
 elevation prompt, a raw-volume read error, a single unparseable MFT
 record, a missing subtree path, anything at all -- is just another Turbo
@@ -22,10 +22,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from history import get_app_metadata
 from storage_scanner import mft_volume, scanner
 from storage_scanner.drive_info import get_volume_root, is_ntfs_fixed_drive
-from storage_scanner.file_ops import run_elevated_scan_windows
+from storage_scanner.elevation import run_elevated_scan_windows
+from storage_scanner.history_db import get_app_metadata
 from storage_scanner.logging_setup import logger
 from storage_scanner.mft_scan import LinkedFolderError
 from storage_scanner.platform_support import IS_ROOT, IS_WINDOWS

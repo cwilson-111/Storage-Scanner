@@ -95,9 +95,9 @@ def run_cli(argv):
     )
 
     if args.save_history:
-        # Imported here: history.py creates its app-data folder at import
+        # Imported here: history_db creates its app-data folder at import
         # time, which a plain `--cli` export has no reason to do.
-        from history import open_history_db
+        from storage_scanner.history_db import open_history_db
         from storage_scanner.scan_history import record_scan
 
         try:

@@ -6,15 +6,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import history
+from storage_scanner import history_db, history_queries, history_records, history_store
 from storage_scanner.delete_outcome import DELETED_PERMANENTLY, FAILED, RECYCLED
 
 
 def test_get_latest_scan_id_returns_most_recent_scan(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
 
-    history.init_history_db()
+    history_db.init_history_db()
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -37,14 +37,14 @@ def test_get_latest_scan_id_returns_most_recent_scan(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    assert history.get_latest_scan_id("C:/Example") == 2
+    assert history_queries.get_latest_scan_id("C:/Example") == 2
 
 
 def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
 
-    history.init_history_db()
+    history_db.init_history_db()
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -73,7 +73,7 @@ def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatc
     conn.commit()
     conn.close()
 
-    rows = history.list_scans_for_path("C:/Example")
+    rows = history_queries.list_scans_for_path("C:/Example")
 
     assert len(rows) == 3
     # Newest first, by created_at — lets the comparison picker default to
@@ -88,9 +88,9 @@ def test_list_scans_for_path_returns_all_scans_newest_first(tmp_path, monkeypatc
 
 def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
 
-    history.init_history_db()
+    history_db.init_history_db()
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -118,15 +118,15 @@ def test_get_scan_ids_by_created_at_maps_each_timestamp_to_its_scan_id(tmp_path,
     conn.commit()
     conn.close()
 
-    mapping = history.get_scan_ids_by_created_at("C:/Example")
+    mapping = history_queries.get_scan_ids_by_created_at("C:/Example")
 
     assert mapping == {"2024-01-01T00:00:00": 1, "2024-02-01T00:00:00": 2}
 
 
 def test_a_limited_scan_history_is_the_newest_scans_oldest_first(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
     conn = sqlite3.connect(db_path)
     for total_size, created_at in [
         (100, "2024-01-01T00:00:00"),
@@ -147,15 +147,15 @@ def test_a_limited_scan_history_is_the_newest_scans_oldest_first(tmp_path, monke
     conn.commit()
     conn.close()
 
-    rows = history.get_scan_history("C:/Example", limit=2)
-    ids = history.get_scan_ids_by_created_at("C:/Example", limit=2)
+    rows = history_queries.get_scan_history("C:/Example", limit=2)
+    ids = history_queries.get_scan_ids_by_created_at("C:/Example", limit=2)
 
     assert [(created_at, size) for created_at, size, _files, _folders in rows] == [
         ("2024-03-01T00:00:00", 350),
         ("2024-04-01T00:00:00", 400),
     ]
     assert ids == {"2024-03-01T00:00:00": 4, "2024-04-01T00:00:00": 5}
-    assert [row[1] for row in history.get_scan_history("C:/Example", limit=10)] == [
+    assert [row[1] for row in history_queries.get_scan_history("C:/Example", limit=10)] == [
         100,
         200,
         300,
@@ -166,10 +166,10 @@ def test_a_limited_scan_history_is_the_newest_scans_oldest_first(tmp_path, monke
 
 def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
-    history.record_audit_entry(
+    history_records.record_audit_entry(
         source="Duplicate Files",
         action="recycle",
         path="/Users/me/dup.bin",
@@ -177,7 +177,7 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         size_bytes=1234,
         outcome=RECYCLED,
     )
-    history.record_audit_entry(
+    history_records.record_audit_entry(
         source="Cleanup Cart (Main tree)",
         action="recycle",
         path="Q:\\big.iso",
@@ -186,7 +186,7 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         outcome=DELETED_PERMANENTLY,
         error_message="Confirmed, because the Recycle Bin can't hold it (subst drive).",
     )
-    history.record_audit_entry(
+    history_records.record_audit_entry(
         source="Main tree",
         action="recycle",
         path="/Users/me/locked",
@@ -196,7 +196,7 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
         error_message="It may be in use, protected, or require admin rights.",
     )
 
-    rows = history.get_audit_log()
+    rows = history_records.get_audit_log()
 
     assert len(rows) == 3
     # Most recent first.
@@ -217,11 +217,11 @@ def test_record_and_get_audit_entry_round_trips(tmp_path, monkeypatch):
 
 def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     for i in range(5):
-        history.record_audit_entry(
+        history_records.record_audit_entry(
             source="Search & Filter",
             action="recycle",
             path=f"/tmp/f{i}.bin",
@@ -230,44 +230,44 @@ def test_get_audit_log_respects_limit(tmp_path, monkeypatch):
             outcome=RECYCLED,
         )
 
-    assert len(history.get_audit_log(limit=3)) == 3
-    assert len(history.get_audit_log(limit=100)) == 5
+    assert len(history_records.get_audit_log(limit=3)) == 3
+    assert len(history_records.get_audit_log(limit=100)) == 5
 
 
 def test_fresh_snapshot_has_no_orphans(tmp_path, monkeypatch):
     """The very first snapshot ever taken can't find any orphans -- there's
-    nothing to compare against yet, by design (see history.py's own
-    known_install_locations docstring)."""
+    nothing to compare against yet, by design (see
+    history_records.record_install_locations_snapshot's docstring)."""
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
-    history.record_install_locations_snapshot(
+    history_records.record_install_locations_snapshot(
         [
             ("An App", "C:/Program Files/An App"),
         ]
     )
 
-    assert history.get_orphaned_install_locations() == []
+    assert history_records.get_orphaned_install_locations() == []
 
 
 def test_a_location_missing_from_the_next_snapshot_becomes_orphaned(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     # Snapshot 1: the app is installed.
-    history.record_install_locations_snapshot(
+    history_records.record_install_locations_snapshot(
         [
             ("An App", "C:/Program Files/An App"),
         ]
     )
-    assert history.get_orphaned_install_locations() == []
+    assert history_records.get_orphaned_install_locations() == []
 
     # Snapshot 2: the app is gone -- its location is now an orphan candidate.
-    history.record_install_locations_snapshot([])
+    history_records.record_install_locations_snapshot([])
 
-    orphans = history.get_orphaned_install_locations()
+    orphans = history_records.get_orphaned_install_locations()
     assert len(orphans) == 1
     install_location, display_name, first_seen_at, last_seen_installed_at = orphans[0]
     assert install_location == os.path.normcase(os.path.normpath("C:/Program Files/An App"))
@@ -277,28 +277,28 @@ def test_a_location_missing_from_the_next_snapshot_becomes_orphaned(tmp_path, mo
 
 def test_a_location_still_present_in_the_next_snapshot_is_not_orphaned(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
-    history.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
-    history.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
+    history_records.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
+    history_records.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
 
-    assert history.get_orphaned_install_locations() == []
+    assert history_records.get_orphaned_install_locations() == []
 
 
 def test_an_orphan_that_gets_reinstalled_is_no_longer_orphaned(tmp_path, monkeypatch):
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
-    history.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
-    history.record_install_locations_snapshot([])  # now orphaned
-    assert len(history.get_orphaned_install_locations()) == 1
+    history_records.record_install_locations_snapshot([("An App", "C:/Program Files/An App")])
+    history_records.record_install_locations_snapshot([])  # now orphaned
+    assert len(history_records.get_orphaned_install_locations()) == 1
 
-    history.record_install_locations_snapshot(
+    history_records.record_install_locations_snapshot(
         [("An App", "C:/Program Files/An App")]
     )  # reinstalled
-    assert history.get_orphaned_install_locations() == []
+    assert history_records.get_orphaned_install_locations() == []
 
 
 def test_an_app_never_seen_installed_never_appears_as_an_orphan(tmp_path, monkeypatch):
@@ -307,14 +307,14 @@ def test_an_app_never_seen_installed_never_appears_as_an_orphan(tmp_path, monkey
     until it's actually seen installed, so it can never spontaneously
     appear as an orphan just because it's absent from a snapshot."""
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
     # A location that was never in any prior snapshot, and isn't in this
     # one either -- there's no row for it at all, so nothing can flag it.
-    history.record_install_locations_snapshot([("Other App", "C:/Program Files/Other App")])
+    history_records.record_install_locations_snapshot([("Other App", "C:/Program Files/Other App")])
 
-    assert history.get_orphaned_install_locations() == []
+    assert history_records.get_orphaned_install_locations() == []
 
 
 def test_snapshot_upsert_updates_display_name_and_last_seen(tmp_path, monkeypatch):
@@ -323,16 +323,16 @@ def test_snapshot_upsert_updates_display_name_and_last_seen(tmp_path, monkeypatc
     stored display_name and last_seen_installed_at should always reflect
     the most recent snapshot, not the first one ever seen."""
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
 
-    history.record_install_locations_snapshot([("Old App", "C:/Program Files/Shared Path")])
-    history.record_install_locations_snapshot([])  # orphaned
-    history.record_install_locations_snapshot([("New App", "C:/Program Files/Shared Path")])
+    history_records.record_install_locations_snapshot([("Old App", "C:/Program Files/Shared Path")])
+    history_records.record_install_locations_snapshot([])  # orphaned
+    history_records.record_install_locations_snapshot([("New App", "C:/Program Files/Shared Path")])
 
     # Reinstalled (under a different app) -- no longer an orphan, and the
     # stored name reflects whichever app is there now.
-    assert history.get_orphaned_install_locations() == []
+    assert history_records.get_orphaned_install_locations() == []
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -348,7 +348,7 @@ def test_snapshot_upsert_updates_display_name_and_last_seen(tmp_path, monkeypatc
 
 
 def _save(folders):
-    return history.save_scan_snapshot(
+    return history_store.save_scan_snapshot(
         "C:/Example",
         sum(folders.values()),
         1000,
@@ -359,8 +359,8 @@ def _save(folders):
 
 
 def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
     older = _save(
         {
             "C:/Example/grew": 100,
@@ -378,7 +378,7 @@ def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
         }
     )
 
-    rows = history.get_folder_growth(newer, older)
+    rows = history_queries.get_folder_growth(newer, older)
 
     # Largest growth first; a folder only the older scan had comes last,
     # counted against 0 (it's gone, or now under the 50 MB history keeps).
@@ -389,7 +389,7 @@ def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
         ("C:/Example/shrank", 400, 300, -100, -25.0, "Shrinking", 7),
         ("C:/Example/gone", 999, 0, -999, None, "Shrinking", 0),
     ]
-    summary = history.get_growth_summary(newer, older)
+    summary = history_queries.get_growth_summary(newer, older)
     assert (summary["tracked_folders"], summary["new_folders"]) == (4, 1)
     assert summary["largest_growth_folder"][0] == "C:/Example/new"
     assert summary["largest_shrink_folder"][0] == "C:/Example/gone"
@@ -398,26 +398,26 @@ def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
 def test_the_growth_summary_counts_every_folder_not_just_the_top_50(tmp_path, monkeypatch):
     """P2-5: 202 tracked folders read as 50, and a big shrink below the
     top 50 growers was never named."""
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
     growing = {f"C:/Example/g{i:03}": 100 for i in range(200)}
     older = _save({**growing, "C:/Example/big": 50_000})
     newer = _save({**dict.fromkeys(growing, 110), "C:/Example/big": 1_000, "C:/Example/x": 5})
 
-    summary = history.get_growth_summary(newer, older)
+    summary = history_queries.get_growth_summary(newer, older)
 
     assert summary["tracked_folders"] == 202
     assert summary["largest_shrink_folder"][0] == "C:/Example/big"
 
 
 def test_folder_growth_limit_breaks_ties_by_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
     folders = {f"C:/Example/{name}": 10 for name in ("d", "b", "a", "c")}
     older = _save(folders)
     newer = _save({**folders, "C:/Example/c": 11})
 
-    rows = history.get_folder_growth(newer, older, limit=3)
+    rows = history_queries.get_folder_growth(newer, older, limit=3)
 
     assert [row[0] for row in rows] == ["C:/Example/c", "C:/Example/a", "C:/Example/b"]
 
@@ -435,23 +435,26 @@ def test_removing_a_scan_deletes_only_its_rows(tmp_path, monkeypatch):
     the folder paths only it had go; the scans around it and every path
     they still use stay, and they still compare with each other."""
     db_path = tmp_path / "storage_history.db"
-    monkeypatch.setattr(history, "DB_NAME", str(db_path))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(db_path))
+    history_db.init_history_db()
     first = _save({"C:/Example/kept": 100, "C:/Example/shared": 50})
     junk = _save({"C:/Example/shared": 94_000, "C:/Example/only-junk": 1})
     last = _save({"C:/Example/kept": 120, "C:/Example/shared": 60})
 
-    assert history.delete_scan(junk) is True
+    assert history_store.delete_scan(junk) is True
 
-    assert sorted(row[0] for row in history.list_scans_for_path("C:/Example")) == [first, last]
+    assert sorted(row[0] for row in history_queries.list_scans_for_path("C:/Example")) == [
+        first,
+        last,
+    ]
     assert _rows(db_path, "SELECT DISTINCT scan_id FROM folder_snapshots") == [(first,), (last,)]
     assert _rows(db_path, "SELECT path FROM folder_paths") == [
         ("C:/Example/kept",),
         ("C:/Example/shared",),
     ]
-    assert history.get_previous_scan_id("C:/Example", last) == first
-    assert [row[:4] for row in history.get_folder_growth(last, first)] == [
+    assert history_queries.get_previous_scan_id("C:/Example", last) == first
+    assert [row[:4] for row in history_queries.get_folder_growth(last, first)] == [
         ("C:/Example/kept", 100, 120, 20),
         ("C:/Example/shared", 50, 60, 10),
     ]
-    assert history.delete_scan(junk) is False
+    assert history_store.delete_scan(junk) is False

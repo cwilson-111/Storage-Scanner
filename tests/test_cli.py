@@ -170,10 +170,10 @@ def test_format_none_writes_no_data(tmp_path, capsys):
 
 
 def test_save_history_records_the_scan_even_on_a_fresh_database(tmp_path, monkeypatch, capsys):
-    import history
+    from storage_scanner import history_db, history_queries
     from storage_scanner.scan_history import normalize_scan_path
 
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
     scanned = tmp_path / "scanned"
     scanned.mkdir()
     (scanned / "a.txt").write_text("hello")
@@ -182,7 +182,7 @@ def test_save_history_records_the_scan_even_on_a_fresh_database(tmp_path, monkey
 
     assert code == EXIT_OK
     assert "Saved to scan history" in capsys.readouterr().err
-    assert history.get_latest_scan_id(normalize_scan_path(str(scanned))) is not None
+    assert history_queries.get_latest_scan_id(normalize_scan_path(str(scanned))) is not None
 
 
 def test_save_history_failure_returns_scan_error(tmp_path, monkeypatch, capsys):
@@ -201,15 +201,15 @@ def test_save_history_failure_returns_scan_error(tmp_path, monkeypatch, capsys):
 
 
 def _over_budget_folder(tmp_path, monkeypatch):
-    import history
+    from storage_scanner import history_db, history_records
     from storage_scanner.scan_history import normalize_scan_path
 
-    monkeypatch.setattr(history, "DB_NAME", str(tmp_path / "storage_history.db"))
-    history.init_history_db()
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
     scanned = tmp_path / "scanned"
     scanned.mkdir()
     (scanned / "a.txt").write_text("x" * 100)
-    history.set_budget(normalize_scan_path(str(scanned)), 10)
+    history_records.set_budget(normalize_scan_path(str(scanned)), 10)
     return scanned
 
 

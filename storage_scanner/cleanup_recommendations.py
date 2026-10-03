@@ -30,7 +30,7 @@ A fourth category, Orphaned install (find_orphaned_install_folders), is
 idea above, despite the surface similarity ("this app-related thing looks
 unnecessary"): it matches a literal InstallLocation string this app itself
 previously observed registered to a real installed app (via
-storage_scanner.installed_apps + history.record_install_locations_snapshot),
+storage_scanner.installed_apps + history_records.record_install_locations_snapshot),
 never something inferred from file naming or metadata heuristics. The
 tradeoff for that reliability is temporal, not heuristic: it can only ever
 flag a location the app has watched disappear from the registry across two
@@ -204,7 +204,7 @@ def registry_read_looks_short(apps_read, previously_installed):
 def find_orphaned_install_folders(root_node, orphaned_locations, installed_locations=()):
     """Flag directories that exactly match a location this app has
     previously seen registered as some app's InstallLocation, where that
-    app is no longer installed (per history.get_orphaned_install_locations
+    app is no longer installed (per history_records.get_orphaned_install_locations
     -- `orphaned_locations` here is that same result, reduced to just the
     already-normalized install_location strings).
 

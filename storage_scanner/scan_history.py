@@ -7,7 +7,7 @@ import os
 import shutil
 from dataclasses import dataclass
 
-import history
+from storage_scanner import history_db, history_queries, history_store
 from storage_scanner.budgets import check_budget_for_path
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import iter_folders
@@ -62,13 +62,13 @@ def record_scan(node, growth_limit=50):
     against the previous scan of the same path. Creates the history tables
     first if needed (idempotent): the CLI never goes through the GUI's own
     startup, so nothing else would."""
-    history.init_history_db()
+    history_db.init_history_db()
 
     folder_sizes, folder_count = collect_folder_sizes(node)
     scan_path = normalize_scan_path(node.path)
 
     space = drive_space(node.path)
-    scan_id = history.save_scan_snapshot(
+    scan_id = history_store.save_scan_snapshot(
         scan_path=scan_path,
         total_size=node.size,
         drive_capacity=space.total if space else 0,
@@ -79,12 +79,12 @@ def record_scan(node, growth_limit=50):
         drive_used=space.used if space else None,
         drive_free=space.free if space else None,
     )
-    previous_scan_id = history.get_previous_scan_id(
+    previous_scan_id = history_queries.get_previous_scan_id(
         scan_path=scan_path,
         current_scan_id=scan_id,
     )
     growth_rows = (
-        history.get_folder_growth(
+        history_queries.get_folder_growth(
             current_scan_id=scan_id,
             previous_scan_id=previous_scan_id,
             limit=growth_limit,

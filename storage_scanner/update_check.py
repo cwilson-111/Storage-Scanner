@@ -8,7 +8,7 @@ This is the only network call anywhere in the app (see PRIVACY.md). It:
   tag (from source, "0.0.0-dev"; a CI build of main, "main") never makes it;
 - can be turned off: Settings ▸ "Check for updates on launch", or the
   STORAGE_SCANNER_NO_UPDATE_CHECK environment variable;
-- checks at most once every 24 hours (tracked via history.py's
+- checks at most once every 24 hours (tracked via history_db's
   app_metadata table), not on every single launch;
 - never downloads or runs anything — the only outcome is a version-string
   comparison, and the only action available is a link to the Releases page
@@ -24,7 +24,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from history import get_app_metadata, set_app_metadata
+from storage_scanner.history_db import get_app_metadata, set_app_metadata
 from storage_scanner.logging_setup import logger
 from storage_scanner.version import __version__ as CURRENT_VERSION
 

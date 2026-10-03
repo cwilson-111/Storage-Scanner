@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from history import APP_DATA_DIR
+from storage_scanner.history_db import APP_DATA_DIR
 
 LOG_DIR_ENV_VAR = "STORAGE_SCANNER_LOG_DIR"
 # DEBUG for a diagnosis; INFO otherwise (DEBUG lines name every scanned path).

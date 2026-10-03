@@ -24,7 +24,7 @@ from storage_scanner import (
     turbo_scan,
 )
 from storage_scanner.drive_info import is_ntfs_fixed_drive
-from storage_scanner.file_ops import (
+from storage_scanner.elevation import (
     relaunch_elevated_windows,
 )
 from storage_scanner.formatting import human_size
@@ -38,9 +38,10 @@ from storage_scanner.scan_progress_model import CANCELLED, FAILED
 from storage_scanner.scanner import find_inaccessible_paths
 from storage_scanner.serialization import dict_to_node
 from storage_scanner.settings import COLORS, px
+from storage_scanner.ui.app_state import AppMixin
 
 
-class ScanLifecycleMixin:
+class ScanLifecycleMixin(AppMixin):
     # What _ask_turbo_scan_mode returns.
     TURBO_RESTART_AS_ADMIN = "restart"
 

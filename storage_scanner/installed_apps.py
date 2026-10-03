@@ -116,7 +116,7 @@ def get_installed_apps():
 def get_installed_install_locations():
     """The current, candidate-root-filtered set[str] of normalized
     InstallLocation values -- the "ground truth right now" snapshot that
-    history.record_install_locations_snapshot consumes to notice, over
+    history_records.record_install_locations_snapshot consumes to notice, over
     time, when one of these disappears."""
     locations = set()
     for _display_name, install_location in get_installed_apps():
@@ -129,7 +129,7 @@ def get_candidate_installed_apps():
     """[(display_name, install_location), ...], filtered to just the apps
     whose InstallLocation falls under a candidate root (Program Files/
     AppData) -- the exact input shape
-    history.record_install_locations_snapshot expects. Paths are left in
+    history_records.record_install_locations_snapshot expects. Paths are left in
     their raw, as-registered form (not normalized) -- that normalization
     happens once, centrally, inside record_install_locations_snapshot
     itself, the same way for every caller."""

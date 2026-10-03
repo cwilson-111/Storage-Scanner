@@ -4,7 +4,7 @@ Flags a scan-to-scan change in total size (judged as growth per day, see
 _z_score) that's a statistical outlier relative to that path's own typical
 growth/shrink pattern — a sudden spike (much faster growth than usual) or a
 sudden drop (much larger shrink than usual, shaped like a mass deletion).
-This works on data already stored by every scan (history.get_scan_history);
+This works on data already stored by every scan (history_queries.get_scan_history);
 no new tables needed.
 
 This is a lead worth checking, the same way Review-candidate recommendations
@@ -74,7 +74,7 @@ def detect_size_anomalies(history, z_threshold=DEFAULT_Z_THRESHOLD):
     """Flag scan-to-scan size changes that are statistical outliers for
     this path's own history.
 
-    `history` is history.get_scan_history()'s output, oldest first.
+    `history` is history_queries.get_scan_history()'s output, oldest first.
     Returns a list of Anomaly, oldest first. Needs at least
     MIN_DELTAS_FOR_BASELINE+1 scans to have any baseline to compare
     against; returns [] otherwise (not "no anomalies found" so much as

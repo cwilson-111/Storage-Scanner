@@ -23,6 +23,7 @@ from tkinter import (
     messagebox,
     ttk,
 )
+from typing import TYPE_CHECKING
 
 from storage_scanner.cleanup_recommendations import (
     get_sampled_duplicates_from_groups,
@@ -43,6 +44,10 @@ from storage_scanner.platform_support import (
 )
 from storage_scanner.settings import COLORS, DUPLICATE_HASH_CHUNK_BYTES, px
 
+if TYPE_CHECKING:
+    from storage_scanner.models import FileNode, Node
+    from storage_scanner.ui.app_state import AppState
+
 # How much of a big file's start, middle and end a match compared, as the
 # header and the row details word it.
 _WINDOW_TEXT = human_size(DUPLICATE_HASH_CHUNK_BYTES)
@@ -50,24 +55,24 @@ _WINDOW_TEXT = human_size(DUPLICATE_HASH_CHUNK_BYTES)
 
 class DuplicatesWindow:
     """One Duplicate Files window over `duplicates`, a list of
-    (size, digest, nodes) groups from duplicate_finder for the app's current
-    tree. `win` is its Toplevel."""
+    (size, digest, nodes) groups from duplicate_finder for `scan_tree`, the
+    app's current tree. `win` is its Toplevel."""
 
-    def __init__(self, app, duplicates):
+    def __init__(self, app: "AppState", scan_tree: "Node", duplicates):
         self.app = app
-        self.scan_path = app.root_node.path
-        self.scan_tree = app._duplicates_scan_root  # what every row here is from
+        self.scan_path = scan_tree.path
+        self.scan_tree = scan_tree  # what every row here is from
 
         # Per-group state, kept in step with deletes from any window
         # (forget_deleted). The keeper can be re-picked (right-click) and is
         # never a deletion target here; the delete service's on-disk re-check
         # guarantees a copy survives even if this list is somehow behind.
-        self.iid_to_node = {}
-        self.iid_to_group = {}
-        self.group_nodes = {}  # group_num -> [nodes], sorted by path
-        self.group_size = {}  # group_num -> bytes per copy
-        self.group_keeper = {}  # group_num -> the node marked Keeper
-        self.group_rows = {}  # group_num -> [iid, ...]
+        self.iid_to_node: dict[str, FileNode] = {}
+        self.iid_to_group: dict[str, int] = {}
+        self.group_nodes: dict[int, list[FileNode]] = {}  # sorted by path
+        self.group_size: dict[int, int] = {}  # bytes per copy
+        self.group_keeper: dict[int, FileNode] = {}  # the copy marked Keeper
+        self.group_rows: dict[int, list[str]] = {}  # the group's row iids
 
         self.win = Toplevel(app.root)
         self.win.configure(bg=COLORS["bg"])
@@ -109,15 +114,15 @@ class DuplicatesWindow:
 
         cols = ("group", "role", "size", "copies", "path")
         tv = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
-        for col, text, width, anchor, stretch in (
-            ("group", "Group", 60, E, False),
-            ("role", "Role", 80, W, False),
-            ("size", "Size", 100, E, False),
-            ("copies", "Copies", 60, E, False),
-            ("path", "Path", 620, W, True),
+        for col, text, width, right_aligned, stretch in (
+            ("group", "Group", 60, True, False),
+            ("role", "Role", 80, False, False),
+            ("size", "Size", 100, True, False),
+            ("copies", "Copies", 60, True, False),
+            ("path", "Path", 620, False, True),
         ):
             tv.heading(col, text=text)
-            tv.column(col, width=px(width), anchor=anchor, stretch=stretch)
+            tv.column(col, width=px(width), anchor=E if right_aligned else W, stretch=stretch)
 
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=vsb.set)

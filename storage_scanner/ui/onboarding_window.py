@@ -10,6 +10,7 @@ marks it seen.
 """
 
 from tkinter import BOTTOM, LEFT, RIGHT, TOP, TclError, Toplevel, X, ttk
+from typing import Optional
 
 from storage_scanner.logging_setup import logger
 from storage_scanner.onboarding import (
@@ -19,11 +20,12 @@ from storage_scanner.onboarding import (
 )
 from storage_scanner.platform_support import resource_path
 from storage_scanner.settings import COLORS
+from storage_scanner.ui.app_state import AppMixin
 
 _WRAP = 520
 
 
-class OnboardingMixin:
+class OnboardingMixin(AppMixin):
     def _show_onboarding_on_launch(self):
         if should_show_onboarding():
             self.show_onboarding()
@@ -36,7 +38,7 @@ class OnboardingMixin:
             return
 
         win = Toplevel(self.root)
-        self._onboarding_win = win
+        self._onboarding_win: Optional[Toplevel] = win
         win.withdraw()  # position before showing, so it doesn't flash at 0,0
         win.configure(bg=COLORS["bg"])
         win.title("Getting Started")

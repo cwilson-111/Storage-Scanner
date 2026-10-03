@@ -22,12 +22,16 @@ from tkinter import (
     X,
     ttk,
 )
+from typing import TYPE_CHECKING
 
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.platform_support import FILE_MANAGER_NAME, IS_MACOS, resource_path
 from storage_scanner.settings import COLORS, FONT_BOLD, px
 from storage_scanner.ui.history_scans import build_scans_tab
+
+if TYPE_CHECKING:
+    from storage_scanner.ui.app_state import AppState
 
 # A folder's growth type -> the row tag that colours it; anything else
 # (an unchanged folder) is muted.
@@ -83,7 +87,7 @@ class GrowthHistoryWindow:
 
     def __init__(
         self,
-        app,
+        app: "AppState",
         scan_path,
         header_text,
         scan_choices,
