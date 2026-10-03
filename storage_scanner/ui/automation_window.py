@@ -457,7 +457,7 @@ class AutomationMixin(AppMixin):
             justify=LEFT,
         )
         label.pack(side=TOP, fill=X)
-        checked = queue.Queue()
+        checked: queue.Queue[tuple] = queue.Queue()  # (shown, reason) once
         threading.Thread(target=lambda: checked.put(check_windows_toasts()), daemon=True).start()
 
         def show_result():
