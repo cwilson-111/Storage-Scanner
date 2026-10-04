@@ -1255,7 +1255,7 @@ growth — ✅ done (2026-10-02); cushion shading ✅ (2026-10-03).**
   left blank (as before, flat too).
 
 **P2-20. Everyday table stakes in the main window — ✅ done (2026-10-01);
-Owner and Folders columns left out.**
+Owner and Folders columns ✅ (2026-10-03).**
 - Why:
   - one selection at a time (`selectmode="browse"`, line 234);
   - the only keys are Delete, F5 and Return in the path box (lines 91,
@@ -1313,9 +1313,26 @@ Owner and Folders columns left out.**
   background process can't take focus). `benchmarks/main_tree.py` at 250k
   files: open 0.33 → 0.42 s, sort by name 0.37 → 0.51 s (two more cells
   per row in Tk; formatting is 8 ms per 2,000 dates).
-- Not done: Owner (a security-descriptor read per item, too slow for a
-  scan) and a Folders count column; the File Types window's own totals
-  don't change after a delete (its file list does).
+- Done (2, 2026-10-03): a **Folders** column counts every folder inside a
+  folder, however deep: kept on `Node`, added as the walk finds subfolders
+  (the live rows) and set by `_rollup` for both engines; a Turbo or
+  elevated tree from JSON counts it on load, and a delete takes the folder
+  and everything inside it off its ancestors. An **Owner** column is never
+  read during a scan (85–190 µs a security-descriptor read here, minutes on
+  1M files): `ui/owner_column.py` asks for the rows on screen after a
+  scroll, open, resize or re-sort, `storage_scanner/owner.py` reads them on
+  a worker thread (GetNamedSecurityInfoW + LookupAccountSidW; lstat st_uid
+  + pwd elsewhere), cached per path and per account. Sorting by Owner looks
+  up every listed row and re-sorts once they arrive.
+- Verified (2): gates, 799 tests, scale check, `--selftest-gui`. The real
+  app on its mainloop: `storage_scanner\` shows Folders 3 (`__pycache__`,
+  `ui`, `ui\__pycache__`) and owner `DESKTOP-…\danet`;
+  `C:\Windows\System32\drivers` Folders 9 (os.walk: 9) and owner
+  `NT SERVICE\TrustedInstaller` for the folder and its files (Get-Acl
+  agrees). Compatible scan of the Projects folder, median of 4
+  interleaved: main 17.05 s, with the columns 17.02 s.
+- Not done: the File Types window's own totals don't change after a delete
+  (its file list does).
 
 **P2-21. High DPI and a dark theme — ✅ done (2026-10-01); a real 150%
 screen not tried.**

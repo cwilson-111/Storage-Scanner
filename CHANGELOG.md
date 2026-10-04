@@ -15,6 +15,12 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ## Unreleased
 
+### Main tree
+
+- A **Folders** column counts every folder inside each folder.
+- An **Owner** column shows who owns each file and folder. It's looked up
+  only for the rows on screen, after the scan, so scans are no slower.
+
 ### Treemap
 
 - Tiles are shaded as cushions (like WinDirStat), so the nesting shows
