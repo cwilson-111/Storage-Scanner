@@ -65,13 +65,33 @@ class MainWindowMixin(AppMixin):
         if self.show_treemap_var.get():
             self.main_panes.add(self.treemap_pane.frame, weight=2)
 
-        # Data order is what live_tree_model.row_display gives, then Change;
-        # on screen Change comes before the dates.
-        columns = ("size", "alloc", "percent", "items", "modified", "accessed", "change")
+        # Data order is what live_tree_model.row_display gives, then Change
+        # and Owner; on screen Change comes before the dates.
+        columns = (
+            "size",
+            "alloc",
+            "percent",
+            "items",
+            "folders",
+            "modified",
+            "accessed",
+            "change",
+            "owner",
+        )
         self.tree = ttk.Treeview(
             container,
             columns=columns,
-            displaycolumns=("size", "alloc", "percent", "items", "change", "modified", "accessed"),
+            displaycolumns=(
+                "size",
+                "alloc",
+                "percent",
+                "items",
+                "folders",
+                "change",
+                "modified",
+                "accessed",
+                "owner",
+            ),
             show="tree headings",
             selectmode="extended",
         )
@@ -83,9 +103,11 @@ class MainWindowMixin(AppMixin):
         self.tree.heading("alloc", text="On Disk", command=lambda: self._sort_by("alloc"))
         self.tree.heading("percent", text="% of Parent", command=lambda: self._sort_by("size"))
         self.tree.heading("items", text="Files", command=lambda: self._sort_by("items"))
+        self.tree.heading("folders", text="Folders", command=lambda: self._sort_by("folders"))
         self.tree.heading("change", text="Change", command=lambda: self._sort_by("change"))
         self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
         self.tree.heading("accessed", text="Accessed", command=lambda: self._sort_by("accessed"))
+        self.tree.heading("owner", text="Owner", command=lambda: self._sort_by("owner"))
         self._update_heading_arrows()
 
         self.tree.column("#0", width=px(440), anchor=W, stretch=True)
@@ -93,6 +115,8 @@ class MainWindowMixin(AppMixin):
         self.tree.column("alloc", width=px(110), anchor=E, stretch=False)
         self.tree.column("percent", width=px(200), anchor=W, stretch=False)
         self.tree.column("items", width=px(90), anchor=E, stretch=False)
+        # Every folder inside a folder, however deep (a file's cell is blank).
+        self.tree.column("folders", width=px(80), anchor=E, stretch=False)
         # Growth since the last saved scan of this path (P2-18); filled in
         # once this scan's history is saved (_show_changes).
         self.tree.column("change", width=px(150), anchor=E, stretch=False)
@@ -100,10 +124,13 @@ class MainWindowMixin(AppMixin):
         # folder's changes when an entry directly in it is added or removed).
         self.tree.column("modified", width=px(130), anchor=W, stretch=False)
         self.tree.column("accessed", width=px(130), anchor=W, stretch=False)
+        # Filled in for the rows on screen once the scan is done
+        # (ui/owner_column.py).
+        self.tree.column("owner", width=px(200), anchor=W, stretch=False)
 
         vsb = ttk.Scrollbar(container, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(container, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.configure(yscrollcommand=self._owner_watch(vsb.set), xscrollcommand=hsb.set)
 
         # Lists only the folders whose size changed since the last saved
         # scan of this path (P2-18); usable once the Change column is filled.

@@ -108,6 +108,7 @@ def test_simple_tree_is_built_and_rolled_up():
     assert tree.size == 150
     assert tree.alloc_size == 4096 * 2
     assert tree.file_count == 2
+    assert (tree.folder_count, docs.folder_count) == (1, 0)
     assert docs.size == 100
     assert docs.file_count == 1
 

@@ -86,8 +86,8 @@ def scan(path, progress_q, cancel_event, workers=None):
     caller (see storage_scanner.ui.live_tree) may read the tree while the
     scan is still running: appending to node.dirs and node's file rows is
     safe to read mid-mutation under the GIL (see models.Node.add_file for
-    the row order that makes it so), and a *directory* Node's
-    size/alloc_size/file_count are its running totals so far -- read them
+    the row order that makes it so), and a *directory* Node's sizes and
+    file and folder counts are its running totals so far -- read them
     through tracker.folders(), which also says whether it's done. _rollup()
     recomputes them from the file rows once the walk ends, so the returned
     tree's numbers are exactly what they'd be without the live totals.
@@ -345,11 +345,13 @@ def _rollup(root, own_sizes=True):
             size = sum(node.file_sizes)
             alloc_size = sum(node.file_allocs)
             file_count = len(node.file_names)
+            folder_count = len(node.dirs)
             error = any(flags & FLAG_ERROR for flags in node.file_flags)
             for child in node.dirs:
                 size += child.size
                 alloc_size += child.alloc_size
                 file_count += child.file_count
+                folder_count += child.folder_count
                 error = error or child.error
             if own_sizes:
                 size += node.size
@@ -358,6 +360,7 @@ def _rollup(root, own_sizes=True):
             node.size = size
             node.alloc_size = alloc_size
             node.file_count = file_count
+            node.folder_count = folder_count  # no engine sets a folder's own
             if error:
                 node.error = True
         else:

@@ -35,11 +35,15 @@ def _tree():
 
 
 def _state(tracker, node):
-    return tracker.folders([node])[0][3]
+    return tracker.folders([node])[0][4]
 
 
 def _totals(tracker, node):
-    return tracker.folders([node])[0][:3]
+    return tracker.folders([node])[0][:4]
+
+
+def _counts(folder):
+    return (folder.size, folder.alloc_size, folder.file_count, folder.folder_count)
 
 
 # -- Throttle ----------------------------------------------------------------- #
@@ -107,9 +111,9 @@ def test_every_folder_above_a_directory_shows_what_has_been_read_under_it():
     # Still being read: part-way counts reach every folder above it.
     tracker.record(0, sub, (root, docs), 1000, 7000, 4_096_000, 1000, [], finished=False)
 
-    assert _totals(tracker, sub) == (7000, 4_096_000, 1000)
-    assert _totals(tracker, docs) == (7050, 4_104_192, 1002)
-    assert _totals(tracker, root) == (7150, 4_108_288, 1003)
+    assert _totals(tracker, sub) == (7000, 4_096_000, 1000, 0)
+    assert _totals(tracker, docs) == (7050, 4_104_192, 1002, 1)
+    assert _totals(tracker, root) == (7150, 4_108_288, 1003, 2)
     assert _state(tracker, root) == SCANNING
     assert tracker.snapshot().current_entries == 1000
 
@@ -134,7 +138,10 @@ def test_a_subfolder_found_part_way_through_a_big_folder_cant_finish_it_early():
     assert _state(tracker, root) == SCANNING
 
     tracker.record(0, big, (root,), 5, 50, 50, 5, [], finished=True)
-    assert tracker.folders([big, root]) == [(10041, 10041, 1005, DONE), (10041, 10041, 1005, DONE)]
+    assert tracker.folders([big, root]) == [
+        (10041, 10041, 1005, 1, DONE),
+        (10041, 10041, 1005, 2, DONE),
+    ]
 
 
 def test_the_current_folder_is_the_one_being_read_the_longest():
@@ -187,7 +194,7 @@ def test_every_folders_running_totals_end_at_exactly_the_rolled_up_numbers(tmp_p
     real_rollup = scanner._rollup
 
     def rollup_after_recording_the_live_totals(root, own_sizes=True):
-        live.update({f.path: (f.size, f.alloc_size, f.file_count) for f in iter_folders(root)})
+        live.update({f.path: _counts(f) for f in iter_folders(root)})
         real_rollup(root, own_sizes)
 
     monkeypatch.setattr(scanner, "_rollup", rollup_after_recording_the_live_totals)
@@ -196,9 +203,10 @@ def test_every_folders_running_totals_end_at_exactly_the_rolled_up_numbers(tmp_p
 
     # The rows don't jump when the finished tree replaces them, and the
     # roll-up replaced the running totals instead of adding to them.
-    final = {f.path: (f.size, f.alloc_size, f.file_count) for f in iter_folders(root)}
+    final = {f.path: _counts(f) for f in iter_folders(root)}
     assert live == final
     assert root.file_count == 11 and root.size == 7 + sum(10 + i for i in range(5)) + 15
+    assert root.folder_count == 3  # docs, deep, empty
 
     messages = _messages(progress_q)
     kinds = [kind for kind, _payload in messages]
@@ -230,7 +238,7 @@ def test_a_cancelled_scan_stops_without_counting_anything_as_done(tmp_path):
     final = [payload for kind, payload in messages if kind == "walk"][-1]
     assert (final.files, final.folders) == (0, 0)
     tracker = next(payload for kind, payload in messages if kind == "live_tree")
-    assert tracker.folders([root])[0][3] != DONE
+    assert tracker.folders([root])[0][4] != DONE
 
 
 def test_a_finished_scan_leaves_no_worker_thread_holding_its_tree(tmp_path):

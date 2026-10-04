@@ -40,6 +40,7 @@ from storage_scanner.ui.live_tree import LiveTreeMixin
 from storage_scanner.ui.main_tree import MainTreeMixin
 from storage_scanner.ui.main_window import MainWindowMixin
 from storage_scanner.ui.onboarding_window import OnboardingMixin
+from storage_scanner.ui.owner_column import OwnerColumnMixin
 from storage_scanner.ui.scan_banners import ScanBannersMixin
 from storage_scanner.ui.scan_lifecycle import ScanLifecycleMixin
 from storage_scanner.ui.scan_progress_panel import ScanProgressMixin
@@ -59,6 +60,7 @@ class StorageScannerApp(
     ScanLifecycleMixin,
     ScanBannersMixin,
     MainTreeMixin,
+    OwnerColumnMixin,
     DataToolsMixin,
     LiveTreeMixin,
     ScanProgressMixin,
@@ -114,8 +116,9 @@ class StorageScannerApp(
         self.root_node = None
         self.node_by_iid = {}  # treeview iid -> Node
         self._heat_tags = set()  # quantized heat tags configured so far
-        self._sort_key = "size"  # "name" | "size" | "alloc" | "items" | "change"
+        self._sort_key = "size"  # a heading's key: "name", "size", "owner", ...
         self._sort_reverse = True  # sizes default biggest-first
+        self._init_owner_column()
 
         if history_warning:
             self.root.after(

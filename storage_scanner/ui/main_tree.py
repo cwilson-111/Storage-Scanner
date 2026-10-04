@@ -18,6 +18,7 @@ from storage_scanner.live_tree_model import (
     share_text,
     sort_key_function,
 )
+from storage_scanner.models import subtract_totals
 from storage_scanner.scan_history import MIN_FOLDER_SIZE_FOR_HISTORY
 from storage_scanner.settings import heat_color
 from storage_scanner.ui.app_state import AppMixin
@@ -42,16 +43,22 @@ class MainTreeMixin(AppMixin):
     def _insert_node(self, parent_iid, node, parent_size, index=0):
         """A finished scan's row for `node` (see live_tree_model.row_display
         for what each column shows), with a placeholder child so an
-        expandable folder gets its arrow."""
+        expandable folder gets its arrow. Its Owner cell is filled in when
+        the row is on screen, unless that's known already
+        (ui/owner_column.py)."""
         display = node_display(node, parent_size)
+        path = node.path
+        owner = self._owners.get(path)
         iid = self.tree.insert(
             parent_iid,
             END,
             text=display.text,
-            values=(*display.values, self._change_cell(node)),
+            values=(*display.values, self._change_cell(node), owner or ""),
             tags=self._row_tags(display, index),
         )
         self.node_by_iid[iid] = node
+        if owner is None:
+            self._owner_row_added(iid, node, path)
         if node.has_children and (
             not self._changed_only() or any(self._has_changed(c) for c in node.children)
         ):
@@ -84,7 +91,7 @@ class MainTreeMixin(AppMixin):
             children = [child for child in children if self._has_changed(child)]
         return sorted(
             children,
-            key=sort_key_function(self._sort_key, self._folder_change),
+            key=sort_key_function(self._sort_key, self._folder_change, self._known_owner),
             reverse=self._sort_reverse,
         )
 
@@ -144,20 +151,25 @@ class MainTreeMixin(AppMixin):
         "alloc": "On Disk",
         "percent": "% of Parent",
         "items": "Files",
+        "folders": "Folders",
         "change": "Change",
         "modified": "Modified",
         "accessed": "Accessed",
+        "owner": "Owner",
     }
 
     def _sort_by(self, key):
         """Handle a heading click: toggle direction if it's the active key,
-        else switch to it (names ascend, sizes/counts descend by default)."""
+        else switch to it (names and owners ascend, sizes, counts and dates
+        descend by default)."""
         if key == self._sort_key:
             self._sort_reverse = not self._sort_reverse
         else:
             self._sort_key = key
-            self._sort_reverse = key != "name"
+            self._sort_reverse = key not in ("name", "owner")
         self._update_heading_arrows()
+        if key == "owner":
+            self._want_all_owners()
         self._resort_tree()
 
     def _update_heading_arrows(self):
@@ -168,9 +180,11 @@ class MainTreeMixin(AppMixin):
             "alloc": ("alloc",),
             "name": ("#0",),
             "items": ("items",),
+            "folders": ("folders",),
             "change": ("change",),
             "modified": ("modified",),
             "accessed": ("accessed",),
+            "owner": ("owner",),
         }[self._sort_key]
         for col, base in self._HEADINGS.items():
             text = base + (arrow if col in active_cols else "")
@@ -191,6 +205,7 @@ class MainTreeMixin(AppMixin):
                     walk(iid)
 
         walk("")
+        self._owner_view_changed()  # other rows may have moved on screen
 
     def _sort_level(self, parent_iid):
         """Put one populated level's rows in the current sort order: one
@@ -206,7 +221,12 @@ class MainTreeMixin(AppMixin):
             return
         kids = [iid for iid in shown if iid in node_by_iid]
         order = resorted(
-            kids, node_by_iid, self._sort_key, self._sort_reverse, change_of=self._folder_change
+            kids,
+            node_by_iid,
+            self._sort_key,
+            self._sort_reverse,
+            change_of=self._folder_change,
+            owner_of=self._known_owner,
         )
         if order == kids:
             return
@@ -253,15 +273,16 @@ class MainTreeMixin(AppMixin):
                 tree.tk.call(tree, "tag", "add", stripe, iids)
 
     def _refresh_row(self, iid):
-        """Recompute a row's size / on disk / percent / files text from its node."""
+        """Recompute a row's size / on disk / percent / files / folders text
+        from its node."""
         node = self.node_by_iid.get(iid)
         if not node:
             return
         parent_node = self.node_by_iid.get(self.tree.parent(iid))
         parent_size = (parent_node.size if parent_node else node.size) or 1
-        self.tree.item(
-            iid, values=(*node_display(node, parent_size).values, self._change_cell(node))
-        )
+        values = node_display(node, parent_size).values
+        owner = self._owners.get(node.path, "")
+        self.tree.item(iid, values=(*values, self._change_cell(node), owner))
 
     # -- Change since the last scan (P2-18) -------------------------------- #
     def _previous_size(self, node):
@@ -350,6 +371,7 @@ class MainTreeMixin(AppMixin):
             tree.delete(*rows)
             self._populate_children(top_iid, node)
             reopen(top_iid)
+        self._owner_view_changed()
 
     # -- Selecting a node from elsewhere (the treemap) ------------------------- #
     def _select_in_tree(self, nodes):
@@ -416,14 +438,13 @@ class MainTreeMixin(AppMixin):
         position = siblings.index(iid)
         old_parent_size = (parent_node.size if parent_node else 0) or 1
 
-        # Subtract the removed size/count from every ancestor (incl. the root
-        # row, whose parent is ""). root_node is the same object as its row.
+        # Subtract the removed size and counts from every ancestor (incl. the
+        # root row, whose parent is ""). root_node is the same object as its row.
         anc = parent_iid
         while anc:
             an = self.node_by_iid.get(anc)
             if an:
-                an.size -= node.size
-                an.file_count -= node.file_count
+                subtract_totals(an, node)
             anc = tree.parent(anc)
         if parent_node:
             parent_node.remove_child(node)

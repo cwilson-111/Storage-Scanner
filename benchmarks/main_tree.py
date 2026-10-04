@@ -80,6 +80,7 @@ def _app(tk_root):
             self._heat_tags = set()
             self._sort_key = "size"
             self._sort_reverse = True
+            self._init_owner_column()
             self.status_var = StringVar(master=root)
             apply_theme(root)
             self._build_tree()

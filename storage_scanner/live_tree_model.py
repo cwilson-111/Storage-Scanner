@@ -27,7 +27,7 @@ _NOT_YET = "…"
 @dataclass(frozen=True)
 class RowDisplay:
     text: str  # icon and name
-    values: tuple  # (size, on disk, % of parent, files, modified, accessed)
+    values: tuple  # (size, on disk, % of parent, files, folders, modified, accessed)
     tags: tuple  # style tags, besides the heat tag and the row stripe
     heat: Optional[float]  # share of the parent for the heat colour; None: no heat tag
 
@@ -59,20 +59,21 @@ def share_text(fraction):
     return f"{bar(fraction)} {fraction * 100:5.1f}%"
 
 
-def row_display(node, size, alloc_size, file_count, parent_size, state=None):
+def row_display(node, size, alloc_size, file_count, folder_count, parent_size, state=None):
     """The row for `node` with these totals, as a share of `parent_size`
     (its parent's size; the root row passes its own). `state` is a folder's
     scan state while a scan is running, None once it has finished."""
     if state == QUEUED:
         return RowDisplay(
             text=row_label(node, QUEUED_ICON),
-            values=(_NOT_YET, _NOT_YET, "—", _NOT_YET, "", ""),
+            values=(_NOT_YET, _NOT_YET, "—", _NOT_YET, _NOT_YET, "", ""),
             tags=("placeholder", "dir"),
             heat=None,
         )
     fraction = share(size, parent_size)
     percent = share_text(fraction)
     items = f"{file_count:,}" if node.is_dir else ""
+    folders = f"{folder_count:,}" if node.is_dir else ""
     # A cloud placeholder's size is its full logical size (what it'll be
     # once downloaded); its on-disk size is what's actually using local
     # disk right now -- worth showing side by side rather than picking one.
@@ -100,6 +101,7 @@ def row_display(node, size, alloc_size, file_count, parent_size, state=None):
             alloc_text,
             percent,
             items,
+            folders,
             date_text(node.mtime),
             date_text(node.atime),
         ),
@@ -110,19 +112,26 @@ def row_display(node, size, alloc_size, file_count, parent_size, state=None):
 
 def node_display(node, parent_size):
     """row_display() for a finished scan's node, from its own totals."""
-    return row_display(node, node.size, node.alloc_size, node.file_count, parent_size)
+    return row_display(
+        node, node.size, node.alloc_size, node.file_count, node.folder_count, parent_size
+    )
 
 
-def sort_key_function(key, change_of=None):
+def sort_key_function(key, change_of=None, owner_of=None):
     """The key a level's rows sort by for a heading's sort key ("name",
-    "size", "alloc", "items", "modified", "accessed" or "change"); sizes and
-    counts read a folder's running totals while a scan is still filling them
-    in. "change" needs `change_of(node)`, a folder's growth since the last
-    scan or None (not known), which sorts as no change."""
+    "size", "alloc", "items", "folders", "modified", "accessed", "change" or
+    "owner"); sizes and counts read a folder's running totals while a scan
+    is still filling them in. "change" needs `change_of(node)`, a folder's
+    growth since the last scan or None (not known), which sorts as no
+    change. "owner" needs `owner_of(node)`, the owner's name, "" when it
+    couldn't be read or None when it hasn't been looked up yet: both come
+    after every known owner in A-to-Z order (first in Z-to-A)."""
     if key == "name":
         return lambda node: node.name.lower()
     if key == "items":
         return lambda node: node.file_count
+    if key == "folders":
+        return lambda node: node.folder_count
     if key == "alloc":
         return lambda node: node.alloc_size
     if key == "modified":
@@ -131,14 +140,20 @@ def sort_key_function(key, change_of=None):
         return lambda node: node.atime
     if key == "change" and change_of is not None:
         return lambda node: change_of(node) or 0
+    if key == "owner" and owner_of is not None:
+        return lambda node: _owner_order(owner_of(node))
     return lambda node: node.size
 
 
-def resorted(order, node_of, key, reverse, change_of=None):
+def _owner_order(owner):
+    return (False, owner.lower()) if owner else (True, "")
+
+
+def resorted(order, node_of, key, reverse, change_of=None, owner_of=None):
     """`order` (a level's row ids, as shown) sorted by `key`. Rows that
     compare equal keep the order they're shown in, so a level full of
     still-empty folders doesn't reshuffle on every pass."""
-    sort_key = sort_key_function(key, change_of)
+    sort_key = sort_key_function(key, change_of, owner_of)
     return sorted(order, key=lambda iid: sort_key(node_of[iid]), reverse=reverse)
 
 

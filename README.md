@@ -199,8 +199,9 @@ version, so download the Data build once from the latest release.
 - **Largest Files** and **File Types Breakdown** views. Double-click a type
   to list its files, largest first; both lists have a right-click menu
   (reveal, copy path, add to cart, delete) and take several rows at once.
-- **Main tree columns** — size, on disk, share of the parent, files, the
-  change since the last scan, and each item's modified and accessed times;
+- **Main tree columns** — size, on disk, share of the parent, files,
+  folders, the change since the last scan, each item's modified and
+  accessed times, and its owner (looked up for the rows on screen only);
   click a heading to sort. Ctrl/Shift+click selects several rows to copy,
   add to the cart or delete together; **Changed folders only** hides what
   didn't change.

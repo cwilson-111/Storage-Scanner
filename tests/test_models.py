@@ -68,6 +68,22 @@ def test_deleting_a_folder_takes_its_whole_subtree_out_of_the_totals():
     assert not remove_from_tree(root, sub)
 
 
+def test_deleting_a_folder_takes_it_and_every_folder_inside_it_out_of_the_folder_counts():
+    root = Node(os.path.join(os.sep, "data"), "data")
+    outer = Node(join_path(root.path, "outer"), "outer")
+    inner = Node(join_path(outer.path, "inner"), "inner")
+    deepest = Node(join_path(inner.path, "deepest"), "deepest")
+    root.dirs.append(outer)
+    outer.dirs.append(inner)
+    inner.dirs.append(deepest)
+    _rollup(root)
+    assert (root.folder_count, outer.folder_count, inner.folder_count) == (3, 2, 1)
+
+    assert remove_from_tree(root, inner)
+
+    assert (root.folder_count, outer.folder_count) == (1, 0)
+
+
 def test_removing_a_node_that_was_never_part_of_the_scan_changes_nothing():
     # A Cleanup Recommendations row cached by an earlier session, deleted
     # after a new scan has loaded.
