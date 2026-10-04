@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         top_count_var: StringVar
         top_count_combo: ttk.Combobox
         show_treemap_var: BooleanVar
+        shade_treemap_var: BooleanVar
         turbo_scan_var: BooleanVar
 
         # -- The scan and its tree (app.py, ui/scan_lifecycle.py) --------------- #
@@ -120,6 +121,7 @@ if TYPE_CHECKING:
 
         # -- ui/main_window.py -------------------------------------------------- #
         def _toggle_treemap(self) -> None: ...
+        def _toggle_treemap_shading(self) -> None: ...
         def _reveal(self, path: str, is_dir: bool) -> None: ...
         def _open_in_explorer(self) -> None: ...
 

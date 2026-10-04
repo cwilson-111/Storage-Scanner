@@ -13,6 +13,52 @@ message, copied as written. Where the tag is a lightweight one (no message
 of its own), the text is the message of the commit it points at. Tags
 before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
+## Unreleased
+
+### Treemap
+
+- Tiles are shaded as cushions (like WinDirStat), so the nesting shows
+  without outlines; Tools ▸ Explore ▸ Shade Treemap Tiles switches back to
+  flat boxes, and the choice is remembered.
+- Redraws faster with many tiles (about 3,000 tiles in a maximised window:
+  about 180 ms → 130 ms).
+
+### Notifications
+
+- Over-budget notifications on Windows now come from "Storage Scanner"
+  instead of "Windows PowerShell" (no installer or Start-menu shortcut
+  needed).
+- Schedule Scans says whether Windows will show the notifications, and if
+  not, why and where to turn them back on: notifications off for the
+  account, off for Storage Scanner, or blocked by Group Policy.
+
+### Fixes
+
+- Fixed a possible crash opening Duplicate Files when a new scan had
+  cleared the results the search was for.
+- The app no longer fails to start after the treemap was turned off with
+  Tools ▸ Explore ▸ Show Treemap.
+
+### Turbo Scan checks
+
+- `turbo_checklist.py`: one command in an elevated terminal checks Turbo
+  Scan and its cache against the Compatible engine on your own drive and
+  saves a pass/fail report.
+- `compare_scan_engines.py` explains expected differences (files changed
+  during the run, hard-link order, folders Compatible can't read, small
+  files stored inside the MFT, folder totals) and fails only on
+  differences nothing explains.
+
+### Developer
+
+- `history.py` moved into the package (`storage_scanner.history_db`,
+  `history_store`, `history_queries`, `history_records`); the engine
+  modules over 500 lines were split (`alloc_size`, `mft_records`,
+  `turbo_cache_schema`, `elevation`). Every module is under 500 lines.
+- The attributes and methods the main window's parts share are declared
+  once (`storage_scanner/ui/app_state.py`), and mypy checks the bodies of
+  the UI and app code (`check_untyped_defs`).
+
 ## v1.13.0 — 2026-10-02
 
 ### Main tree

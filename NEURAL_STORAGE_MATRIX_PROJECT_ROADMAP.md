@@ -297,7 +297,7 @@ on this machine):
   folded into P1-3).
 
 **P1-3. Verify Turbo Scan and its cache on real hardware, with a written
-checklist.**
+checklist — checklist ✅ (2026-10-03); the elevated run is the owner's.**
 - Why: every Turbo-related section since the columnar cache (v1.8.0) lists
   a real Turbo Scan under "Not verified". The log does show one in-process
   elevated full scan on 2026-09-25 23:42 (1,478,444 records cached), but
@@ -312,6 +312,33 @@ checklist.**
   used space within 0.37% (P1-2). Still to do: an incremental scan after
   known changes, and `compare_scan_engines.py` against Compatible.
 - Size: M. Verify: the results section exists and matches.
+- Done (2026-10-03): `turbo_checklist.py` (with `turbo_checklist_fixtures.py`)
+  is one elevated command. A full read through the `--mft-scan` helper with
+  a file grown past its record mid-read; create, grow, rename, move and
+  delete, then incremental scans in-process and through the helper;
+  `compare_scan_engines.compare_path` against Compatible on a compressed
+  folder (`compact /c`, `/exe`), a junction asked for directly, the folder
+  holding it, `C:\Windows` and `C:\Users`. Fixtures and its own Turbo Scan
+  cache live in a scratch folder in `%TEMP%`, deleted afterwards (the app's
+  cache is never touched); it refuses unelevated before creating anything
+  and writes `turbo-checklist-<date>-<time>.txt` (git-ignored). Exit 0 all
+  passed, 1 refused, 2 a step failed. `compare_scan_engines` classifies
+  differences (changed during the run, hard-link order, unreadable to
+  Compatible, a small file inside its MFT record, folder totals) and fails
+  only on unexplained ones.
+- Verified: refusal unelevated (exit 1, nothing created); tests for the
+  change plan against the disk, expected sizes, size diffing, the mid-scan
+  watcher, report format, refusal, junction-safe cleanup and every
+  classify category. A smoke run with the raw read faked passed the
+  fixture steps (compressed 8,400,000 → 839,680 bytes on disk, the junction
+  fell back, its row a link), and the real helper's admin-rights error was
+  reported.
+- To run (elevated terminal, in the TreeSize folder):
+  `.venv\Scripts\python.exe turbo_checklist.py`. Paste the report here.
+- Not done: the elevated run itself; the UAC launch (an elevated checklist
+  starts the helper directly); the standalone `compare_scan_engines.py`
+  still matches paths case-sensitively (`C:\WINDOWS` vs `C:\Windows`; the
+  checklist realpaths around it).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**
@@ -878,7 +905,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
 - Not done: the Data build's own copy of the code arrives with the next
   merge into `data`.
 
-**P2-11. Toast notifications: why none ever appeared here.**
+**P2-11. Toast notifications: why none ever appeared here — ✅ done
+(2026-10-03)**
 - Why: notifications are turned off for this whole account
   (`GlobalToastEnabled=0`; PowerShell's ToastNotifier setting says
   DisabledForUser), so the "never visibly verified" follow-up can't be
@@ -890,6 +918,29 @@ or the path has a `%` — ✅ done (2026-09-29)**
   shortcut (needs an installer) so toasts carry the app's name; turn
   notifications on and verify once.
 - Size: S to verify, M for the app ID.
+- Done: `notify.check_windows_toasts` asks `ToastNotifier.Setting` through
+  PowerShell (the app's own ID, else PowerShell's or the Settings app's,
+  ignoring their per-app switch), so account-wide, per-app and Group Policy
+  blocks are all caught; the registry-only read is gone. The toast script
+  posts only when nothing blocks, and Schedule Scans says the answer and
+  where to fix it (checked on a worker thread). Toasts use the app's own ID
+  `cwilson-111.StorageScanner`, registered per user in
+  `HKCU\Software\Classes\AppUserModelId` (DisplayName, IconUri = the
+  largest PNG from icon.ico in app data) on every `--notify` run and
+  removed with the last scheduled scan; no shortcut or installer needed.
+- Verified: by 2026-10-03 notifications were on again for this account
+  (ToastEnabled=1); the real check returned Enabled in 0.23 s. A real
+  per-app block (an ID Windows reports as DisabledForApplication) was
+  reported with its Settings path and nothing was posted. The real Schedule
+  Scans window shows both lines (longest UI stall 110 ms). A real toast
+  posted in 0.35 s with the banner headed "Storage Scanner".
+  `tests/test_notify.py` maps every Setting value for the toast and the
+  check.
+- Not done: DisabledForUser and Group Policy not reproduced live (settings
+  left alone). The toast icon is unconfirmed: Windows caches an app ID's
+  first icon lookup for the logon session and the first test toast used the
+  .ico, so the PNG shows after a sign-out. Do Not Disturb isn't reported by
+  `ToastNotifier.Setting`.
 
 **P2-12. Archiving blocks the window — ✅ done (2026-09-29)**
 - Why: `archive_file` compresses at the highest level and verifies on the
@@ -945,8 +996,8 @@ or the path has a `%` — ✅ done (2026-09-29)**
   files is untested until v1.13.0. A `data-v1.12.0` install never hears of
   a newer version (the README and CHANGELOG say so).
 
-**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` — every UI
-file under 500 lines ✅ (2026-10-01); Protocol and history.py move not yet.**
+**P2-14. Split `ui/main_window.py` and `ui/duplicate_window.py` — ✅ done
+(2026-10-03): every module under 500 lines, shared app attributes declared.**
 - Why: 1,284 and 912 lines against the 500-line rule, 14% and 39% covered.
   The duplicate engine (about 280 lines of hashing and matching) lives in a
   UI module, and the 370-line `_show_duplicates_window` of closures is where
@@ -990,10 +1041,28 @@ file under 500 lines ✅ (2026-10-01); Protocol and history.py move not yet.**
   listed a 106 MB 400-day-old log and a duplicate, archived the log through
   the worker (zip written, original removed, row gone) and deleted one copy
   of the duplicate (file gone, group dissolved).
-- Not done: a Protocol for the shared app attributes; `history.py` into
-  the package. Outside `ui/`, `history.py` (956), `mft_parser.py` (689),
-  `turbo_cache.py` (538), `scanner.py` (514) and `file_ops.py` (508) are
-  over 500 lines.
+- Done (4, 2026-10-03): `history.py` (956 lines) is in the package as
+  `history_db` (connection, schema, app metadata; 194), `history_store`
+  (170), `history_queries` (409) and `history_records` (225); no top-level
+  `history` module is left. The engine files over 500 lines were split by
+  pure moves: `alloc_size.py` (on-disk size and cloud-placeholder checks,
+  from `scanner.py`), `mft_records.py` (record header, fixups, attribute
+  walk, data runs, from `mft_parser.py`), `turbo_cache_schema.py` (table
+  layout, record↔row mapping) and `elevation.py` (elevated scans and
+  relaunch, from `file_ops.py`). Largest package module now 499 lines.
+- Done (5, 2026-10-03): the attributes and methods the main window's
+  mixins share are declared once in `ui/app_state.py` (`AppState`, a plain
+  class seen only while type checking; a Protocol let each mixin redeclare
+  its attributes with narrower types, so it checked nothing). Every UI mixin
+  derives from `AppMixin` (`object` at run time); the five windows take
+  `app: AppState`; `check_untyped_defs` covers `storage_scanner.app` and
+  `storage_scanner.ui.*`. Its 44 errors were fixed in code; one was a
+  latent crash (Duplicate Files read `root_node.path` when a new scan had
+  cleared both trees).
+- Verified (4–5): ruff, black, mypy (95 files), 771 tests, scale check,
+  `--selftest-gui`, a CLI scan; the real app on its mainloop: a 43-file
+  scan, all 119 declared names present on the running app, Find Duplicates,
+  an archive, Cleanup closed mid-search, a delete with the tree redraw.
 
 **P2-15. Run the tests on Linux and macOS, and settle the Python range — ✅
 done (2026-09-29)**
@@ -1122,7 +1191,7 @@ and filter ✅ done (2026-10-01); treemap colour ✅ with P2-19 (2026-10-02).**
 - Growth as a treemap colour: done with P2-19.
 
 **P2-19. Treemap: nested, in the main window, coloured by type, age or
-growth — ✅ done (2026-10-02).**
+growth — ✅ done (2026-10-02); cushion shading ✅ (2026-10-03).**
 - Why: `ui/treemap_window.py` draws one level at a time in a separate
   window, coloured by size relative to the largest sibling, which repeats
   what the area already shows (lines 3-6, 121-126). Clicking a label does
@@ -1162,7 +1231,28 @@ growth — ✅ done (2026-10-02).**
   setting, a rowless delete and a deleted shown folder, Growth after a
   20 MB rescan. Screenshots checked. 250k files directly in one folder:
   0.19 → 0.12 s to lay out.
-- Not done: shading (cushions); per-monitor DPI.
+- Done (2, 2026-10-03): cushion shading. `storage_scanner/treemap_cushion.py`
+  paints every tile into one PPM for a Tk PhotoImage: a parabolic ridge per
+  level, its own plus its folders' (WinDirStat's height 0.38, ×0.91 a
+  level, light from the top left, ambient 0.3). Slopes across depend only
+  on x and down only on y, so each tile's line of slope bins is built once
+  and each row is one `bytes.translate` through an exact 2D light table: no
+  per-pixel Python. Label text colour comes from the pixel under it
+  (`shade`). Tools ▸ Explore ▸ Shade Treemap Tiles (app_metadata
+  `shade_treemap`, on by default) brings back flat boxes. The pane reads
+  the font's line height once, not per label. Fixed: with `show_treemap`
+  "0" the app failed to start (the toolbar, built before the tree, forgot a
+  pane that didn't exist yet).
+- Verified (2): `tests/test_treemap_cushion.py` (every pixel of a 10-deep
+  corner stack within 6/255 of a per-pixel model, worst 3.65);
+  `tests/test_app_startup.py` (real app with the treemap hidden; failed
+  before). Real app, light and dark, 11/11 per run: click, label click,
+  double-click, Up, hover, toggle and its setting. 3,000 tiles at
+  1904×639: render 50–53 ms + PhotoImage 10 ms, whole redraw 126–142 ms
+  (flat 174–192); 450 tiles in the default window 30 ms. Screenshots
+  checked.
+- Not done: per-monitor DPI; past the 3,000-tile cap top-level items are
+  left blank (as before, flat too).
 
 **P2-20. Everyday table stakes in the main window — ✅ done (2026-10-01);
 Owner and Folders columns left out.**
