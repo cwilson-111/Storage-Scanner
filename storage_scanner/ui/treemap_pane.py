@@ -1,5 +1,7 @@
 """The treemap under the main tree: the selected folder as nested tiles,
-each tile's area its size on disk (storage_scanner/treemap_model.py).
+each tile's area its size on disk (storage_scanner/treemap_model.py),
+shaded as cushions (storage_scanner/treemap_cushion.py) unless Tools ▸
+Explore ▸ Shade Treemap Tiles is off, when they're flat outlined boxes.
 
 It follows the tree: selecting a folder shows it, and selecting something
 inside the folder already shown only highlights its tile. The other way
@@ -11,7 +13,7 @@ clickable as the tile under it, and only the deepest tile at the pointer
 answers.
 """
 
-from tkinter import BOTH, BOTTOM, LEFT, RIGHT, TOP, Canvas, StringVar, X, ttk
+from tkinter import BOTH, BOTTOM, LEFT, RIGHT, TOP, Canvas, PhotoImage, StringVar, X, ttk
 from tkinter import font as tkfont
 from typing import TYPE_CHECKING, Optional
 
@@ -19,6 +21,7 @@ from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import date_text
 from storage_scanner.platform_support import IS_MACOS
 from storage_scanner.settings import COLORS, FONT, contrast_text_color, px
+from storage_scanner.treemap_cushion import render, shade
 from storage_scanner.treemap_model import (
     MODES,
     SIZE,
@@ -45,6 +48,7 @@ class TreemapPane:
         self.frame = ttk.Frame(master)
         self.chain: list[Node] = []  # nodes from the scan's root down to the folder shown
         self.tiles: list[Tile] = []
+        self.image: Optional[PhotoImage] = None  # the shaded tiles; the canvas only holds its name
         self.highlight = None  # the node whose tile is outlined
         self._pending: Optional[str] = None  # the scheduled redraw's after() id
 
@@ -79,6 +83,7 @@ class TreemapPane:
         self.canvas.pack(side=TOP, fill=BOTH, expand=True, padx=8)
         self.font = tkfont.Font(root=master, font=FONT)
         self.char_px = max(1, self.font.measure("0"))
+        self.line_px = self.font.metrics("linespace")  # a Tk call: once, not per label
 
         canvas = self.canvas
         canvas.bind("<Configure>", lambda _e: self.schedule())
@@ -149,6 +154,7 @@ class TreemapPane:
         self._pending = None
         canvas = self.canvas
         canvas.delete("all")
+        self.image = None
         width, height = canvas.winfo_width(), canvas.winfo_height()
         if not self.chain or width < px(20) or height < px(20):
             self.tiles = []
@@ -168,18 +174,24 @@ class TreemapPane:
         mode = self.mode()
         app = self.app
         change_of = app._folder_change if app._previous_folder_sizes else None
+        fills = [tile_color(tile, mode, change_of) for tile in self.tiles]
+        shaded = app.shade_treemap_var.get()
+        if shaded and self.tiles:
+            image = render(self.tiles, fills, width, height, COLORS["panel"])
+            self.image = PhotoImage(master=canvas, data=image, format="PPM")
+            canvas.create_image(0, 0, anchor="nw", image=self.image)
         outlined = None
-        for tile in self.tiles:
-            fill = tile_color(tile, mode, change_of)
-            canvas.create_rectangle(
-                tile.x,
-                tile.y,
-                tile.x + tile.w,
-                tile.y + tile.h,
-                fill=fill,
-                outline=COLORS["panel"],
-            )
-            self._label(tile, fill)
+        for index, (tile, fill) in enumerate(zip(self.tiles, fills)):
+            if not shaded:
+                canvas.create_rectangle(
+                    tile.x,
+                    tile.y,
+                    tile.x + tile.w,
+                    tile.y + tile.h,
+                    fill=fill,
+                    outline=COLORS["panel"],
+                )
+            self._label(index, fill, shaded)
             if self.highlight is not None and tile.node == self.highlight:
                 outlined = tile
         if not self.tiles:
@@ -196,8 +208,9 @@ class TreemapPane:
                 width=px(3),
             )
 
-    def _label(self, tile, fill):
-        line = self.font.metrics("linespace")
+    def _label(self, index, fill, shaded):
+        tile = self.tiles[index]
+        line = self.line_px
         if tile.w < px(36) or tile.h < line:
             return
         if tile.node is None:
@@ -210,9 +223,13 @@ class TreemapPane:
         lines = [
             part if len(part) <= fit else part[: max(1, fit - 1)] + "…" for part in text.split("\n")
         ]
+        x, y = tile.x + px(3), tile.y + px(1)
+        if shaded:  # what's under the middle of the first line
+            middle = x + len(lines[0]) * self.char_px / 2, y + line / 2
+            fill = shade(self.tiles, index, fill, *middle)
         self.canvas.create_text(
-            tile.x + px(3),
-            tile.y + px(1),
+            x,
+            y,
             anchor="nw",
             text="\n".join(lines),
             fill=contrast_text_color(fill),

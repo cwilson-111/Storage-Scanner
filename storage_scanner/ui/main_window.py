@@ -45,21 +45,25 @@ from storage_scanner.settings import COLORS, FONT_MONO_BOLD, px
 from storage_scanner.ui.app_state import AppMixin
 from storage_scanner.ui.treemap_pane import TreemapPane
 
-# app_metadata key: whether the treemap pane is shown ("1", the default) or not.
+# app_metadata keys: whether the treemap pane is shown, and whether its tiles
+# are shaded as cushions ("1", the default for both) or not.
 TREEMAP_SHOWN_KEY = "show_treemap"
+TREEMAP_SHADED_KEY = "shade_treemap"
 
 
 class MainWindowMixin(AppMixin):
 
     def _build_tree(self):
         # The tree above, the treemap of the selected folder below
-        # (ui/treemap_pane.py); the sash between them can be dragged.
+        # (ui/treemap_pane.py); the sash between them can be dragged. The
+        # toolbar, built first, has read whether the treemap was turned off.
         self.main_panes = ttk.PanedWindow(self.root, orient=VERTICAL)
         self.main_panes.pack(side=TOP, fill=BOTH, expand=True)
         container = ttk.Frame(self.main_panes, padding=(8, 4))
         self.main_panes.add(container, weight=3)
         self.treemap_pane = TreemapPane(self, self.main_panes)
-        self.main_panes.add(self.treemap_pane.frame, weight=2)
+        if self.show_treemap_var.get():
+            self.main_panes.add(self.treemap_pane.frame, weight=2)
 
         # Data order is what live_tree_model.row_display gives, then Change;
         # on screen Change comes before the dates.
@@ -239,6 +243,11 @@ class MainWindowMixin(AppMixin):
         elif not self.show_treemap_var.get() and shown:
             self.main_panes.forget(self.treemap_pane.frame)
         set_app_metadata(TREEMAP_SHOWN_KEY, "1" if self.show_treemap_var.get() else "0")
+
+    def _toggle_treemap_shading(self):
+        """Tools ▸ Explore ▸ Shade Treemap Tiles: cushions, or flat boxes."""
+        set_app_metadata(TREEMAP_SHADED_KEY, "1" if self.shade_treemap_var.get() else "0")
+        self.treemap_pane.schedule()
 
     def _show_menu(self, event):
         """Right-click: the menu for the selection if the row is part of it,
