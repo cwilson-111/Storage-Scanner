@@ -44,6 +44,10 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   cleared the results the search was for.
 - The app no longer fails to start after the treemap was turned off with
   Tools ▸ Explore ▸ Show Treemap.
+- File Types updates its totals after a delete from any window (its file
+  lists already did).
+- `compare_scan_engines.py` accepts a path typed in any case or with short
+  (8.3) names; it used to report every file as missing.
 
 ### Turbo Scan checks
 

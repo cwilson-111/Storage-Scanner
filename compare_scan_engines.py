@@ -123,6 +123,46 @@ def _flatten(node, out=None):
     return out
 
 
+def _long_path(path):
+    """`path` with 8.3 short names (DANET~1) expanded, links not followed."""
+    import ctypes
+
+    get_long = ctypes.windll.kernel32.GetLongPathNameW
+    size = get_long(path, None, 0)
+    if not size:
+        return path
+    buffer = ctypes.create_unicode_buffer(size)
+    return buffer.value if get_long(path, buffer, size) else path
+
+
+def on_disk_spelling(path):
+    """`path` as NTFS stores it: long names, each part in its own case, the
+    drive letter upper-case (c:\\WINDOWS -> C:\\Windows). Turbo Scan names
+    its tree that way whatever was asked, so the Compatible engine has to be
+    asked the same, or every path differs. Unlike os.path.realpath, a
+    junction or symlink stays itself (asking for one directly is a case
+    to compare). Unchanged off Windows, or where a part can't be listed."""
+    if not IS_WINDOWS:
+        return path
+    path = _long_path(os.path.abspath(path))
+    drive, rest = os.path.splitdrive(path)
+    spelled = (drive if drive.startswith("\\\\") else drive.upper()) + os.sep
+    for part in rest.split(os.sep):
+        if not part:
+            continue
+        try:
+            names = os.listdir(spelled)
+        except OSError:
+            return path
+        if part not in names:
+            wanted = part.casefold()
+            part = next((name for name in names if name.casefold() == wanted), None)
+            if part is None:
+                return path
+        spelled = os.path.join(spelled, part)
+    return spelled
+
+
 def _compare(compatible_root, turbo_root):
     """Every Discrepancy between the two trees, empty if they agree on
     every compared field for every node."""
@@ -296,8 +336,9 @@ class Comparison:
 
 def compare_path(path, since=None):
     """Run the Compatible engine, then Turbo Scan (through the same
-    scan_with_best_engine the app uses), on `path` and classify how they
-    differ. `since` as for classify()."""
+    scan_with_best_engine the app uses), on `path` (in its on-disk
+    spelling) and classify how they differ. `since` as for classify()."""
+    path = on_disk_spelling(path)
     progress_q, cancel_event = queue.Queue(), threading.Event()
     start = time.perf_counter()
     compatible_root = compatible_scan(path, progress_q, cancel_event)

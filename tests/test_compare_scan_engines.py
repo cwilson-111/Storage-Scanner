@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -20,6 +22,7 @@ from compare_scan_engines import (
     _compare,
     _flatten,
     classify,
+    on_disk_spelling,
 )
 from storage_scanner.models import FLAG_HARDLINK_DUP, Node
 
@@ -204,3 +207,26 @@ def test_a_folder_total_with_no_difference_below_it_is_unexplained():
     turbo.size = 200
 
     assert _categories(compatible, turbo) == {(DATA, "size"): UNEXPLAINED}
+
+
+@pytest.mark.windows
+def test_a_path_typed_in_another_case_is_compared_in_its_on_disk_spelling(tmp_path):
+    # Turbo Scan's tree is named the way NTFS stores it; asking the
+    # Compatible engine for C:\WINDOWS would make every path differ.
+    real = tmp_path / "MixedCase" / "Sub.Folder"
+    real.mkdir(parents=True)
+
+    assert on_disk_spelling(str(real).lower()) == os.path.realpath(real)
+
+
+@pytest.mark.windows
+def test_a_junction_asked_for_in_another_case_stays_the_junction(tmp_path):
+    import _winapi
+
+    target = tmp_path / "Target"
+    target.mkdir()
+    junction = tmp_path / "TheJunction"
+    _winapi.CreateJunction(str(target), str(junction))
+    spelled_parent = os.path.realpath(tmp_path)
+
+    assert on_disk_spelling(str(junction).upper()) == os.path.join(spelled_parent, "TheJunction")

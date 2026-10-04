@@ -126,11 +126,7 @@ class FileWindowsMixin(AppMixin):
         if not self.root_node:
             return
 
-        # Aggregate bytes + counts by lowercased extension across the tree.
         scan_tree = self.root_node
-        sizes, counts = extension_totals(scan_tree)
-        rows = sorted(sizes.items(), key=lambda kv: kv[1], reverse=True)
-        total = scan_tree.size or 1
 
         # Reuse one window so re-opening doesn't stack them.
         existing = getattr(self, "_types_win", None)
@@ -140,7 +136,7 @@ class FileWindowsMixin(AppMixin):
         win = Toplevel(self.root)
         self._types_win = win
         win.configure(bg=COLORS["bg"])
-        win.title(f"File Types — {len(rows)} extensions")
+        win.title("File Types")
         win.geometry(f"{px(760)}x{px(520)}")
         try:
             win.iconbitmap(resource_path("icon.ico"))
@@ -188,17 +184,37 @@ class FileWindowsMixin(AppMixin):
                 heat_seen.add(name)
             return name
 
-        iid_to_ext = {}
-        for index, (ext, size) in enumerate(rows):
-            fraction = size / total
-            percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
-            iid = tv.insert(
-                "",
-                END,
-                values=(ext, human_size(size), percent, f"{counts[ext]:,}"),
-                tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
-            )
-            iid_to_ext[iid] = ext
+        iid_to_ext: dict[str, str] = {}
+
+        def fill():
+            """(Re)build the rows from the tree as it is now: a delete from
+            any window takes its files out of their type's totals."""
+            focused = iid_to_ext.get(tv.focus())
+            top = tv.yview()[0]
+            tv.delete(*tv.get_children())
+            iid_to_ext.clear()
+            # Aggregate bytes + counts by lowercased extension across the tree.
+            sizes, counts = extension_totals(scan_tree)
+            rows = sorted(sizes.items(), key=lambda kv: kv[1], reverse=True)
+            total = scan_tree.size or 1
+            win.title(f"File Types — {len(rows)} extensions")
+            for index, (ext, size) in enumerate(rows):
+                fraction = size / total
+                percent = f"{bar(fraction)} {fraction * 100:5.1f}%"
+                iid = tv.insert(
+                    "",
+                    END,
+                    values=(ext, human_size(size), percent, f"{counts[ext]:,}"),
+                    tags=(heat_tag(fraction), "odd" if index % 2 else "even"),
+                )
+                iid_to_ext[iid] = ext
+                if ext == focused:
+                    tv.focus(iid)
+                    tv.selection_set(iid)
+            tv.yview_moveto(top)
+
+        fill()
+        self._watch_deletions(win, lambda _deleted: fill())
 
         def open_focused(_event=None):
             ext = iid_to_ext.get(tv.focus())

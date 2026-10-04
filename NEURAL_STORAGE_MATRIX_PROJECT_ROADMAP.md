@@ -336,9 +336,13 @@ checklist — checklist ✅ (2026-10-03); the elevated run is the owner's.**
 - To run (elevated terminal, in the TreeSize folder):
   `.venv\Scripts\python.exe turbo_checklist.py`. Paste the report here.
 - Not done: the elevated run itself; the UAC launch (an elevated checklist
-  starts the helper directly); the standalone `compare_scan_engines.py`
-  still matches paths case-sensitively (`C:\WINDOWS` vs `C:\Windows`; the
-  checklist realpaths around it).
+  starts the helper directly).
+- Fixed after (2026-10-03): `compare_scan_engines.compare_path` asks both
+  engines for the path's on-disk spelling (`on_disk_spelling`: 8.3 names
+  expanded with GetLongPathNameW, each part's case from its folder's
+  listing, drive upper-case; a junction stays itself, unlike realpath), so
+  `c:\WINDOWS` no longer shows every file missing. Checked:
+  `c:\WINDOWS\system32\DRIVERS` → `C:\Windows\System32\drivers`.
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**
@@ -1331,8 +1335,11 @@ Owner and Folders columns ✅ (2026-10-03).**
   `NT SERVICE\TrustedInstaller` for the folder and its files (Get-Acl
   agrees). Compatible scan of the Projects folder, median of 4
   interleaved: main 17.05 s, with the columns 17.02 s.
-- Not done: the File Types window's own totals don't change after a delete
-  (its file list does).
+- Done (3, 2026-10-03): File Types recounts its rows after a delete from
+  any window (`_watch_deletions`), keeping the focused type and the scroll.
+  Verified on the real app: `.bin` 2 files, 488.3 KB → 1 file, 293.0 KB
+  after recycling one; a recount over 1M files takes 0.71 s, paid only
+  while the window is open.
 
 **P2-21. High DPI and a dark theme — ✅ done (2026-10-01); a real 150%
 screen not tried.**
