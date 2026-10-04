@@ -297,7 +297,7 @@ on this machine):
   folded into P1-3).
 
 **P1-3. Verify Turbo Scan and its cache on real hardware, with a written
-checklist.**
+checklist — checklist ✅ (2026-10-03); the elevated run is the owner's.**
 - Why: every Turbo-related section since the columnar cache (v1.8.0) lists
   a real Turbo Scan under "Not verified". The log does show one in-process
   elevated full scan on 2026-09-25 23:42 (1,478,444 records cached), but
@@ -312,6 +312,33 @@ checklist.**
   used space within 0.37% (P1-2). Still to do: an incremental scan after
   known changes, and `compare_scan_engines.py` against Compatible.
 - Size: M. Verify: the results section exists and matches.
+- Done (2026-10-03): `turbo_checklist.py` (with `turbo_checklist_fixtures.py`)
+  is one elevated command. A full read through the `--mft-scan` helper with
+  a file grown past its record mid-read; create, grow, rename, move and
+  delete, then incremental scans in-process and through the helper;
+  `compare_scan_engines.compare_path` against Compatible on a compressed
+  folder (`compact /c`, `/exe`), a junction asked for directly, the folder
+  holding it, `C:\Windows` and `C:\Users`. Fixtures and its own Turbo Scan
+  cache live in a scratch folder in `%TEMP%`, deleted afterwards (the app's
+  cache is never touched); it refuses unelevated before creating anything
+  and writes `turbo-checklist-<date>-<time>.txt` (git-ignored). Exit 0 all
+  passed, 1 refused, 2 a step failed. `compare_scan_engines` classifies
+  differences (changed during the run, hard-link order, unreadable to
+  Compatible, a small file inside its MFT record, folder totals) and fails
+  only on unexplained ones.
+- Verified: refusal unelevated (exit 1, nothing created); tests for the
+  change plan against the disk, expected sizes, size diffing, the mid-scan
+  watcher, report format, refusal, junction-safe cleanup and every
+  classify category. A smoke run with the raw read faked passed the
+  fixture steps (compressed 8,400,000 → 839,680 bytes on disk, the junction
+  fell back, its row a link), and the real helper's admin-rights error was
+  reported.
+- To run (elevated terminal, in the TreeSize folder):
+  `.venv\Scripts\python.exe turbo_checklist.py`. Paste the report here.
+- Not done: the elevated run itself; the UAC launch (an elevated checklist
+  starts the helper directly); the standalone `compare_scan_engines.py`
+  still matches paths case-sensitively (`C:\WINDOWS` vs `C:\Windows`; the
+  checklist realpaths around it).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**
@@ -1164,7 +1191,7 @@ and filter ✅ done (2026-10-01); treemap colour ✅ with P2-19 (2026-10-02).**
 - Growth as a treemap colour: done with P2-19.
 
 **P2-19. Treemap: nested, in the main window, coloured by type, age or
-growth — ✅ done (2026-10-02).**
+growth — ✅ done (2026-10-02); cushion shading ✅ (2026-10-03).**
 - Why: `ui/treemap_window.py` draws one level at a time in a separate
   window, coloured by size relative to the largest sibling, which repeats
   what the area already shows (lines 3-6, 121-126). Clicking a label does
@@ -1204,7 +1231,28 @@ growth — ✅ done (2026-10-02).**
   setting, a rowless delete and a deleted shown folder, Growth after a
   20 MB rescan. Screenshots checked. 250k files directly in one folder:
   0.19 → 0.12 s to lay out.
-- Not done: shading (cushions); per-monitor DPI.
+- Done (2, 2026-10-03): cushion shading. `storage_scanner/treemap_cushion.py`
+  paints every tile into one PPM for a Tk PhotoImage: a parabolic ridge per
+  level, its own plus its folders' (WinDirStat's height 0.38, ×0.91 a
+  level, light from the top left, ambient 0.3). Slopes across depend only
+  on x and down only on y, so each tile's line of slope bins is built once
+  and each row is one `bytes.translate` through an exact 2D light table: no
+  per-pixel Python. Label text colour comes from the pixel under it
+  (`shade`). Tools ▸ Explore ▸ Shade Treemap Tiles (app_metadata
+  `shade_treemap`, on by default) brings back flat boxes. The pane reads
+  the font's line height once, not per label. Fixed: with `show_treemap`
+  "0" the app failed to start (the toolbar, built before the tree, forgot a
+  pane that didn't exist yet).
+- Verified (2): `tests/test_treemap_cushion.py` (every pixel of a 10-deep
+  corner stack within 6/255 of a per-pixel model, worst 3.65);
+  `tests/test_app_startup.py` (real app with the treemap hidden; failed
+  before). Real app, light and dark, 11/11 per run: click, label click,
+  double-click, Up, hover, toggle and its setting. 3,000 tiles at
+  1904×639: render 50–53 ms + PhotoImage 10 ms, whole redraw 126–142 ms
+  (flat 174–192); 450 tiles in the default window 30 ms. Screenshots
+  checked.
+- Not done: per-monitor DPI; past the 3,000-tile cap top-level items are
+  left blank (as before, flat too).
 
 **P2-20. Everyday table stakes in the main window — ✅ done (2026-10-01);
 Owner and Folders columns left out.**

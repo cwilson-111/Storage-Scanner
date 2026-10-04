@@ -193,8 +193,9 @@ version, so download the Data build once from the latest release.
   type, last modified, or growth since the last scan. It follows the tree,
   and the tree follows it: click a tile (or its label) to select that row,
   double-click a folder to show it, a file to reveal it, right-click for the
-  row's menu. Tools ▸ Explore ▸ Show Treemap hides it; drag the bar above
-  it to resize.
+  row's menu. Tiles are shaded as cushions; Tools ▸ Explore ▸ Shade
+  Treemap Tiles switches to flat boxes and Show Treemap hides it; drag the
+  bar above it to resize.
 - **Largest Files** and **File Types Breakdown** views. Double-click a type
   to list its files, largest first; both lists have a right-click menu
   (reveal, copy path, add to cart, delete) and take several rows at once.

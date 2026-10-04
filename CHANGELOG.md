@@ -15,6 +15,14 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ## Unreleased
 
+### Treemap
+
+- Tiles are shaded as cushions (like WinDirStat), so the nesting shows
+  without outlines; Tools ▸ Explore ▸ Shade Treemap Tiles switches back to
+  flat boxes, and the choice is remembered.
+- Redraws faster with many tiles (about 3,000 tiles in a maximised window:
+  about 180 ms → 130 ms).
+
 ### Notifications
 
 - Over-budget notifications on Windows now come from "Storage Scanner"
@@ -28,6 +36,18 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 - Fixed a possible crash opening Duplicate Files when a new scan had
   cleared the results the search was for.
+- The app no longer fails to start after the treemap was turned off with
+  Tools ▸ Explore ▸ Show Treemap.
+
+### Turbo Scan checks
+
+- `turbo_checklist.py`: one command in an elevated terminal checks Turbo
+  Scan and its cache against the Compatible engine on your own drive and
+  saves a pass/fail report.
+- `compare_scan_engines.py` explains expected differences (files changed
+  during the run, hard-link order, folders Compatible can't read, small
+  files stored inside the MFT, folder totals) and fails only on
+  differences nothing explains.
 
 ### Developer
 
