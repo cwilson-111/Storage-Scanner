@@ -10,33 +10,53 @@ Must be run from an elevated ("Run as Administrator") terminal: Turbo
 Scan's in-process path needs admin rights to read the raw volume, and
 this tool deliberately never triggers its own UAC prompt mid-run -- it's
 meant to be scriptable and repeatable, not something to babysit.
+turbo_checklist.py (P1-3) runs the same comparison as steps of its
+checklist, through compare_path() and classify().
 
 Usage:
     python compare_scan_engines.py <path> [<path> ...]
 
 Exit codes:
-    0 - every path matched (or none were NTFS-eligible, so nothing to compare)
+    0 - every path matched, or every difference has a known explanation
+        (or no path was NTFS-eligible, so there was nothing to compare)
     1 - not elevated, not Windows, or bad arguments
-    2 - at least one path showed a real discrepancy
+    2 - at least one path showed a difference nothing explains
 
-Known limitation: for a file with more than one hard link, the two
-engines can legitimately disagree about *which* occurrence is flagged as
-the "hardlink_dup" (and therefore which one shows the real size vs. zero)
--- each engine discovers the links in a different order, but the file's
-*total* contribution to size/file_count still matches either way. This
-script does not attempt to reconcile that per-occurrence ordering, so a
-hard-link-heavy target (e.g. C:\\Windows\\WinSxS) may show a handful of
-"hardlink_dup MISMATCH"/"size MISMATCH" pairs that are not real bugs --
-sanity-check those specific paths by hand rather than treating every
-reported line as equally actionable.
+A live folder changes while two engines read it one after the other, and
+some differences are expected, so each one is classified (classify()):
+
+- hard-link order: for a file with more than one hard link, the engines
+  can disagree about *which* occurrence is the counted one and which the
+  zero-sized "hardlink_dup" -- each finds the links in a different order --
+  while the file's total contribution matches either way (a hard-link-heavy
+  target such as C:\\Windows\\WinSxS shows many);
+- changed during the run: the path is gone now, or it (or, for an added or
+  missing entry, its folder) was modified after the run started, or its
+  size now differs from what the Compatible engine read;
+- unreadable to Compatible: the Compatible engine couldn't list the folder
+  or read the file (access denied even elevated), which Turbo Scan reads
+  from the MFT anyway;
+- small file inside its MFT record: a file under 4 KiB can live inside its
+  MFT record, with no cluster of its own -- Turbo Scan bills its length,
+  while the Compatible engine can't tell and rounds it up to a whole
+  cluster (alloc_size._windows_alloc_size);
+- folder total of the above: a folder's size, on-disk size or file count
+  differs only because something below it does.
+
+Anything else is "unexplained": a real Turbo Scan bug until shown otherwise.
 """
 
 import argparse
+import os
 import queue
 import sys
 import threading
 import time
+from collections import Counter
+from dataclasses import dataclass
+from typing import Any, Optional
 
+from storage_scanner.models import iter_folders
 from storage_scanner.platform_support import IS_ROOT, IS_WINDOWS
 from storage_scanner.scanner import scan as compatible_scan
 from storage_scanner.turbo_scan import ENGINE_TURBO, scan_with_best_engine
@@ -50,6 +70,47 @@ _COMPARED_FIELDS = (
     "is_cloud_placeholder",
     "hardlink_dup",
 )
+# A folder's own totals: a difference there only repeats one found below it.
+_TOTAL_FIELDS = ("size", "alloc_size", "file_count")
+
+MISSING = "missing from Turbo"
+EXTRA = "extra in Turbo"
+MISMATCH = "mismatch"
+
+HARDLINK_ORDER = "hard-link order"
+CHANGED = "changed during the run"
+UNREADABLE = "unreadable to Compatible"
+RESIDENT = "small file inside its MFT record"
+ROLLUP = "folder total of the above"
+UNEXPLAINED = "unexplained"
+
+# How long before the run started a modification still counts as during it:
+# NTFS and the clock read at the start don't tick together.
+_CLOCK_SLACK_SECONDS = 2.0
+# The largest MFT record is 4 KiB: a file that size or bigger can't fit in one.
+_MAX_RESIDENT_SIZE = 4096
+
+
+@dataclass(frozen=True)
+class Discrepancy:
+    """One difference between the two trees: a path only one engine found
+    (MISSING, EXTRA), or one field of a path both found (MISMATCH)."""
+
+    kind: str
+    path: str
+    field: Optional[str] = None
+    compatible: Any = None
+    turbo: Any = None
+
+    def __str__(self):
+        if self.kind == MISSING:
+            return f"MISSING FROM TURBO: {self.path}"
+        if self.kind == EXTRA:
+            return f"EXTRA IN TURBO: {self.path}"
+        return (
+            f"{self.field} MISMATCH at {self.path}: "
+            f"compatible={self.compatible!r} turbo={self.turbo!r}"
+        )
 
 
 def _flatten(node, out=None):
@@ -63,75 +124,234 @@ def _flatten(node, out=None):
 
 
 def _compare(compatible_root, turbo_root):
-    """Return a list of human-readable discrepancy strings, empty if the
-    two trees agree on every compared field for every node."""
+    """Every Discrepancy between the two trees, empty if they agree on
+    every compared field for every node."""
     compat_by_path = _flatten(compatible_root)
     turbo_by_path = _flatten(turbo_root)
 
-    discrepancies = []
-
-    for path in sorted(set(compat_by_path) - set(turbo_by_path)):
-        discrepancies.append(f"MISSING FROM TURBO: {path}")
-    for path in sorted(set(turbo_by_path) - set(compat_by_path)):
-        discrepancies.append(f"EXTRA IN TURBO: {path}")
+    discrepancies = [
+        Discrepancy(MISSING, p) for p in sorted(set(compat_by_path) - set(turbo_by_path))
+    ]
+    discrepancies += [
+        Discrepancy(EXTRA, p) for p in sorted(set(turbo_by_path) - set(compat_by_path))
+    ]
 
     for path in sorted(set(compat_by_path) & set(turbo_by_path)):
         c, t = compat_by_path[path], turbo_by_path[path]
         for field in _COMPARED_FIELDS:
             c_val, t_val = getattr(c, field), getattr(t, field)
             if c_val != t_val:
-                discrepancies.append(
-                    f"{field} MISMATCH at {path}: compatible={c_val!r} turbo={t_val!r}"
-                )
+                discrepancies.append(Discrepancy(MISMATCH, path, field, c_val, t_val))
 
     return discrepancies
 
 
-def compare_one(path):
-    print(f"\n=== {path} ===")
+def _stat_now(path):
+    try:
+        return os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
 
+
+def _unreadable_paths(compatible_root):
+    """Where the Compatible engine's own reads failed: every file it couldn't
+    stat, and every folder it couldn't (fully) list. A folder's error flag is
+    also set on all its ancestors (scanner._rollup), so only a flagged folder
+    with no flagged file or subfolder of its own counts as a failed listing."""
+    found = set()
+    for folder in iter_folders(compatible_root):
+        bad_files = [f.path for f in folder.files() if f.error]
+        found.update(bad_files)
+        if folder.error and not bad_files and not any(d.error for d in folder.dirs):
+            found.add(folder.path)
+    return found
+
+
+def _ancestors(path):
+    parent = os.path.dirname(path)
+    while parent and parent != path:
+        yield parent
+        path, parent = parent, os.path.dirname(parent)
+
+
+def _changed_since(discrepancy, compat_node, now, since, stat_now):
+    if now is None:
+        return True  # deleted, or created and deleted again, during the run
+    if now.st_mtime >= since - _CLOCK_SLACK_SECONDS:
+        return True
+    if (
+        compat_node is not None
+        and not compat_node.is_dir
+        and not compat_node.hardlink_dup
+        and now.st_size != compat_node.size
+    ):
+        return True  # grew or shrank after the Compatible engine read it
+    if discrepancy.kind in (MISSING, EXTRA):
+        # Created, deleted or renamed: the folder holding it was modified.
+        folder = stat_now(os.path.dirname(discrepancy.path))
+        return folder is None or folder.st_mtime >= since - _CLOCK_SLACK_SECONDS
+    return False
+
+
+def _hardlink_order(discrepancy, compat_node, turbo_node, now):
+    """The two engines picked different occurrences of a hard-linked file as
+    the counted one: the flags disagree, the file really has several links,
+    and only the flag or the sizes it zeroes differ."""
+    if compat_node is None or turbo_node is None or compat_node.is_dir or turbo_node.is_dir:
+        return False
+    if compat_node.hardlink_dup == turbo_node.hardlink_dup:
+        return False
+    if now is not None and now.st_nlink < 2:
+        return False
+    return discrepancy.field in ("hardlink_dup", "size", "alloc_size")
+
+
+def _resident(discrepancy, compat_node, turbo_node):
+    """A file small enough to live inside its MFT record: Turbo Scan bills
+    its length as its on-disk size, the Compatible engine a whole cluster."""
+    if discrepancy.field != "alloc_size" or compat_node is None or turbo_node is None:
+        return False
+    size = compat_node.size
+    return (
+        not compat_node.is_dir
+        and 0 < size < _MAX_RESIDENT_SIZE
+        and turbo_node.size == turbo_node.alloc_size == size
+        and compat_node.alloc_size > size
+        and compat_node.alloc_size % 512 == 0  # a whole number of clusters
+    )
+
+
+def classify(discrepancies, compatible_root, turbo_root, since=None, stat_now=_stat_now):
+    """[(Discrepancy, category)] for every discrepancy, the category one of
+    HARDLINK_ORDER, CHANGED, UNREADABLE, RESIDENT, ROLLUP or UNEXPLAINED
+    (see the module docstring). `since` is when the run started
+    (time.time()); None means nothing should have changed, so CHANGED is
+    never used -- for a folder only the caller writes to. `stat_now(path)`
+    is the path's os.stat_result now (not following links), or None if
+    it's gone."""
+    if not discrepancies:
+        return []
+    compat_by_path = _flatten(compatible_root)
+    turbo_by_path = _flatten(turbo_root)
+    unreadable = _unreadable_paths(compatible_root)
+
+    leaves, totals = [], []
+    for d in discrepancies:
+        c, t = compat_by_path.get(d.path), turbo_by_path.get(d.path)
+        if d.field in _TOTAL_FIELDS and c is not None and c.is_dir and t is not None and t.is_dir:
+            totals.append(d)
+        else:
+            leaves.append(d)
+
+    classified = []
+    below_a_leaf = set()  # every folder above a leaf discrepancy
+    for d in leaves:
+        c, t = compat_by_path.get(d.path), turbo_by_path.get(d.path)
+        if d.path in unreadable or any(a in unreadable for a in _ancestors(d.path)):
+            category = UNREADABLE
+        else:
+            now = stat_now(d.path)
+            if since is not None and _changed_since(d, c, now, since, stat_now):
+                category = CHANGED
+            elif _hardlink_order(d, c, t, now):
+                category = HARDLINK_ORDER
+            elif _resident(d, c, t):
+                category = RESIDENT
+            else:
+                category = UNEXPLAINED
+        classified.append((d, category))
+        for ancestor in _ancestors(d.path):
+            if ancestor in below_a_leaf:
+                break  # and so are all of its own ancestors
+            below_a_leaf.add(ancestor)
+
+    for d in totals:
+        classified.append((d, ROLLUP if d.path in below_a_leaf else UNEXPLAINED))
+    return classified
+
+
+@dataclass
+class Comparison:
+    """Both engines' trees for one path, and how they differ. `turbo_root`
+    is None when Turbo Scan didn't run (report.fallback_reason says why)."""
+
+    path: str
+    compatible_root: Any
+    compatible_seconds: float
+    turbo_root: Any
+    report: Any
+    classified: list
+
+    @property
+    def turbo_ran(self):
+        return self.report.engine == ENGINE_TURBO
+
+    def counts(self):
+        """category -> number of discrepancies."""
+        return Counter(category for _d, category in self.classified)
+
+    def unexplained(self):
+        return [d for d, category in self.classified if category == UNEXPLAINED]
+
+
+def compare_path(path, since=None):
+    """Run the Compatible engine, then Turbo Scan (through the same
+    scan_with_best_engine the app uses), on `path` and classify how they
+    differ. `since` as for classify()."""
     progress_q, cancel_event = queue.Queue(), threading.Event()
-    print("Running Compatible engine...")
     start = time.perf_counter()
     compatible_root = compatible_scan(path, progress_q, cancel_event)
-    compatible_elapsed = time.perf_counter() - start
-    print(
-        f"  {compatible_root.size:,} bytes, {compatible_root.file_count:,} files "
-        f"in {compatible_elapsed:.1f}s"
-    )
+    compatible_seconds = time.perf_counter() - start
 
     progress_q, cancel_event = queue.Queue(), threading.Event()
-    print("Running Turbo Scan...")
-    turbo_root, report = scan_with_best_engine(
-        path,
-        progress_q,
-        cancel_event,
-        turbo_enabled=True,
-    )
+    turbo_root, report = scan_with_best_engine(path, progress_q, cancel_event, turbo_enabled=True)
     if report.engine != ENGINE_TURBO:
+        return Comparison(path, compatible_root, compatible_seconds, None, report, [])
+    classified = classify(_compare(compatible_root, turbo_root), compatible_root, turbo_root, since)
+    return Comparison(path, compatible_root, compatible_seconds, turbo_root, report, classified)
+
+
+def compare_one(path):
+    """Print one path's comparison. True if every difference is explained,
+    False if one isn't, None if Turbo Scan didn't run for it."""
+    print(f"\n=== {path} ===")
+    result = compare_path(path, since=time.time())
+    compatible_root, report = result.compatible_root, result.report
+    print(
+        f"Compatible: {compatible_root.size:,} bytes, {compatible_root.file_count:,} files "
+        f"in {result.compatible_seconds:.1f}s"
+    )
+    if not result.turbo_ran:
         print(
             f"SKIP: Turbo Scan did not actually run for this path "
             f"(fallback_reason={report.fallback_reason!r}) -- nothing to compare."
         )
         return None
     print(
-        f"  {turbo_root.size:,} bytes, {turbo_root.file_count:,} files "
+        f"Turbo Scan: {result.turbo_root.size:,} bytes, {result.turbo_root.file_count:,} files "
         f"in {report.elapsed_seconds:.1f}s"
     )
     if report.elapsed_seconds > 0:
-        print(f"  speedup: {compatible_elapsed / report.elapsed_seconds:.1f}x")
+        print(f"  speedup: {result.compatible_seconds / report.elapsed_seconds:.1f}x")
 
-    discrepancies = _compare(compatible_root, turbo_root)
-    if discrepancies:
-        print(f"MISMATCH ({len(discrepancies)} discrepancies):")
-        for line in discrepancies[:50]:
-            print(f"  - {line}")
-        if len(discrepancies) > 50:
-            print(f"  ... and {len(discrepancies) - 50} more")
-        return False
-
-    print("MATCH: Turbo Scan agrees with the Compatible engine.")
-    return True
+    if not result.classified:
+        print("MATCH: Turbo Scan agrees with the Compatible engine.")
+        return True
+    for category, count in sorted(result.counts().items()):
+        print(f"  {count:,} {category}")
+        if category != UNEXPLAINED:
+            for d in [d for d, c in result.classified if c == category][:5]:
+                print(f"      e.g. {d}")
+    unexplained = result.unexplained()
+    if not unexplained:
+        print("EXPLAINED: every difference has a known cause.")
+        return True
+    print(f"MISMATCH ({len(unexplained)} unexplained):")
+    for d in unexplained[:50]:
+        print(f"  - {d}")
+    if len(unexplained) > 50:
+        print(f"  ... and {len(unexplained) - 50} more")
+    return False
 
 
 def main(argv):

@@ -11,6 +11,7 @@ venv/
 coverage.xml
 htmlcov/
 bench-*.json
+turbo-checklist-*.txt
 
 # PyInstaller build output
 build/
