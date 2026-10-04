@@ -1,10 +1,10 @@
 """Who owns a file or folder: the main tree's Owner column.
 
-An owner is a security-descriptor read per item -- about 80 µs each on
-Windows here (40 µs when it fails), so a 1M-file scan would spend over a
-minute on it. The scan never reads it: the main tree asks only for the rows
-it shows (ui/owner_column.py), on OwnerLookup's worker thread, and each
-account is named once (per SID or uid), not once per item.
+An owner is a security-descriptor read per item -- 85 to 190 µs each on
+Windows here (a OneDrive folder, then System32), so a 1M-file scan would
+spend minutes on it. The scan never reads it: the main tree asks only for
+the rows on screen (ui/owner_column.py), on OwnerLookup's worker thread,
+and each account is named once (per SID or uid), not once per item.
 
 - Windows: GetNamedSecurityInfoW(OWNER_SECURITY_INFORMATION), named by
   LookupAccountSidW as "DOMAIN\\user" ("NT SERVICE\\TrustedInstaller",

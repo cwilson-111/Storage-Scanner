@@ -24,6 +24,7 @@ A mixin composed into StorageScannerApp (storage_scanner/app.py).
 """
 
 from storage_scanner.owner import OwnerLookup
+from storage_scanner.ui.app_state import AppMixin
 
 # How often the Tk thread collects owners while any are outstanding, and
 # how many it writes per tick (one Tk call each, about 10 µs).
@@ -31,7 +32,7 @@ POLL_MS = 50
 CELLS_PER_TICK = 2000
 
 
-class OwnerColumnMixin:
+class OwnerColumnMixin(AppMixin):
     def _init_owner_column(self):
         self._owner_lookup = OwnerLookup()
         self._owners = {}  # path -> owner ("" when it can't be read)
@@ -96,13 +97,13 @@ class OwnerColumnMixin:
         """The rows on screen, top to bottom: one identify call a line (the
         tree scrolls by whole rows of one height)."""
         first = self._first_visible_row()
-        height = self._live_row_height
-        if not first or not height:
+        top, height = self._live_row_top, self._live_row_height
+        if not first or top is None or not height:
             return []
         tree = self.tree
         rows = [first]
         bottom = tree.winfo_height()
-        y = self._live_row_top + 1 + height
+        y = top + 1 + height
         while y < bottom:
             iid = tree.identify_row(y)
             if not iid:
