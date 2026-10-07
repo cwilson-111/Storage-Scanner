@@ -40,6 +40,14 @@ some differences are expected, so each one is classified (classify()):
   MFT record, with no cluster of its own -- Turbo Scan bills its length,
   while the Compatible engine can't tell and rounds it up to a whole
   cluster (alloc_size._windows_alloc_size);
+- allocated past its end: NTFS has more allocated to the file than its
+  length rounded to a cluster (room reserved for a file being written, or
+  preallocated, as ETW logs are); Turbo Scan bills that allocation and the
+  Compatible engine the rounded length, and the file's allocation right now
+  equals Turbo Scan's (live_file_state);
+- open for writing: something holds the file open for writing now, so its
+  size is a moving target and its MFT record on disk lags the size the file
+  system reports, even when its modified time is older than the run;
 - folder total of the above: a folder's size, on-disk size or file count
   differs only because something below it does.
 
@@ -56,6 +64,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from live_file_state import live_file_state
 from storage_scanner.models import iter_folders
 from storage_scanner.platform_support import IS_ROOT, IS_WINDOWS
 from storage_scanner.scanner import scan as compatible_scan
@@ -81,6 +90,8 @@ HARDLINK_ORDER = "hard-link order"
 CHANGED = "changed during the run"
 UNREADABLE = "unreadable to Compatible"
 RESIDENT = "small file inside its MFT record"
+PREALLOCATED = "allocated past its end"
+OPEN_FOR_WRITING = "open for writing"
 ROLLUP = "folder total of the above"
 UNEXPLAINED = "unexplained"
 
@@ -261,14 +272,46 @@ def _resident(discrepancy, compat_node, turbo_node):
     )
 
 
-def classify(discrepancies, compatible_root, turbo_root, since=None, stat_now=_stat_now):
+def _file_mismatch(discrepancy, compat_node, turbo_node):
+    return (
+        discrepancy.kind == MISMATCH
+        and compat_node is not None
+        and turbo_node is not None
+        and not compat_node.is_dir
+        and not turbo_node.is_dir
+    )
+
+
+def _preallocated(discrepancy, compat_node, turbo_node, live):
+    """NTFS has the very allocation Turbo Scan billed, more than the
+    Compatible engine's cluster-rounded length."""
+    return (
+        _file_mismatch(discrepancy, compat_node, turbo_node)
+        and discrepancy.field == "alloc_size"
+        and live.allocation is not None
+        and turbo_node.alloc_size == live.allocation > compat_node.alloc_size
+    )
+
+
+def _open_for_writing(discrepancy, compat_node, turbo_node, live):
+    return (
+        _file_mismatch(discrepancy, compat_node, turbo_node)
+        and discrepancy.field in ("size", "alloc_size")
+        and live.open_for_writing
+    )
+
+
+def classify(
+    discrepancies, compatible_root, turbo_root, since=None, stat_now=_stat_now, live=live_file_state
+):
     """[(Discrepancy, category)] for every discrepancy, the category one of
-    HARDLINK_ORDER, CHANGED, UNREADABLE, RESIDENT, ROLLUP or UNEXPLAINED
-    (see the module docstring). `since` is when the run started
-    (time.time()); None means nothing should have changed, so CHANGED is
-    never used -- for a folder only the caller writes to. `stat_now(path)`
-    is the path's os.stat_result now (not following links), or None if
-    it's gone."""
+    HARDLINK_ORDER, CHANGED, UNREADABLE, RESIDENT, PREALLOCATED,
+    OPEN_FOR_WRITING, ROLLUP or UNEXPLAINED (see the module docstring).
+    `since` is when the run started (time.time()); None means nothing should
+    have changed, so neither CHANGED nor OPEN_FOR_WRITING is used -- for a
+    folder only the caller writes to. `stat_now(path)` is the path's
+    os.stat_result now (not following links), or None if it's gone;
+    `live(path)` its live_file_state.LiveState."""
     if not discrepancies:
         return []
     compat_by_path = _flatten(compatible_root)
@@ -297,6 +340,10 @@ def classify(discrepancies, compatible_root, turbo_root, since=None, stat_now=_s
                 category = HARDLINK_ORDER
             elif _resident(d, c, t):
                 category = RESIDENT
+            elif _preallocated(d, c, t, state := live(d.path)):
+                category = PREALLOCATED
+            elif since is not None and _open_for_writing(d, c, t, state):
+                category = OPEN_FOR_WRITING
             else:
                 category = UNEXPLAINED
         classified.append((d, category))

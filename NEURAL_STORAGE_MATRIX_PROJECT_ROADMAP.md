@@ -387,8 +387,31 @@ Turbo bugs, fixed; a re-run is the owner's.**
   FSCTL_GET_RETRIEVAL_POINTERS, holes skipped), falling back to the old way
   when it can't be opened. Verified: the ten Ollama blobs the run listed
   now read exactly Turbo's numbers (10 of 10); a 200 MB sparse file with
-  10 bytes written reads 65,536 both ways. Still to do: run 3 (owner,
-  elevated).
+  10 bytes written reads 65,536 both ways.
+- Run 3 (2026-10-06 20:19, v1.13.0-31-g687dc9c): 6 of 8. The sparse files
+  are gone. Steps 7 and 8 fail on 14 and 170 unexplained, every example a
+  file being written right now: SQLite `-wal`/`-journal`, Edge leveldb
+  logs, the omp session `.jsonl`, ETW `.etl` logs. Probed live (no
+  elevation needed for those under C:\Users): all open for writing
+  (sharing violation on a read that refuses writers), and NTFS's own
+  allocation now is past the cluster-rounded length; `models.db-wal`
+  230,752 bytes, Compatible 233,472, NTFS 327,680 = Turbo's. Neither
+  engine is wrong: NTFS reserves room past the end of a file being
+  written (Turbo reads it from the record), and an open file's MFT record
+  lags its live size while its modified time can stay older than the run.
+  The helper also logged 238 unreachable records in step 1 (orphans,
+  reported, not a failure).
+- Done (2026-10-06): `compare_scan_engines.classify` has two categories
+  backed by a live check (`live_file_state.py`): "allocated past its end"
+  (Turbo's On Disk equals FileStandardInfo.AllocationSize now, above
+  Compatible's), and "open for writing" (size or On Disk differs and a
+  read refusing writers hits a sharing violation; only on a live run, never
+  in the checklist's own fixtures). A running python.exe and a closed
+  file aren't open for writing. Not done: whether the elevated checklist
+  can open the System32 `.etl` logs for these checks (unelevated: access
+  denied); the Compatible engine still bills an open file's length, not
+  its reserved space (opening every file to ask would slow every scan).
+  Still to do: run 4 (owner, elevated).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**

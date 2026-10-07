@@ -14,6 +14,8 @@ from compare_scan_engines import (
     HARDLINK_ORDER,
     MISMATCH,
     MISSING,
+    OPEN_FOR_WRITING,
+    PREALLOCATED,
     RESIDENT,
     ROLLUP,
     UNEXPLAINED,
@@ -24,6 +26,7 @@ from compare_scan_engines import (
     classify,
     on_disk_spelling,
 )
+from live_file_state import LiveState, live_file_state
 from storage_scanner.models import FLAG_HARDLINK_DUP, Node
 
 DATA = "C:\\Data"
@@ -112,11 +115,70 @@ def _stat(mtime=0.0, size=0, nlink=1):
     return SimpleNamespace(st_mtime=mtime, st_size=size, st_nlink=nlink)
 
 
-def _categories(compatible, turbo, stats=None, since=None):
-    """(path, field or kind) -> category, for every discrepancy."""
-    stats = stats or {}
-    classified = classify(_compare(compatible, turbo), compatible, turbo, since, stat_now=stats.get)
+def _categories(compatible, turbo, stats=None, since=None, live=None):
+    """(path, field or kind) -> category, for every discrepancy. `live` maps
+    a path to its LiveState; any other path's is unknown."""
+    stats, live = stats or {}, live or {}
+    classified = classify(
+        _compare(compatible, turbo),
+        compatible,
+        turbo,
+        since,
+        stat_now=stats.get,
+        live=lambda path: live.get(path, LiveState(None, False)),
+    )
     return {(d.path, d.field or d.kind): category for d, category in classified}
+
+
+def test_turbo_billing_what_ntfs_has_allocated_past_the_end_is_preallocated():
+    # A real open models.db-wal: 230,752 bytes, Compatible 233,472 on disk,
+    # Turbo and NTFS 327,680.
+    compatible = _tree_with_one_file(size=230_752, alloc_size=233_472)
+    turbo = _tree_with_one_file(size=230_752, alloc_size=327_680)
+    stats = {FILE_PATH: _stat(mtime=10.0, size=230_752), DATA: _stat(mtime=10.0)}
+
+    agrees = {FILE_PATH: LiveState(327_680, False)}
+    differs = {FILE_PATH: LiveState(262_144, False)}
+
+    assert (
+        _categories(compatible, turbo, stats, since=1_000.0, live=agrees)[(FILE_PATH, "alloc_size")]
+        == PREALLOCATED
+    )
+    assert (
+        _categories(compatible, turbo, stats, since=1_000.0, live=differs)[
+            (FILE_PATH, "alloc_size")
+        ]
+        == UNEXPLAINED
+    )
+
+
+def test_a_file_open_for_writing_is_a_moving_target_only_on_a_live_run():
+    # An Edge DIPS-wal: 8,272 bytes to Compatible, 0 in its MFT record, its
+    # modified time older than the run.
+    compatible = _tree_with_one_file(size=8_272, alloc_size=12_288)
+    turbo = _tree_with_one_file(size=0, alloc_size=0)
+    stats = {FILE_PATH: _stat(mtime=10.0, size=8_272), DATA: _stat(mtime=10.0)}
+    live = {FILE_PATH: LiveState(16_384, True)}
+
+    on_a_live_run = _categories(compatible, turbo, stats, since=1_000.0, live=live)
+    in_the_callers_folder = _categories(compatible, turbo, stats, since=None, live=live)
+
+    assert on_a_live_run[(FILE_PATH, "size")] == OPEN_FOR_WRITING
+    assert in_the_callers_folder[(FILE_PATH, "size")] == UNEXPLAINED
+
+
+@pytest.mark.windows
+def test_live_file_state_sees_a_writer_and_the_allocation(tmp_path):
+    path = tmp_path / "log.bin"
+    with open(path, "ab") as writer:
+        writer.write(b"x" * 10_000)
+        writer.flush()
+        while_open = live_file_state(str(path))
+    after_close = live_file_state(str(path))
+
+    assert while_open.open_for_writing
+    assert not after_close.open_for_writing
+    assert after_close.allocation >= 10_000
 
 
 def test_a_file_modified_after_the_run_started_changed_and_its_folder_total_follows():

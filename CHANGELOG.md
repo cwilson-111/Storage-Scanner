@@ -66,8 +66,10 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   saves a pass/fail report.
 - `compare_scan_engines.py` explains expected differences (files changed
   during the run, hard-link order, folders Compatible can't read, small
-  files stored inside the MFT, folder totals) and fails only on
-  differences nothing explains.
+  files stored inside the MFT, space NTFS reserved past a file's end,
+  files open for writing, folder totals) and fails only on differences
+  nothing explains. The last two are checked against the file as it is
+  at that moment.
 
 ### Developer
 
