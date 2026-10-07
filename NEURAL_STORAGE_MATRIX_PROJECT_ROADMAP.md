@@ -297,7 +297,8 @@ on this machine):
   folded into P1-3).
 
 **P1-3. Verify Turbo Scan and its cache on real hardware, with a written
-checklist — checklist ✅ (2026-10-03); the elevated run is the owner's.**
+checklist — checklist ✅ (2026-10-03); first real run 2026-10-06 found two
+Turbo bugs, fixed; a re-run is the owner's.**
 - Why: every Turbo-related section since the columnar cache (v1.8.0) lists
   a real Turbo Scan under "Not verified". The log does show one in-process
   elevated full scan on 2026-09-25 23:42 (1,478,444 records cached), but
@@ -335,14 +336,44 @@ checklist — checklist ✅ (2026-10-03); the elevated run is the owner's.**
   reported.
 - To run (elevated terminal, in the TreeSize folder):
   `.venv\Scripts\python.exe turbo_checklist.py`. Paste the report here.
-- Not done: the elevated run itself; the UAC launch (an elevated checklist
-  starts the helper directly).
+- Not done: the UAC launch (an elevated checklist starts the helper
+  directly).
 - Fixed after (2026-10-03): `compare_scan_engines.compare_path` asks both
   engines for the path's on-disk spelling (`on_disk_spelling`: 8.3 names
   expanded with GetLongPathNameW, each part's case from its folder's
   listing, drive upper-case; a junction stays itself, unlike realpath), so
   `c:\WINDOWS` no longer shows every file missing. Checked:
   `c:\WINDOWS\system32\DRIVERS` → `C:\Windows\System32\drivers`.
+- Run 1 (2026-10-06 20:01, elevated, v1.13.0-29-g7752e86; this machine's
+  MFT 1,580,544 records): 5 of 8 passed.
+  - Pass: 1 full read through the helper in 72.8 s (230 progress updates;
+    a file grown past its record mid-read showed its new size); 2
+    incremental in-process 0.2 s after create, grow, rename, move, delete
+    and a growth while loading the cache; 3 incremental through the helper
+    0.4 s, identical to Compatible; 5 a junction asked for directly fell
+    back; 6 the folder holding it, no differences.
+  - Fail 4 (compressed): sizes equal (8,400,000 bytes, 839,680 on disk),
+    but the `compact /exe` file was `is_link` in Turbo only.
+  - Fail 7 (`C:\Windows`, Compatible 20.8 s, Turbo 4.3 s) and 8
+    (`C:\Users`, 49.5 s vs 11.3 s): 29 and 246 unexplained, all "missing
+    from Turbo". Every one is a second hard link in the same folder as
+    its other name (same file ID, checked with os.stat): `vulkan-1.dll` /
+    `vulkan-1-999-0-0-0.dll`, `vulkaninfo.exe` / `vulkaninfo-1-999-0-0-0.exe`,
+    `lxss\lib\libcuda.so.1` / `libcuda.so.1.1`,
+    `.omp\agent\blobs\<hash>` / `<hash>.png`. Explained: 166,596 + 90
+    hard-link order, 19,897 + 133,279 small files inside their MFT record,
+    4 + 17 changed during the run, 93 unreadable to Compatible, folder
+    totals.
+- Fixed (2026-10-06): `mft_parser._dedup_file_names` kept one name per
+  parent folder (meant to drop a DOS 8.3 alias), so a second hard link in
+  the same folder vanished; it now drops only a DOS name beside a long one
+  and keeps every other name. `_is_link_tag`: a WOF reparse point
+  (`IO_REPARSE_TAG_WOF`, `compact /exe`, Compact OS) isn't a link, like a
+  cloud one (its filter hides the reparse bit, so Compatible sees a plain
+  file). The cache gets `PRAGMA user_version` (`_LAYOUT_VERSION` 1): a
+  cache from the old parser is wiped once, since an incremental scan never
+  re-reads unchanged records. Tests for all three fail on the old code.
+  Still to do: run the checklist again (the owner, elevated).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**

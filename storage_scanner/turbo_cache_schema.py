@@ -32,20 +32,26 @@ _RECORD_COLUMNS = ", ".join(_RECORD_FIELDS)
 # The same, from the cached_records table aliased as `r` in a join.
 _R_RECORD_COLUMNS = ", ".join(f"r.{field}" for field in _RECORD_FIELDS)
 
+# PRAGMA user_version of a cache whose rows today's parser would write the
+# same. Raise it whenever mft_parser changes what a record parses to: an
+# incremental scan re-reads only changed records, so older rows would stay
+# wrong. 1 (2026-10-06): a second hard link in the same folder kept, and a
+# WOF-compressed file not a link (both found by turbo_checklist.py).
+_LAYOUT_VERSION = 1
+
 
 def _create_tables_on(conn):
     cur = conn.cursor()
 
     cur.execute("PRAGMA table_info(cached_records)")
     existing_columns = {row[1] for row in cur.fetchall()}
-    if existing_columns and "is_link" not in existing_columns:
+    version = cur.execute("PRAGMA user_version").fetchone()[0]
+    if existing_columns and ("is_link" not in existing_columns or version < _LAYOUT_VERSION):
         # An older layout: one opaque JSON (record_json, before 2026-09-17)
-        # or pickle (record_blob, before 2026-09-24) value per record, or
+        # or pickle (record_blob, before 2026-09-24) value per record,
         # columns with an is_reparse_point flag (before 2026-09-29) that
-        # can't tell a OneDrive folder from a junction, stored alongside
-        # the allocated rather than the compressed size of compressed and
-        # sparse files. None of it is worth keeping: an incremental scan
-        # re-reads only changed records, so old rows would stay wrong.
+        # can't tell a OneDrive folder from a junction, or rows from a
+        # parser older than _LAYOUT_VERSION. None of it is worth keeping.
         # Wiping all three tables forces exactly one full rescan on the
         # next call: correct, just not cached yet. Dropping only
         # cached_records would leave a cached_volumes row that still
@@ -54,6 +60,7 @@ def _create_tables_on(conn):
         cur.execute("DROP TABLE cached_records")
         cur.execute("DROP TABLE IF EXISTS cached_volumes")
         conn.commit()
+    cur.execute(f"PRAGMA user_version = {_LAYOUT_VERSION}")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cached_volumes (

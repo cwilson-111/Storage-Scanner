@@ -48,6 +48,13 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   lists already did).
 - `compare_scan_engines.py` accepts a path typed in any case or with short
   (8.3) names; it used to report every file as missing.
+- Turbo Scan no longer leaves out a file's second name when both names of
+  a hard link are in the same folder (for example `vulkan-1.dll` and
+  `vulkan-1-999-0-0-0.dll` in System32).
+- Turbo Scan no longer marks a file compressed with `compact /exe`
+  (Compact OS) as a link.
+- The Turbo Scan cache is rebuilt once (one full read) after updating, so
+  it doesn't keep what the old version read wrong.
 
 ### Turbo Scan checks
 

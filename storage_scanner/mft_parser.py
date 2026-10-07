@@ -94,9 +94,9 @@ def _pack_frn(sequence_number, record_number):
 
 @dataclass
 class FileNameAttr:
-    """One resolved $FILE_NAME: one real hard link (a Win32/DOS-8.3 alias
-    pair sharing the same parent has already been collapsed to one entry
-    by _dedup_file_names -- see parse_base_record)."""
+    """One resolved $FILE_NAME: one real hard link (a DOS 8.3 alias beside
+    its Win32 name has already been dropped by _dedup_file_names -- see
+    parse_base_record)."""
 
     parent_frn: int
     name: str
@@ -118,10 +118,10 @@ class ParsedRecord:
 
     `is_link` marks a reparse point that stands for another path -- a
     junction, symbolic link or mount point -- which a scan never follows
-    below its root. A cloud-sync reparse point (OneDrive Files On-Demand)
-    isn't one: that folder holds its own local files, and the cloud filter
-    hides its reparse bit from ordinary callers, so the Compatible engine
-    walks it like any folder.
+    below its root (_is_link_tag). A cloud-sync reparse point (OneDrive Files
+    On-Demand) or a WOF-compressed file (`compact /exe`) isn't one: each
+    holds its own data, and its filter hides the reparse bit from ordinary
+    callers, so the Compatible engine treats it like any file or folder.
     """
 
     frn: int
@@ -173,17 +173,20 @@ def _parse_file_name(value):
 
 
 def _dedup_file_names(names):
-    """Collapse each (parent, Win32-name/DOS-8.3-alias) pair down to one
-    entry per real hard link -- keyed on parent_frn, preferring the Win32
-    (or Win32+DOS) name over a redundant pure-DOS alias for that same
-    parent. Different parent_frn values are always genuinely different
-    hard links and are never collapsed together."""
-    by_parent = {}
+    """One entry per real hard link. A pure-DOS 8.3 name (LONGFI~1.TXT) is
+    only an alias of the Win32 name beside it in the same folder, so it's
+    dropped when that folder has a Win32 (or Win32+DOS, or POSIX) name for
+    the record. Every other name is its own hard link, two in one folder
+    included (`blobs\\<hash>` and `blobs\\<hash>.png`, or `vulkan-1.dll` and
+    `vulkan-1-999-0-0-0.dll`, measured on a real C:): keying on the parent
+    alone once dropped one of them, which the Compatible engine lists."""
+    long_name_parents = {n.parent_frn for n in names if n.namespace != _FILENAME_NAMESPACE_DOS}
+    kept = {}
     for name in names:
-        existing = by_parent.get(name.parent_frn)
-        if existing is None or existing.namespace == _FILENAME_NAMESPACE_DOS:
-            by_parent[name.parent_frn] = name
-    return list(by_parent.values())
+        if name.namespace == _FILENAME_NAMESPACE_DOS and name.parent_frn in long_name_parents:
+            continue
+        kept.setdefault((name.parent_frn, name.name), name)
+    return list(kept.values())
 
 
 def _parse_attribute_list(raw_attr, record_source):
@@ -238,6 +241,15 @@ def _reparse_tag(raw_attr, record_source):
 
 def _is_cloud_tag(tag):
     return (tag & _REPARSE_TAG_CLOUD_MASK) == _REPARSE_TAG_CLOUD or tag == _REPARSE_TAG_ONEDRIVE
+
+
+def _is_link_tag(tag):
+    """Whether a reparse point with this tag stands for another path. Cloud
+    placeholders and WOF-compressed files (`compact /exe`, Compact OS) hold
+    their own data, and their filters hide the reparse bit from ordinary
+    callers, so the Compatible engine sees a plain file or folder; every
+    other tag (or an unreadable one, 0) is a link, the safe default."""
+    return not (_is_cloud_tag(tag) or tag == _REPARSE_TAG_WOF)
 
 
 def parse_base_record(record_number, record_source):
@@ -351,7 +363,7 @@ def parse_base_record(record_number, record_source):
         frn=_pack_frn(header["sequence_number"], record_number),
         is_directory=bool(header["flags"] & _RECORD_FLAG_IS_DIRECTORY),
         file_attributes=file_attributes,
-        is_link=is_reparse_point and not _is_cloud_tag(tag),
+        is_link=is_reparse_point and _is_link_tag(tag),
         is_cloud_placeholder=is_cloud_placeholder_attrs(file_attributes),
         mtime=std_info["mtime"],
         atime=std_info["atime"],

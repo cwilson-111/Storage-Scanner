@@ -367,6 +367,25 @@ def test_different_parent_names_are_both_kept_as_hard_links():
     assert parents == {10, 20}
 
 
+def test_two_hard_links_in_one_folder_are_both_kept():
+    # Measured on a real C:: `blobs\<hash>` and `blobs\<hash>.png`, and
+    # System32's vulkan-1.dll and vulkan-1-999-0-0-0.dll, are one record
+    # each; Turbo Scan once kept a single name per folder.
+    record = build_record(
+        18,
+        std_info_value=_std_info_value(),
+        file_names=[
+            (_file_name_value(50, "vulkan-1.dll", _NAMESPACE_WIN32), 1),
+            (_file_name_value(50, "VULKAN~1.DLL", _NAMESPACE_DOS), 2),
+            (_file_name_value(50, "vulkan-1-999-0-0-0.dll", _NAMESPACE_WIN32), 3),
+            (_file_name_value(50, "VULKAN~2.DLL", _NAMESPACE_DOS), 4),
+        ],
+    )
+    parsed = parse_base_record(18, _single_record_source(18, record))
+
+    assert sorted(n.name for n in parsed.names) == ["vulkan-1-999-0-0-0.dll", "vulkan-1.dll"]
+
+
 def test_baad_signature_is_skipped():
     record = build_record(
         19,
@@ -811,6 +830,7 @@ def test_recall_on_open_without_reparse_point_is_not_a_cloud_placeholder():
         (0x9000001A, False),  # IO_REPARSE_TAG_CLOUD: OneDrive Files On-Demand
         (0x9000701A, False),  # IO_REPARSE_TAG_CLOUD_7, another sync engine's variant
         (0x80000021, False),  # IO_REPARSE_TAG_ONEDRIVE
+        (0x80000017, False),  # IO_REPARSE_TAG_WOF: `compact /exe`, Compact OS
         (0xA0000003, True),  # IO_REPARSE_TAG_MOUNT_POINT: a junction or mount point
         (0xA000000C, True),  # IO_REPARSE_TAG_SYMLINK
         (None, True),  # the reparse bit with no readable tag: the safe default

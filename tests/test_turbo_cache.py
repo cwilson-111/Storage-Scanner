@@ -153,6 +153,28 @@ def test_init_cache_db_wipes_an_older_cache_layout(tmp_path, monkeypatch, old_co
     assert _row_count(db_path, "cached_records") == 0
 
 
+def test_a_cache_from_an_older_parser_is_wiped_once_and_todays_kept(tmp_path, monkeypatch):
+    # Same tables, rows from a parser that dropped a second hard link in a
+    # folder and called WOF-compressed files links: an incremental scan
+    # would never re-read those records, so the cache must start over.
+    db_path = _init_db(tmp_path, monkeypatch)
+    _save([_root()])
+    turbo_cache.init_cache_db()  # a restart of today's code keeps it
+    assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is not None
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA user_version = 0")  # as every cache before the version
+    conn.commit()
+    conn.close()
+    turbo_cache.init_cache_db()
+
+    assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is None
+    assert _row_count(db_path, "cached_records") == 0
+    _save([_root()])
+    turbo_cache.init_cache_db()
+    assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is not None
+
+
 # -- saving and loading ---------------------------------------------------------- #
 
 
