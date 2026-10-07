@@ -438,8 +438,20 @@ Turbo bugs, fixed; a re-run is the owner's.**
   writing now. The checklist prints up to 200 unexplained per step.
   Verified: a real scan of the p0exp folder reads `foo.\a.txt` 10 and
   `foo\a.txt` 6; a real OneDrive scan marks the reported files online-only
-  (0 on disk), 22 in all; tests for both fail on the old code. Still to
-  do: run 5 (owner, elevated).
+  (0 on disk), 22 in all; tests for both fail on the old code.
+- Run 5 (2026-10-06 21:09, v1.13.0-33-g6b303f9): 7 of 8. Step 8
+  (`C:\Users`, 839,178 files) passes: 103 allocated past their end, 130
+  changed during the run, 16 open for writing, 133,036 small files in
+  their MFT record, nothing unexplained. Step 7 (`C:\Windows`, 178,876
+  files; Compatible 24.9 s, Turbo 6.2 s) has one unexplained file, the same
+  one as run 4: `Windows\Temp\GooglePlayGamesServicesInstaller.exe.INFO`,
+  same size in both, On Disk 4,096 (Compatible) vs 0 (Turbo). Turbo's 0
+  means a non-resident `$DATA` with no clusters (compressed or sparse,
+  all zeros); both engines agree on such files made here (an all-zero
+  `compact /c` file and an empty sparse file read 0 both ways), so the
+  Compatible side likely couldn't query this one and fell back
+  [inference]. Needs a look from an elevated shell. The helper logged 2
+  unreachable records (238 in run 3).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**
