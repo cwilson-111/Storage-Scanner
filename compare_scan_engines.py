@@ -46,8 +46,10 @@ some differences are expected, so each one is classified (classify()):
   Compatible engine the rounded length, and the file's allocation right now
   equals Turbo Scan's (live_file_state);
 - open for writing: something holds the file open for writing now, so its
-  size is a moving target and its MFT record on disk lags the size the file
-  system reports, even when its modified time is older than the run;
+  size is a moving target and its MFT record on disk lags what the file
+  system reports -- its size, and even its name after a rename (a database
+  log renamed into place shows as missing from Turbo Scan) -- even when its
+  modified time is older than the run;
 - folder total of the above: a folder's size, on-disk size or file count
   differs only because something below it does.
 
@@ -294,10 +296,13 @@ def _preallocated(discrepancy, compat_node, turbo_node, live):
 
 
 def _open_for_writing(discrepancy, compat_node, turbo_node, live):
-    return (
-        _file_mismatch(discrepancy, compat_node, turbo_node)
-        and discrepancy.field in ("size", "alloc_size")
-        and live.open_for_writing
+    if not live.open_for_writing:
+        return False
+    if discrepancy.kind == MISSING:
+        return compat_node is not None and not compat_node.is_dir
+    return _file_mismatch(discrepancy, compat_node, turbo_node) and discrepancy.field in (
+        "size",
+        "alloc_size",
     )
 
 

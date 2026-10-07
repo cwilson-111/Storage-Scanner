@@ -370,7 +370,9 @@ class Checklist:
             examples = [d for d, found in result.classified if found == category]
             details.append(f"{count:,} {category}, e.g. {examples[0]}")
             if category == UNEXPLAINED:
-                details += [f"also {d}" for d in examples[1:10]]
+                # Every one, up to a sane limit: each is a finding to look
+                # at, and the first 10 alone hid what the rest were.
+                details += [f"also {d}" for d in examples[1:200]]
         if not result.classified:
             details.append("no differences")
         passed = not result.classified if since is None else not result.unexplained()

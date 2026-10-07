@@ -257,17 +257,18 @@ _ARCHIVE = 0x00000020
         # machine, where thousands of ordinary C:\Windows\Boot files raw-
         # MFT-read this way and are NOT cloud placeholders.
         (_ARCHIVE | _RECALL_ON_OPEN, False),
-        (_ARCHIVE | _RECALL_ON_DATA_ACCESS, False),
         (_ARCHIVE | _OFFLINE, False),
-        # A genuine cloud placeholder (OneDrive Files On-Demand etc.) is
-        # always also a reparse point (IO_REPARSE_TAG_CLOUD) -- only this
-        # combination should count.
+        # A real OneDrive file not downloaded here, as os.stat/os.scandir
+        # list it: the cloud filter hides its reparse bit (Turbo Scan, which
+        # reads the MFT, saw it as a placeholder; checklist run 4).
+        (_ARCHIVE | _RECALL_ON_DATA_ACCESS, True),
+        # As the MFT holds a cloud placeholder (IO_REPARSE_TAG_CLOUD).
         (_ARCHIVE | _REPARSE_POINT | _RECALL_ON_OPEN, True),
         (_ARCHIVE | _REPARSE_POINT | _RECALL_ON_DATA_ACCESS, True),
         (_ARCHIVE | _REPARSE_POINT | _OFFLINE, True),
     ],
 )
-def test_is_cloud_placeholder_attrs_requires_reparse_point(attrs, expected):
+def test_is_cloud_placeholder_attrs(attrs, expected):
     assert alloc_size.is_cloud_placeholder_attrs(attrs) is expected
 
 

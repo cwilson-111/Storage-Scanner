@@ -411,7 +411,35 @@ Turbo bugs, fixed; a re-run is the owner's.**
   can open the System32 `.etl` logs for these checks (unelevated: access
   denied); the Compatible engine still bills an open file's length, not
   its reserved space (opening every file to ask would slow every scan).
-  Still to do: run 4 (owner, elevated).
+- Run 4 (2026-10-06 20:28, v1.13.0-32-g8b729d0): 6 of 8; 1 and 25
+  unexplained left of ~1M files. The new categories took 11 + 102
+  "allocated past its end" and 2 + 26 "open for writing"; elevated, the
+  System32 `.etl` logs opened fine. What was left:
+  - `Temp\p0exp-…\foo.\a.txt` (the P0-3 experiment's folder): Compatible
+    read `foo.` as `foo`, its namesake beside it (6 bytes, not 10). A real
+    Compatible bug.
+  - OneDrive files `is_cloud_placeholder` in Turbo only: they list as
+    0x400020 (RECALL_ON_DATA_ACCESS, no reparse bit: the cloud filter hides
+    it from os.stat), and the Compatible test wanted a reparse bit. A real
+    Compatible bug: these are online-only.
+  - `WebCache\V01.log` missing from Turbo: Edge's database renamed it into
+    place from V01tmp.log at 20:29:31, during the run, and holds it open;
+    its MFT record can still carry the old name.
+  - `Windows\Temp\GooglePlayGamesServicesInstaller.exe.INFO`: On Disk 4,096
+    vs Turbo 0; can't be read unelevated. Open.
+  - Only 10 unexplained were printed per step, so the rest weren't seen.
+- Fixed (2026-10-06): the Compatible engine lists and reads a folder with
+  a part ending in a dot or space through its `\\?\` path
+  (`scanner._literal_path`; the tree keeps the ordinary path), and a name
+  ending so likewise; `is_cloud_placeholder_attrs` takes
+  RECALL_ON_DATA_ACCESS alone as online-only (RECALL_ON_OPEN and OFFLINE
+  still need the reparse bit, which keeps Compact OS files out). "Open
+  for writing" also covers a file missing from Turbo that's open for
+  writing now. The checklist prints up to 200 unexplained per step.
+  Verified: a real scan of the p0exp folder reads `foo.\a.txt` 10 and
+  `foo\a.txt` 6; a real OneDrive scan marks the reported files online-only
+  (0 on disk), 22 in all; tests for both fail on the old code. Still to
+  do: run 5 (owner, elevated).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**

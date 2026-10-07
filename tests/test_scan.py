@@ -227,3 +227,25 @@ def test_find_inaccessible_paths_includes_the_root_itself_when_it_errored():
     root = detached_file("/solo.bin", flags=row_flags(error=True))
 
     assert find_inaccessible_paths(root) == [root]
+
+
+@pytest.mark.windows
+def test_a_name_ending_in_a_dot_is_scanned_as_itself_not_its_namesake(tmp_path):
+    # Win32 reads `foo.` as `foo`. Found on a real drive by the Turbo Scan
+    # checklist: foo.\a.txt (10 bytes) was listed as foo\a.txt's 6.
+    literal = "\\\\?\\" + str(tmp_path)
+    for folder, size in (("foo", 6), ("foo.", 10)):
+        os.mkdir(os.path.join(literal, folder))
+        with open(os.path.join(literal, folder, "a.txt"), "wb") as f:
+            f.write(b"x" * size)
+    with open(os.path.join(literal, "b. "), "wb") as f:
+        f.write(b"x" * 3)
+
+    root = _run_scan(tmp_path)
+    folders = _by_name(root)
+
+    assert _by_name(folders["foo."])["a.txt"].size == 10
+    assert _by_name(folders["foo"])["a.txt"].size == 6
+    assert folders["foo."].path == os.path.join(str(tmp_path), "foo.")
+    assert _by_name(root)["b. "].size == 3
+    assert root.size == 19

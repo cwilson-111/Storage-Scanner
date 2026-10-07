@@ -44,6 +44,21 @@ def _worker_count():
     return min(8, max(4, cpu))
 
 
+def _needs_literal_path(name):
+    """Win32 strips a trailing dot or space from every path it's handed, so
+    `foo.` reads as `foo` -- another folder, if both exist."""
+    return name[-1:] in (".", " ")
+
+
+def _literal_path(path):
+    r"""`path` in the \\?\ form Win32 passes through untouched."""
+    if path.startswith("\\\\?\\"):
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
 def _scan_file(path):
     """The FileNode for a scan target that is itself a file."""
     try:
@@ -137,11 +152,22 @@ def scan(path, progress_q, cancel_event, workers=None):
         local_alloc = 0
         entries_read = 0
         subdirs = []
+        # A folder with a part ending in a dot or space (anywhere above it)
+        # is listed and read through its literal path; the tree keeps the
+        # ordinary one.
+        literal = _IS_WINDOWS and any(_needs_literal_path(part) for part in node.path.split(os.sep))
         try:
-            with os.scandir(node.path) as listing:
+            with os.scandir(_literal_path(node.path) if literal else node.path) as listing:
                 for entry in listing:
                     if cancel_event.is_set():
                         return
+                    if literal:
+                        entry_path = os.path.join(node.path, entry.name)
+                        fs_path = entry.path
+                    else:
+                        entry_path = fs_path = entry.path
+                        if _IS_WINDOWS and _needs_literal_path(entry.name):
+                            fs_path = _literal_path(entry_path)
                     try:
                         if _IS_WINDOWS:
                             # entry.stat() on Windows never populates real
@@ -153,7 +179,7 @@ def scan(path, progress_q, cancel_event, workers=None):
                             # to get accurate hard-link identity -- without
                             # it, hard-link dedup below silently never
                             # triggers on Windows (every ino comes back 0).
-                            st_info = os.stat(entry.path, follow_symlinks=False)
+                            st_info = os.stat(fs_path, follow_symlinks=False)
                         else:
                             st_info = entry.stat(follow_symlinks=False)
                     except OSError:
@@ -173,7 +199,7 @@ def scan(path, progress_q, cancel_event, workers=None):
                         is_dir = False
 
                     if is_dir:
-                        child = Node(entry.path, entry.name)
+                        child = Node(entry_path, entry.name)
                         child.is_cloud_placeholder = is_placeholder
                         if st_info is not None:
                             child.mtime = st_info.st_mtime
@@ -194,7 +220,7 @@ def scan(path, progress_q, cancel_event, workers=None):
                             node.add_file(entry.name, flags=flags | FLAG_ERROR)
                         else:
                             size = st_info.st_size
-                            alloc_size = _measure_alloc_size(entry.path, st_info)
+                            alloc_size = _measure_alloc_size(fs_path, st_info)
                             ino = getattr(st_info, "st_ino", 0)
                             nlink = getattr(st_info, "st_nlink", 1)
                             if ino and nlink > 1:

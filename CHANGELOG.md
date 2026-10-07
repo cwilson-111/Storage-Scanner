@@ -58,6 +58,12 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 - On Disk is right for sparse files in a normal scan: NTFS gives them
   whole 64 KiB units, which the old reading missed (a 1.6 KB sparse file
   showed 4 KB on disk instead of 64 KB). Turbo Scan already had it right.
+- A normal scan reads a folder or file whose name ends in a dot or a space
+  as itself. It used to read `foo.` as `foo`, a different folder when both
+  exist.
+- A normal scan recognises OneDrive files that aren't downloaded (shown as
+  online-only, 0 on disk), even though Windows hides their cloud marker
+  from it. Turbo Scan already did.
 
 ### Turbo Scan checks
 

@@ -167,6 +167,22 @@ def test_a_file_open_for_writing_is_a_moving_target_only_on_a_live_run():
     assert in_the_callers_folder[(FILE_PATH, "size")] == UNEXPLAINED
 
 
+def test_a_file_open_for_writing_under_a_name_turbo_lacks_is_a_moving_target():
+    # Edge's WebCache\V01.log, renamed into place from V01tmp.log and held
+    # open: its MFT record on disk can still carry the old name.
+    compatible = _tree_with_one_file()
+    turbo = _root(size=100, alloc_size=4096, file_count=1)
+    stats = {FILE_PATH: _stat(mtime=10.0, size=100), DATA: _stat(mtime=10.0)}
+
+    held_open = _categories(
+        compatible, turbo, stats, since=1_000.0, live={FILE_PATH: LiveState(4096, True)}
+    )
+    closed = _categories(compatible, turbo, stats, since=1_000.0)
+
+    assert held_open[(FILE_PATH, MISSING)] == OPEN_FOR_WRITING
+    assert closed[(FILE_PATH, MISSING)] == UNEXPLAINED
+
+
 @pytest.mark.windows
 def test_live_file_state_sees_a_writer_and_the_allocation(tmp_path):
     path = tmp_path / "log.bin"
