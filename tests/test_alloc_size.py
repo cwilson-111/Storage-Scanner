@@ -269,3 +269,47 @@ _ARCHIVE = 0x00000020
 )
 def test_is_cloud_placeholder_attrs_requires_reparse_point(attrs, expected):
     assert alloc_size.is_cloud_placeholder_attrs(attrs) is expected
+
+
+def _sparse_file(path, size, data_at=0, data=b""):
+    import msvcrt
+    from ctypes import wintypes
+
+    with open(path, "wb") as f:
+        returned = wintypes.DWORD()
+        assert ctypes.windll.kernel32.DeviceIoControl(
+            wintypes.HANDLE(msvcrt.get_osfhandle(f.fileno())),
+            0x000900C4,  # FSCTL_SET_SPARSE
+            None,
+            0,
+            None,
+            0,
+            ctypes.byref(returned),
+            None,
+        )
+        f.seek(data_at)
+        f.write(data)
+        f.truncate(size)
+
+
+@pytest.mark.windows
+def test_a_sparse_file_is_billed_the_clusters_ntfs_gave_it(tmp_path):
+    # NTFS gives a sparse file whole compression units (64 KiB with 4 KiB
+    # clusters), and GetCompressedFileSizeW never answers more than the
+    # logical size: a real 1,615-byte sparse Ollama blob read 4,096 on disk
+    # in the Compatible engine and 65,536 in Turbo Scan and in its map.
+    small = tmp_path / "small.bin"
+    _sparse_file(small, 1615, data=b"x" * 1615)
+    cluster = alloc_size._get_cluster_size(str(small))
+
+    billed = _measure_alloc_size(str(small), os.stat(small))
+
+    assert billed > cluster and billed % cluster == 0
+
+
+@pytest.mark.windows
+def test_a_sparse_files_holes_take_no_space(tmp_path):
+    holes = tmp_path / "holes.bin"
+    _sparse_file(holes, 200 * 1024 * 1024, data_at=100 * 1024 * 1024, data=b"x" * 10)
+
+    assert 0 < _measure_alloc_size(str(holes), os.stat(holes)) <= 1024 * 1024

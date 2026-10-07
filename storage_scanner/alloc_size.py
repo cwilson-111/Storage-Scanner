@@ -151,14 +151,116 @@ def _windows_alloc_size(path, fallback):
         return fallback
 
 
+_FSCTL_GET_RETRIEVAL_POINTERS = 0x00090073
+_FILE_READ_ATTRIBUTES = 0x80
+_SHARE_ALL = 0x7
+_OPEN_EXISTING = 3
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+_ERROR_MORE_DATA = 234
+_EXTENT_BUFFER_BYTES = 64 * 1024
+
+
+def _sparse_alloc_size(path):
+    """Bytes NTFS has allocated to a sparse file, from its cluster map
+    (FSCTL_GET_RETRIEVAL_POINTERS: every extent that isn't a hole), or None
+    when that can't be read -- including a file with no clusters at all,
+    whose data lives in its MFT record.
+
+    GetCompressedFileSizeW is no good here: it never answers more than the
+    logical size, while NTFS gives a sparse file whole 64 KiB compression
+    units. Measured on a real C: (2026-10-06): a 1,615-byte sparse file
+    (an Ollama blob) has 65,536 bytes allocated and GetCompressedFileSizeW
+    says 1,615; a 4,661,211,424-byte one has 4,661,248,000. Turbo Scan,
+    which reads the MFT, already counted these right. A file with holes
+    (200 MB logical, 10 bytes written) reads 65,536 both ways."""
+    from ctypes import wintypes
+
+    cluster_size = _get_cluster_size(path)
+    if not cluster_size:
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]  # fmt: skip
+    kernel32.DeviceIoControl.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+        wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    ]  # fmt: skip
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.CreateFileW(
+        path,
+        _FILE_READ_ATTRIBUTES,
+        _SHARE_ALL,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS,
+        None,
+    )
+    if handle in (None, wintypes.HANDLE(-1).value):
+        return None
+    try:
+        clusters, next_vcn = 0, 0
+        out = ctypes.create_string_buffer(_EXTENT_BUFFER_BYTES)
+        while True:
+            start = ctypes.c_longlong(next_vcn)
+            returned = wintypes.DWORD()
+            ok = kernel32.DeviceIoControl(
+                handle,
+                _FSCTL_GET_RETRIEVAL_POINTERS,
+                ctypes.byref(start),
+                8,
+                out,
+                _EXTENT_BUFFER_BYTES,
+                ctypes.byref(returned),
+                None,
+            )
+            if not ok and ctypes.get_last_error() != _ERROR_MORE_DATA:
+                return None  # no clusters (resident), or unreadable
+            # RETRIEVAL_POINTERS_BUFFER: ExtentCount, padding, StartingVcn,
+            # then (NextVcn, Lcn) pairs; Lcn -1 is a hole.
+            count = int.from_bytes(out.raw[0:4], "little")
+            if not count:
+                break
+            vcn = int.from_bytes(out.raw[8:16], "little", signed=True)
+            for i in range(count):
+                at = 16 + i * 16
+                extent_end = int.from_bytes(out.raw[at : at + 8], "little", signed=True)
+                lcn = int.from_bytes(out.raw[at + 8 : at + 16], "little", signed=True)
+                if lcn != -1:
+                    clusters += extent_end - vcn
+                vcn = extent_end
+            next_vcn = vcn
+            if ok:
+                break
+        return clusters * cluster_size
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _measure_alloc_size(path, st_info):
     """Actual on-disk bytes for a file, cross-platform.
 
     POSIX systems already report this directly via `st_blocks` (512-byte
     units) — that alone correctly reflects sparse files. Windows has no
-    such field, so it needs its own API call.
+    such field, so it needs its own API call: a sparse file's cluster map
+    (_sparse_alloc_size), else GetCompressedFileSizeW. A cloud placeholder
+    is never opened, so nothing can make it download.
     """
     if _IS_WINDOWS:
+        attrs = getattr(st_info, "st_file_attributes", 0)
+        if (
+            attrs & stat.FILE_ATTRIBUTE_SPARSE_FILE
+            and not attrs & stat.FILE_ATTRIBUTE_COMPRESSED
+            and not is_cloud_placeholder_attrs(attrs)
+        ):
+            try:
+                allocated = _sparse_alloc_size(path)
+            except OSError:
+                allocated = None
+            if allocated is not None:
+                return allocated
         return _windows_alloc_size(path, st_info.st_size)
     st_blocks = getattr(st_info, "st_blocks", None)
     return st_blocks * 512 if st_blocks is not None else st_info.st_size

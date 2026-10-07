@@ -373,7 +373,22 @@ Turbo bugs, fixed; a re-run is the owner's.**
   file). The cache gets `PRAGMA user_version` (`_LAYOUT_VERSION` 1): a
   cache from the old parser is wiped once, since an incremental scan never
   re-reads unchanged records. Tests for all three fail on the old code.
-  Still to do: run the checklist again (the owner, elevated).
+- Run 2 (2026-10-06 20:10, v1.13.0-30-g403ca49): 6 of 8. Steps 1–6 pass
+  (4 now has no differences); nothing is missing from Turbo any more. 7
+  and 8 fail on 18 and 148 unexplained, all `alloc_size`, Turbo higher by
+  whole 64 KiB units (Ollama blobs: 4,096 vs 65,536; System32 `.etl`
+  logs; `SoftwareDistribution\Download`).
+- Fixed (2026-10-06): the Compatible engine was the wrong one. Those are
+  sparse files, which NTFS allocates in 64 KiB compression units, and
+  GetCompressedFileSizeW never answers more than the logical size
+  (measured: a 1,615-byte sparse blob → 1,615, cluster map 65,536). A
+  sparse, non-compressed file that isn't a cloud placeholder is now billed
+  from its cluster map (`alloc_size._sparse_alloc_size`,
+  FSCTL_GET_RETRIEVAL_POINTERS, holes skipped), falling back to the old way
+  when it can't be opened. Verified: the ten Ollama blobs the run listed
+  now read exactly Turbo's numbers (10 of 10); a 200 MB sparse file with
+  10 bytes written reads 65,536 both ways. Still to do: run 3 (owner,
+  elevated).
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**

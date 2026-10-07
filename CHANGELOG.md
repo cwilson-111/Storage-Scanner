@@ -55,6 +55,9 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   (Compact OS) as a link.
 - The Turbo Scan cache is rebuilt once (one full read) after updating, so
   it doesn't keep what the old version read wrong.
+- On Disk is right for sparse files in a normal scan: NTFS gives them
+  whole 64 KiB units, which the old reading missed (a 1.6 KB sparse file
+  showed 4 KB on disk instead of 64 KB). Turbo Scan already had it right.
 
 ### Turbo Scan checks
 
