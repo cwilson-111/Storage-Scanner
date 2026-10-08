@@ -160,6 +160,28 @@ def test_symlinked_directory_is_not_traversed(tmp_path):
     assert root.size == children["real"].size + link_node.size
 
 
+@pytest.mark.windows
+def test_symlinked_file_is_billed_its_own_allocation_not_its_targets(tmp_path):
+    # GetCompressedFileSizeW follows a symbolic link, so a link next to a
+    # 50,000-byte file was billed that file's clusters a second time
+    # (checklist runs 4-5: a glog .INFO link in Windows\Temp).
+    target = tmp_path / "target.log"
+    target.write_bytes(b"y" * 50000)
+    link = tmp_path / "link.INFO"
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("could not create a symlink in this environment")
+
+    root = _run_scan(tmp_path)
+    children = _by_name(root)
+
+    assert children["link.INFO"].is_link
+    assert children["target.log"].alloc_size >= 50000
+    assert children["link.INFO"].alloc_size < 50000
+    assert root.alloc_size == children["target.log"].alloc_size + children["link.INFO"].alloc_size
+
+
 def test_scanning_a_single_file_never_posts_a_live_tree(tmp_path):
     # A single-file target returns instantly -- there's no in-progress
     # tree worth watching, so scan() shouldn't claim there is one.

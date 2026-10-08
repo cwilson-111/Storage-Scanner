@@ -6,7 +6,11 @@ import stat
 import sys
 import threading
 
-from storage_scanner.alloc_size import _measure_alloc_size, is_cloud_placeholder_attrs
+from storage_scanner.alloc_size import (
+    _link_alloc_size,
+    _measure_alloc_size,
+    is_cloud_placeholder_attrs,
+)
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import (
     FLAG_CLOUD_PLACEHOLDER,
@@ -220,7 +224,10 @@ def scan(path, progress_q, cancel_event, workers=None):
                             node.add_file(entry.name, flags=flags | FLAG_ERROR)
                         else:
                             size = st_info.st_size
-                            alloc_size = _measure_alloc_size(fs_path, st_info)
+                            if flags & FLAG_LINK:
+                                alloc_size = _link_alloc_size(fs_path, st_info)
+                            else:
+                                alloc_size = _measure_alloc_size(fs_path, st_info)
                             ino = getattr(st_info, "st_ino", 0)
                             nlink = getattr(st_info, "st_nlink", 1)
                             if ino and nlink > 1:

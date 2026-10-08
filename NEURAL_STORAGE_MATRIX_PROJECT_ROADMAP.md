@@ -452,6 +452,22 @@ Turbo bugs, fixed; a re-run is the owner's.**
   Compatible side likely couldn't query this one and fell back
   [inference]. Needs a look from an elevated shell. The helper logged 2
   unreachable records (238 in run 3).
+- Diagnosed (2026-10-08, owner's elevated `fsutil file layout`): that file
+  is a file symbolic link (tag 0xA000000C; glog's `<program>.INFO` link to
+  its newest log) with an empty resident `$DATA`. The Compatible engine
+  took its size from lstat (0) but its On Disk from GetCompressedFileSizeW,
+  which follows the link: the target's 4,096 bytes, counted a second time.
+  The junction steps never showed it (that call reads 0 for a folder).
+- Fixed (2026-10-08): `alloc_size._link_alloc_size` bills a link (any
+  reparse point Compatible marks FLAG_LINK, the same set Turbo's
+  `_is_link_tag` calls a link) from its own lstat, rounded to clusters;
+  the checklist's link step (now "Folder holding a junction and a file
+  symlink") adds a `mklink` file link to the junction's `a.bin`.
+  Verified: a scan with the link's lstat simulated (reparse bit, size 0)
+  read link 0 / 4,096 and folder 8,192 before, link 0 / 0 and folder
+  4,096 after. `tests/test_scan.py` has a real-symlink test; it skips
+  where links can't be made (unelevated without Developer Mode), so it
+  runs in CI and elevated. Next: checklist run 6.
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**

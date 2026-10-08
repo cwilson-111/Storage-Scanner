@@ -271,3 +271,20 @@ def _measure_alloc_size(path, st_info):
         return _windows_alloc_size(path, st_info.st_size)
     st_blocks = getattr(st_info, "st_blocks", None)
     return st_blocks * 512 if st_blocks is not None else st_info.st_size
+
+
+def _link_alloc_size(path, st_info):
+    """On-disk bytes of a link itself (symbolic link, junction, mount point),
+    from its own lstat `st_info`, never its target's.
+
+    GetCompressedFileSizeW and the cluster-map query both open by path and
+    so follow a symbolic link: a glog `<program>.INFO` link in
+    Windows\\Temp was billed its target log's 4,096 bytes while Turbo Scan,
+    reading the link's own empty $DATA, said 0 (checklist runs 4 and 5,
+    2026-10-06). A link's $DATA is normally empty, so this is 0; one that
+    holds data is rounded up to whole clusters like any ordinary file."""
+    if not _IS_WINDOWS:
+        return _measure_alloc_size(path, st_info)
+    size = st_info.st_size
+    cluster_size = _get_cluster_size(path) if size else None
+    return -(-size // cluster_size) * cluster_size if cluster_size else size

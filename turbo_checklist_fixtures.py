@@ -191,9 +191,14 @@ def make_junction(junction, target):
     run_tool(["cmd", "/c", "mklink", "/J", junction, target])
 
 
+def make_file_link(link, target):
+    """A file symbolic link (mklink with no switch; needs elevation)."""
+    run_tool(["cmd", "/c", "mklink", link, target])
+
+
 def remove_scratch(scratch):
     """Delete the scratch folder, or say why it couldn't be. shutil.rmtree
-    removes a junction as a link, never what it points to."""
+    removes a junction or symbolic link as a link, never what it points to."""
     try:
         shutil.rmtree(scratch)
     except OSError as exc:

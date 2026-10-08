@@ -64,12 +64,17 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 - A normal scan recognises OneDrive files that aren't downloaded (shown as
   online-only, 0 on disk), even though Windows hides their cloud marker
   from it. Turbo Scan already did.
+- A normal scan bills a file symbolic link its own space on disk (none),
+  not its target's: the link and its target were both counted, so a folder
+  holding a link to a 3 KB file showed 8 KB on disk instead of 4 KB.
+  Turbo Scan already had it right.
 
 ### Turbo Scan checks
 
 - `turbo_checklist.py`: one command in an elevated terminal checks Turbo
   Scan and its cache against the Compatible engine on your own drive and
-  saves a pass/fail report.
+  saves a pass/fail report. Its link step now holds a file symbolic link
+  as well as a junction.
 - `compare_scan_engines.py` explains expected differences (files changed
   during the run, hard-link order, folders Compatible can't read, small
   files stored inside the MFT, space NTFS reserved past a file's end,

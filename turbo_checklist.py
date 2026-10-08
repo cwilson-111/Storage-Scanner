@@ -22,8 +22,8 @@ the one before it left):
    step 2 and match the Compatible engine field for field.
 4.-8. compare_scan_engines.compare_path() against the Compatible engine on
    a compressed folder (compact /c and compact /exe), a junction (mklink /J)
-   asked for directly, the folder holding it, %SystemRoot% and the folder
-   holding the user profiles.
+   asked for directly, the folder holding it and a file symbolic link
+   (mklink), %SystemRoot% and the folder holding the user profiles.
 
 Usage:
     python turbo_checklist.py [--results FILE]
@@ -72,6 +72,7 @@ from turbo_checklist_fixtures import (
     expected_sizes,
     file_sizes,
     make_change,
+    make_file_link,
     make_junction,
     remove_scratch,
     run_tool,
@@ -144,6 +145,7 @@ class Checklist:
         self.logs = os.path.join(scratch, "logs")
         self.linked = os.path.join(scratch, "linked")
         self.junction = os.path.join(self.linked, "junction")
+        self.file_link = os.path.join(self.linked, "file_link.bin")
         self.expected = expected_sizes()
         self.helper_log_lines = 0
 
@@ -158,7 +160,7 @@ class Checklist:
             ("Incremental scan through the elevated helper", self.helper_incremental_scan),
             ("Compressed folder (compact /c, compact /exe)", self.compressed_folder),
             ("Junction asked for directly", self.junction_root),
-            ("Folder holding a junction", self.junction_parent),
+            ("Folder holding a junction and a file symlink", self.junction_parent),
             (windows, lambda: self._engines(windows, time.time())[:2]),
             (users, lambda: self._engines(users, time.time())[:2]),
         ]
@@ -315,11 +317,15 @@ class Checklist:
         return passed, details
 
     def _make_junction(self):
+        target = os.path.join(self.scratch, "junction_target")
         if not os.path.lexists(self.junction):
-            target = os.path.join(self.scratch, "junction_target")
             write_files(target, JUNCTION_TARGET_FILES)
             write_files(self.linked, BESIDE_THE_JUNCTION)
             make_junction(self.junction, target)
+        if not os.path.lexists(self.file_link):
+            # Billed its target's clusters by the Compatible engine until
+            # checklist run 5 (a glog .INFO link in Windows\Temp).
+            make_file_link(self.file_link, os.path.join(target, "a.bin"))
 
     def junction_root(self):
         self._make_junction()
@@ -342,9 +348,11 @@ class Checklist:
         self._make_junction()
         passed, details, result = self._engines(self.linked, since=None)
         if result.turbo_ran:
-            link = _flatten(result.turbo_root).get(self.junction)
-            shown = "missing" if link is None else f"is_link={link.is_link}, size={link.size:,}"
-            details.append(f"the junction in Turbo Scan's tree: {shown}")
+            turbo_tree = _flatten(result.turbo_root)
+            for label, path in (("junction", self.junction), ("file symlink", self.file_link)):
+                link = turbo_tree.get(path)
+                shown = "missing" if link is None else f"is_link={link.is_link}, size={link.size:,}"
+                details.append(f"the {label} in Turbo Scan's tree: {shown}")
         return passed, details
 
     def _engines(self, path, since):
