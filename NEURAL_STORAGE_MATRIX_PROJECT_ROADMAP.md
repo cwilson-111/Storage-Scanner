@@ -1553,10 +1553,15 @@ and `StorageScanner.exe <folder>` 2026-09-29; Scoop and winget 2026-10-02).**
   published_at (UTC). The v1.13.0 ZIP holds `StorageScanner\`; the
   bucket's `pre_install` run in PowerShell on it left `StorageScanner.exe`
   and `_internal` at the top, and that exe scanned.
-- Not done: Scoop itself isn't installed here, so `scoop install` wasn't run;
-  submitting to microsoft/winget-pkgs is an owner action (needs a GitHub
-  token); the folder entry wasn't clicked in Explorer. Signing (P1-9)
-  would avoid SmartScreen on winget installs.
+- Submitted to winget (2026-10-09): v1.14.0 as
+  [microsoft/winget-pkgs#449235](https://github.com/microsoft/winget-pkgs/pull/449235),
+  CLA signed. wingetcreate 1.12.13 knows schemas only up to 1.12.0 and
+  rejected the 1.28.0 headers, so the manifests use 1.10.0. Checks 01-07
+  passed (URLs, policy, installer malware scan); installation
+  validation was running. Later releases: `wingetcreate update` (README).
+- Not done: Scoop itself isn't installed here, so `scoop install` wasn't
+  run; the folder entry wasn't clicked in Explorer. Signing (P1-9) would
+  avoid SmartScreen on winget installs.
 
 ### P3 — later or strategic
 
