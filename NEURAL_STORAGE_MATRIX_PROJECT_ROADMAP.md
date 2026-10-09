@@ -1722,8 +1722,9 @@ readers need a different toolkit.**
   privacy note; idea form), and `SECURITY.md`.
 - Verified: in the real app the Help menu copied the text above to the
   clipboard, without the user name or any path; the issue-form YAML parses.
-- Not done: GitHub's private vulnerability reporting, which SECURITY.md
-  points to, has to be turned on in the repository's settings (owner only).
+- Private vulnerability reporting, which SECURITY.md points to, is on
+  (2026-10-08; the API reports `enabled: true`). CWE isn't required of
+  reporters; the maintainer adds it when drafting an advisory.
 
 **P3-11. Dead code and stale instructions — ✅ done (2026-09-29)**
 - Why: `history.py:759-823` (`format_bytes`, `create_usage_history_chart`,
