@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
 
 PackageIdentifier: cwilson-111.StorageScanner
 PackageVersion: 1.14.0
@@ -11,4 +11,4 @@ Installers:
   InstallerUrl: https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.14.0/StorageScanner.exe
   InstallerSha256: DBB705546D183EB109C7F6817296FEABE1BF110B13473F8299DFDC24CC2D6543
 ManifestType: installer
-ManifestVersion: 1.28.0
+ManifestVersion: 1.10.0

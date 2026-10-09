@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 
 PackageIdentifier: cwilson-111.StorageScanner
 PackageVersion: 1.14.0
@@ -26,4 +26,4 @@ Tags:
 - treemap
 ReleaseNotesUrl: https://github.com/cwilson-111/Storage-Scanner/releases/tag/v1.14.0
 ManifestType: defaultLocale
-ManifestVersion: 1.28.0
+ManifestVersion: 1.10.0
