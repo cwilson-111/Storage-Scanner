@@ -273,13 +273,19 @@ def test_is_cloud_placeholder_attrs(attrs, expected):
 
 
 def _sparse_file(path, size, data_at=0, data=b""):
+    """A sparse file of `size` bytes holding `data` at `data_at`, every other
+    byte a hole. The holes are punched (FSCTL_SET_ZERO_DATA) after writing:
+    how much NTFS allocates around a cached write past a sparse file's valid
+    data varies by machine (7 units here, 453 on a CI runner), so writing
+    alone doesn't make them reliably empty."""
     import msvcrt
     from ctypes import wintypes
 
     with open(path, "wb") as f:
+        handle = wintypes.HANDLE(msvcrt.get_osfhandle(f.fileno()))
         returned = wintypes.DWORD()
         assert ctypes.windll.kernel32.DeviceIoControl(
-            wintypes.HANDLE(msvcrt.get_osfhandle(f.fileno())),
+            handle,
             0x000900C4,  # FSCTL_SET_SPARSE
             None,
             0,
@@ -291,6 +297,21 @@ def _sparse_file(path, size, data_at=0, data=b""):
         f.seek(data_at)
         f.write(data)
         f.truncate(size)
+        f.flush()
+        for start, end in ((0, data_at), (data_at + len(data), size)):
+            if start >= end:
+                continue
+            zero = (ctypes.c_longlong * 2)(start, end)  # FILE_ZERO_DATA_INFORMATION
+            assert ctypes.windll.kernel32.DeviceIoControl(
+                handle,
+                0x000980C8,  # FSCTL_SET_ZERO_DATA
+                ctypes.byref(zero),
+                ctypes.sizeof(zero),
+                None,
+                0,
+                ctypes.byref(returned),
+                None,
+            )
 
 
 @pytest.mark.windows

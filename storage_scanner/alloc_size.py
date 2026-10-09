@@ -178,8 +178,9 @@ def _sparse_alloc_size(path):
     units. Measured on a real C: (2026-10-06): a 1,615-byte sparse file
     (an Ollama blob) has 65,536 bytes allocated and GetCompressedFileSizeW
     says 1,615; a 4,661,211,424-byte one has 4,661,248,000. Turbo Scan,
-    which reads the MFT, already counted these right. A file with holes
-    (200 MB logical, 10 bytes written) reads 65,536 both ways."""
+    which reads the MFT, already counted these right. A 200 MB file with
+    10 bytes written and every other byte punched out as a hole
+    (FSCTL_SET_ZERO_DATA) reads 65,536."""
     from ctypes import wintypes
 
     cluster_size = _get_cluster_size(path)
