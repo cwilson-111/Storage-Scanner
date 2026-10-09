@@ -13,7 +13,7 @@ message, copied as written. Where the tag is a lightweight one (no message
 of its own), the text is the message of the commit it points at. Tags
 before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
-## Unreleased
+## v1.14.0 — 2026-10-08
 
 ### Main tree
 
