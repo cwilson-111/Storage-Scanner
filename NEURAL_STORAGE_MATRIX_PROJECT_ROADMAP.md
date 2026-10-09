@@ -207,7 +207,7 @@ duplicate group.**
 ### P1 — next release
 
 **P1-1. Turbo Scan's elevated helper fails at random and falls back
-silently — ✅ done (2026-09-29), real helper run pending (P1-3)**
+silently — ✅ done (2026-09-29); real helper run done in P1-3 (2026-10-08)**
 - Why: the helper replaces its progress file with `os.replace`
   (`mft_scan_cli.py:60-67`) while the GUI has it open for reading
   (`file_ops.py:375`). Windows then raises PermissionError, nothing catches
@@ -235,10 +235,13 @@ silently — ✅ done (2026-09-29), real helper run pending (P1-3)**
   progress write that can't land never fails the scan; a failed scan writes
   its error) and `tests/test_run_elevated_scan_windows.py` (the helper's
   error reaches the GUI).
-- Not done: a real elevated helper scan; the shell here isn't elevated.
+- Real helper runs (P1-3 checklist, 2026-10-06 to 2026-10-08): run 6's
+  full read through the elevated helper took 90.7 s with 295 progress
+  updates read from its progress file and no fallback; its incremental
+  scan 0.4 s.
 
 **P1-2. Turbo Scan shows wrong numbers without saying so — ✅ done
-(2026-09-29), real-hardware comparison pending (P1-3).** Reproduced at
+(2026-09-29); real-hardware comparison done in P1-3 (2026-10-08).** Reproduced at
 the logic level (synthetic MFT records built with the attributes measured
 on this machine):
 - On Disk for NTFS-compressed and sparse files comes from `allocated_size`
@@ -293,12 +296,12 @@ on this machine):
   drive reports used (0.37% apart; [inference] NTFS metadata and files the
   scan can't see). Logical 2.28 TB on a 2.05 TB drive, as compressed,
   sparse and online-only files allow. No warning or fallback in the log.
-- Not done: `compare_scan_engines.py` on real volumes (needs elevation;
-  folded into P1-3).
+- Real volumes compared with `compare_scan_engines.py` in P1-3 (checklist
+  run 6, 2026-10-08: `C:\Windows` and `C:\Users`, nothing unexplained).
 
 **P1-3. Verify Turbo Scan and its cache on real hardware, with a written
-checklist — checklist ✅ (2026-10-03); first real run 2026-10-06 found two
-Turbo bugs, fixed; a re-run is the owner's.**
+checklist — ✅ done (2026-10-08): run 6 passed 8 of 8 on this machine
+after fixes from runs 1–5.**
 - Why: every Turbo-related section since the columnar cache (v1.8.0) lists
   a real Turbo Scan under "Not verified". The log does show one in-process
   elevated full scan on 2026-09-25 23:42 (1,478,444 records cached), but
@@ -468,6 +471,16 @@ Turbo bugs, fixed; a re-run is the owner's.**
   4,096 after. `tests/test_scan.py` has a real-symlink test; it skips
   where links can't be made (unelevated without Developer Mode), so it
   runs in CI and elevated. Next: checklist run 6.
+- Run 6 (2026-10-08 18:18, v1.13.0-35-gaf4d4bf): 8 of 8. Full read
+  through the helper 90.7 s; incremental 1.9 s in process, 0.4 s through
+  the helper. Step 6 (now with a file symlink) has no differences; both
+  links read is_link=True, size 0 in Turbo. Step 7 (`C:\Windows`, 179,020
+  files; Compatible 19.8 s, Turbo 4.9 s) and step 8 (`C:\Users`, 848,749
+  files; 61.6 s vs 13.0 s) have nothing unexplained: the `.INFO` link is
+  gone; what's left is allocated past its end (9 / 104), changed during
+  the run (2 / 114), open for writing (6 / 22), hard-link order, small
+  files inside their MFT record, folders Compatible can't read (95 in
+  `C:\Windows`) and the folder totals of those.
 
 **P1-4. Growth History opens as an empty window for noisy histories — ✅
 done (2026-09-26)**
