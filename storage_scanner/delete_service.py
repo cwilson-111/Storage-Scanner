@@ -163,7 +163,9 @@ def check_stale(node):
         current = os.stat(node.path, follow_symlinks=False)
     except OSError:
         return None
-    if current.st_size != node.size:
+    # A second hard link's row has size 0 (its bytes are counted once, on
+    # the first name), so only its modified time says whether it changed.
+    if not node.hardlink_dup and current.st_size != node.size:
         return (
             f"Its size changed since it was reviewed (was {node.size:,} bytes, now "
             f"{current.st_size:,}), so it may have been modified by something else; rescan "

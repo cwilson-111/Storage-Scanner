@@ -340,10 +340,11 @@ def _folders_holding(root, node):
 
 
 def subtract_totals(folder, node):
-    """Take a deleted `node`'s size and its file and folder counts out of
-    `folder`, one of the folders above it. A deleted folder takes itself
-    out of the folder count as well as every folder inside it."""
+    """Take a deleted `node`'s size, on-disk size and file and folder counts
+    out of `folder`, one of the folders above it. A deleted folder takes
+    itself out of the folder count as well as every folder inside it."""
     folder.size -= node.size
+    folder.alloc_size -= node.alloc_size
     folder.file_count -= node.file_count
     folder.folder_count -= (node.folder_count + 1) if node.is_dir else 0
 

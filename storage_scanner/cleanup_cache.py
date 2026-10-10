@@ -81,13 +81,15 @@ class CachedNode:
     """Enough of a real storage_scanner.models.Node for a cached
     recommendation row to be displayed, revealed in the file manager, and
     deleted -- see cleanup_view.py's use of rec.node.path/name/is_dir/
-    size, and delete_service.check_stale's of size/mtime (0 if unknown).
+    size, and delete_service.check_stale's of size/mtime (0 if unknown) and
+    hardlink_dup (never: Cleanup Recommendations skips extra hard links).
     Never a stand-in for a real scanned node otherwise: no .children, no
     .error -- this never participates in (or gets inserted into) a live
     scan tree, and its folders can't be deleted until they're rescanned.
     """
 
     __slots__ = ("path", "name", "is_dir", "size", "mtime")
+    hardlink_dup = False
 
     def __init__(self, path, name, is_dir, size, mtime=0.0):
         self.path = path

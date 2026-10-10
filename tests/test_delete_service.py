@@ -293,6 +293,21 @@ def test_a_same_size_replacement_is_refused(tmp_path):
     assert app.trashed == []
 
 
+def test_a_second_hard_link_can_be_deleted(tmp_path):
+    """The scan counts a hard link's bytes once, so its second name has
+    size 0; that 0 isn't a change since it was reviewed."""
+    _files(tmp_path, {"first.bin": b"h" * 300})
+    os.link(tmp_path / "scan" / "first.bin", tmp_path / "scan" / "second.bin")
+    app = _App(tmp_path)
+    [extra] = [n for n in app.root_node.children if n.hardlink_dup]
+    assert extra.size == 0
+
+    [result] = app.delete([extra])
+
+    assert result.outcome == RECYCLED
+    assert app.trashed == [extra.path]
+
+
 def test_a_cached_cleanup_file_replaced_since_that_session_is_refused(tmp_path):
     """A cold-start Cleanup row keeps the modified time its run saw."""
     _files(tmp_path, {"old.log": b"l" * 10})

@@ -23,7 +23,8 @@ from storage_scanner.scanner import _rollup
 
 
 def _file(folder, name, size):
-    return FileNode(folder, folder.add_file(name, size, size))
+    # On disk: a 4 KB cluster each, so it's never the same number as size.
+    return FileNode(folder, folder.add_file(name, size, 4096))
 
 
 def _tree():
@@ -44,8 +45,8 @@ def test_deleting_a_file_keeps_later_files_in_the_same_folder_addressable():
 
     assert [f.name for f in sub.children] == ["a", "c"]
     assert (held_c.name, held_c.size, held_c.path) == ("c", 30, join_path(sub.path, "c"))
-    assert (sub.size, sub.file_count) == (40, 2)
-    assert (root.size, root.file_count) == (45, 3)
+    assert (sub.size, sub.alloc_size, sub.file_count) == (40, 8192, 2)
+    assert (root.size, root.alloc_size, root.file_count) == (45, 12288, 3)
     names = sorted(f.file_names[i] for f, rows in iter_file_rows(root) for i in rows)
     assert names == ["a", "c", "top"]
 
@@ -64,7 +65,7 @@ def test_deleting_a_folder_takes_its_whole_subtree_out_of_the_totals():
     assert remove_from_tree(root, sub)
 
     assert root.children == [FileNode(root, 0)]
-    assert (root.size, root.file_count) == (5, 1)
+    assert (root.size, root.alloc_size, root.file_count) == (5, 4096, 1)
     assert not remove_from_tree(root, sub)
 
 
