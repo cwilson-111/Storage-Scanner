@@ -122,17 +122,23 @@ def _descendants(widget):
 
 def _scale_widget(widget, ratio):
     """The options the app sets through px(), times `ratio`. Paddings and
-    the like are plain pixels at every DPI, so they're left alone."""
+    the like are plain pixels at every DPI, so they're left alone, and so
+    is a size Tk gives in its own units ("10c", a canvas's default width
+    under Tk 9): those already follow `tk scaling`."""
     kind = widget.winfo_class()
     if kind == "Treeview":
         _scale_columns(widget, ratio)
     elif kind == "Canvas":
         for option in ("width", "height"):
-            widget[option] = round(int(widget[option]) * ratio)
+            _scale_pixels(widget, option, ratio)
     if "wraplength" in widget.keys():  # noqa: SIM118 - a widget isn't a dict
-        wrap = str(widget.cget("wraplength"))
-        if wrap.isdigit() and int(wrap):
-            widget.configure(wraplength=round(int(wrap) * ratio))
+        _scale_pixels(widget, "wraplength", ratio)
+
+
+def _scale_pixels(widget, option, ratio):
+    value = str(widget.cget(option))
+    if value.isdigit() and int(value):
+        widget.configure({option: round(int(value) * ratio)})
 
 
 def _scale_columns(tree, ratio):

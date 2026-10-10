@@ -2,6 +2,7 @@
 (storage_scanner/redirection_guard.py). Each case runs in a child process:
 the guard can't be turned off again in the process that turned it on."""
 
+import ctypes
 import subprocess
 import sys
 from pathlib import Path
@@ -10,8 +11,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="RedirectionGuard is Windows'")
-
+pytestmark = [
+    pytest.mark.skipif(sys.platform != "win32", reason="RedirectionGuard is Windows'"),
+    # A junction made by an elevated test run is trusted (CI runners run as
+    # an administrator), and the "unelevated" child would be elevated too.
+    pytest.mark.skipif(
+        sys.platform == "win32" and bool(ctypes.windll.shell32.IsUserAnAdmin()),
+        reason="needs a test run without admin rights",
+    ),
+]
 _CHILD = """
 import ctypes, sys
 sys.path.insert(0, sys.argv[1])
