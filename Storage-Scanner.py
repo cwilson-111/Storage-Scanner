@@ -13,7 +13,12 @@ package alongside it.
 Run:  python Storage-Scanner.py
 """
 
-from storage_scanner.app import main
-
 if __name__ == "__main__":
+    from storage_scanner.redirection_guard import guard_elevated_process
+
+    # First: some modules open the app's data folder as they're imported.
+    guard_elevated_process()
+
+    from storage_scanner.app import main
+
     main()

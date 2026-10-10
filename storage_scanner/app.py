@@ -18,7 +18,7 @@ import time
 from tkinter import TOP, Tk, X, messagebox, ttk
 from typing import Optional
 
-from storage_scanner import appearance
+from storage_scanner import appearance, redirection_guard
 from storage_scanner.cart import CartManager
 from storage_scanner.history_db import get_app_metadata, open_history_db
 from storage_scanner.history_schema import NewerDatabaseError
@@ -256,6 +256,8 @@ def _open_history():
 
 
 def main():
+    if redirection_guard.enforced:
+        logger.info("Elevated: junctions made without admin rights won't be followed")
     # A headless privileged-scan request (see storage_scanner/elevation.py's
     # run_elevated_scan_macos): runs the scan as root and exits, never
     # touching Tk, so it never needs a window-server connection it can't get.
