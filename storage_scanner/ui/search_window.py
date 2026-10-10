@@ -27,9 +27,13 @@ from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import FileNode, Node
 from storage_scanner.platform_support import FILE_MANAGER_NAME, TRASH_NAME, resource_path
-from storage_scanner.search import filter_nodes, parse_size
+from storage_scanner.search import largest_matches, parse_size
 from storage_scanner.settings import COLORS, px
 from storage_scanner.ui.app_state import AppMixin
+
+# Rows a search lists: the largest matches. Listing every match took the
+# window about 3.5 s for C:\Windows's 311,000 items, more for a whole drive.
+SEARCH_ROW_LIMIT = 5000
 
 
 class SearchMixin(AppMixin):
@@ -129,20 +133,25 @@ class SearchMixin(AppMixin):
         tv.tag_configure("odd", background=COLORS["stripe"])
 
         iid_to_node: dict[str, Union[Node, FileNode]] = {}
+        # Every match's count and bytes, listed or not (only the largest
+        # SEARCH_ROW_LIMIT get a row), less the listed ones deleted since.
+        totals = {"matched": 0, "size": 0}
 
         def summarize():
-            if iid_to_node:
-                total_size = sum(n.size for n in iid_to_node.values())
-                summary_var.set(
-                    f"{len(iid_to_node):,} result(s)  —  {human_size(total_size)} total"
-                )
+            if totals["matched"]:
+                text = f"{totals['matched']:,} result(s)  —  {human_size(totals['size'])} total"
+                if len(iid_to_node) < totals["matched"]:
+                    text += f"  —  showing the {len(iid_to_node):,} largest"
+                summary_var.set(text)
             else:
                 summary_var.set("No matches.")
 
         def forget_deleted(deleted):
             gone = [iid for iid, node in iid_to_node.items() if deleted.covers(node)]
             for iid in gone:
-                del iid_to_node[iid]
+                node = iid_to_node.pop(iid)
+                totals["matched"] -= 1
+                totals["size"] -= node.size
                 tv.delete(iid)
             if gone:
                 summarize()
@@ -179,8 +188,9 @@ class SearchMixin(AppMixin):
             extensions = ext_var.get().split(",") if ext_var.get().strip() else None
             name_query = name_var.get().strip() or None
 
-            results = filter_nodes(
+            result = largest_matches(
                 scan_tree,
+                SEARCH_ROW_LIMIT,
                 name_query=name_query,
                 extensions=extensions,
                 min_size=min_size,
@@ -188,11 +198,11 @@ class SearchMixin(AppMixin):
                 mtime_after=mtime_after,
                 mtime_before=mtime_before,
             )
-            results.sort(key=lambda n: n.size, reverse=True)
+            totals.update(matched=result.matched, size=result.size)
 
             tv.delete(*tv.get_children())
             iid_to_node.clear()
-            for index, node in enumerate(results):
+            for index, node in enumerate(result.nodes):
                 modified = (
                     datetime.fromtimestamp(node.mtime).strftime("%Y-%m-%d") if node.mtime else "—"
                 )

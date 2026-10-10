@@ -7,11 +7,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from storage_scanner.models import Node
-from storage_scanner.search import filter_nodes, parse_size
+from storage_scanner.search import largest_matches, parse_size
 
 
 def _file(parent, name, size=0, mtime=0.0):
     parent.add_file(name, size, mtime=mtime)
+
+
+def _search(tree, **filters):
+    return largest_matches(tree, 100, **filters).nodes
 
 
 def _dir(parent, name):
@@ -32,44 +36,50 @@ def tree():
 
 
 def test_name_query_is_case_insensitive(tree):
-    results = filter_nodes(tree, name_query="PHOTO")
+    results = _search(tree, name_query="PHOTO")
     assert [n.name for n in results] == ["photo.JPG"]
 
 
 def test_extension_filter_matches_case_insensitively_and_skips_dirs(tree):
-    results = filter_nodes(tree, extensions=["jpg"])
+    results = _search(tree, extensions=["jpg"])
     assert [n.name for n in results] == ["photo.JPG"]
 
 
 def test_size_range_filter(tree):
-    results = filter_nodes(tree, min_size=1000, max_size=5_000_000)
+    results = _search(tree, min_size=1000, max_size=5_000_000)
     assert {n.name for n in results} == {"report.pdf", "photo.JPG"}
 
 
 def test_mtime_range_filter(tree):
-    results = filter_nodes(tree, mtime_after=150, mtime_before=350)
+    results = _search(tree, mtime_after=150, mtime_before=350)
     assert {n.name for n in results} == {"photo.JPG", "notes.txt"}
 
 
 def test_include_dirs_false_excludes_directories(tree):
-    results = filter_nodes(tree, include_dirs=False)
+    results = _search(tree, include_dirs=False)
     assert all(not n.is_dir for n in results)
 
 
 def test_include_files_false_excludes_files(tree):
-    results = filter_nodes(tree, include_files=False)
+    results = _search(tree, include_files=False)
     assert [n.name for n in results] == ["sub"]
 
 
 def test_root_itself_is_never_included(tree):
-    results = filter_nodes(tree)
+    results = _search(tree)
     assert tree not in results
 
 
 def test_combined_filters_use_and_logic(tree):
-    results = filter_nodes(tree, name_query="a", min_size=5_000_000)
-    # "archive.zip" and "photo.JPG" both contain no "a"... recheck: archive has 'a'
+    results = _search(tree, name_query="a", min_size=5_000_000)
     assert [n.name for n in results] == ["archive.zip"]
+
+
+def test_only_the_largest_matches_are_listed_but_every_match_is_counted(tree):
+    result = largest_matches(tree, 2, include_dirs=False)
+
+    assert [n.name for n in result.nodes] == ["archive.zip", "photo.JPG"]
+    assert (result.matched, result.size) == (4, 10_000_000 + 5_000_000 + 1000 + 50)
 
 
 @pytest.mark.parametrize(

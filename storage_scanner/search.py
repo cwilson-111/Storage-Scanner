@@ -4,8 +4,10 @@ Pure, Tkinter-free logic (easy to unit test) — storage_scanner/ui/search_windo
 wires this up to an actual results window.
 """
 
+import heapq
 import os
 import re
+from typing import NamedTuple
 
 from storage_scanner.models import FileNode
 
@@ -44,7 +46,37 @@ def parse_size(text):
     return int(float(number) * _SIZE_UNITS[unit])
 
 
-def filter_nodes(
+class SearchResult(NamedTuple):
+    nodes: list  # the `limit` largest matches, largest first
+    matched: int  # how many matched, listed or not
+    size: int  # the bytes of all of them
+
+
+def largest_matches(root, limit, **filters):
+    """The `limit` largest descendants of `root` matching every filter (see
+    _matches), largest first, with the count and bytes of every match. Only
+    those `limit` become FileNode views, so a filter that matches a whole
+    drive (a million files) costs a walk, not a million objects and list
+    rows."""
+    count = size = 0
+
+    def counted():
+        nonlocal count, size
+        for match in _matches(root, **filters):
+            count += 1
+            size += match[0]
+            yield match
+
+    top = heapq.nlargest(limit, counted(), key=lambda match: match[0])
+    return SearchResult([_node(match) for match in top], count, size)
+
+
+def _node(match):
+    _size, folder, index = match
+    return folder if index is None else FileNode(folder, index)
+
+
+def _matches(
     root,
     name_query=None,
     extensions=None,
@@ -55,14 +87,15 @@ def filter_nodes(
     include_dirs=True,
     include_files=True,
 ):
-    """Return a flat list of descendants of `root` matching every given filter.
+    """(size, folder, row) for each descendant of `root` matching every
+    given filter: row is a file's index in `folder`, or None when `folder`
+    itself matched.
 
     `root` itself is never included — only its descendants. Every filter
     that is None/empty is treated as "no constraint"; filters combine with
     AND. `extensions`, if given, is an iterable of extensions without the
     leading dot (case-insensitive) and only ever matches files. Files are
-    checked straight from their folder's columns; a FileNode is made only
-    for a match.
+    checked straight from their folder's columns.
     """
     name_query = name_query.strip().lower() if name_query else None
     ext_set = (
@@ -80,16 +113,17 @@ def filter_nodes(
             return False
         return mtime_before is None or mtime <= mtime_before
 
-    results = []
     if not root.is_dir:
-        return results
+        return
     want_dirs = include_dirs and ext_set is None
     stack = [root]
     while stack:
         folder = stack.pop()
         stack.extend(folder.dirs)
         if want_dirs:
-            results.extend(d for d in folder.dirs if matches(d.name, d.size, d.mtime))
+            for d in folder.dirs:
+                if matches(d.name, d.size, d.mtime):
+                    yield d.size, d, None
         if not include_files:
             continue
         names, sizes, mtimes = folder.file_names, folder.file_sizes, folder.file_mtimes
@@ -98,6 +132,4 @@ def filter_nodes(
             if ext_set is not None and os.path.splitext(name)[1].lstrip(".").lower() not in ext_set:
                 continue
             if matches(name, sizes[i], mtimes[i]):
-                results.append(FileNode(folder, i))
-
-    return results
+                yield sizes[i], folder, i
