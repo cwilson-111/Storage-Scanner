@@ -2,9 +2,9 @@
 # dependencies (the Data build adds pyarrow and openpyxl; see build-data.yml).
 #
 # Exact versions, so two builds of the same commit bundle the same PyInstaller
-# (v1.12.0 was built with these) and CI's gates match a local run;
-# Dependabot proposes upgrades (.github/dependabot.yml). ruff and black match
-# .pre-commit-config.yaml.
+# (v1.12.0 was built with these) and CI's gates match a local run. They move
+# by hand; Dependabot only opens a PR for a security advisory
+# (.github/dependabot.yml). ruff and black match .pre-commit-config.yaml.
 pyinstaller==6.22.3
 
 # Only needed to regenerate the app icon via make_icon.py (icon.ico is
