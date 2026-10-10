@@ -16,6 +16,7 @@ from tkinter import Menu, filedialog, messagebox
 
 from storage_scanner.formatting import human_size
 from storage_scanner.ui.app_state import AppMixin
+from storage_scanner.ui.busy_task import run_busy
 
 
 def available_tools():
@@ -71,18 +72,30 @@ class DataToolsMixin(AppMixin):
         if paths is None:
             return
         csv_path, output_path = paths
-        result = compress_csv_to_parquet(csv_path, output_path)
-        if not result.success:
-            error = f"Could not compress to Parquet:\n{result.error}"
-            messagebox.showerror("Storage Scanner", error)
-            return
-        try:
-            before = os.path.getsize(csv_path)
-            after = os.path.getsize(result.output_path)
-            saved = f"\n\n{human_size(before)} → {human_size(after)}" if before else ""
-        except OSError:
-            saved = ""
-        messagebox.showinfo("Storage Scanner", f"Compressed to:\n{result.output_path}{saved}")
+
+        def done(result):
+            if not result.success:
+                error = f"Could not compress to Parquet:\n{result.error}"
+                messagebox.showerror("Storage Scanner", error)
+                return
+            try:
+                before = os.path.getsize(csv_path)
+                after = os.path.getsize(result.output_path)
+                saved = f"\n\n{human_size(before)} → {human_size(after)}" if before else ""
+            except OSError:
+                saved = ""
+            messagebox.showinfo("Storage Scanner", f"Compressed to:\n{result.output_path}{saved}")
+
+        run_busy(
+            self.root,
+            "Compress CSV to Parquet",
+            f"Compressing {os.path.basename(csv_path)} …",
+            lambda: compress_csv_to_parquet(csv_path, output_path),
+            done,
+            lambda exc: messagebox.showerror(
+                "Storage Scanner", f"Could not compress to Parquet:\n{exc}"
+            ),
+        )
 
     def convert_csv_to_xlsx(self):
         from storage_scanner.csv_to_xlsx import convert_csv_to_xlsx, default_output_path
@@ -91,8 +104,21 @@ class DataToolsMixin(AppMixin):
         if paths is None:
             return
         csv_path, output_path = paths
-        result = convert_csv_to_xlsx(csv_path, output_path)
-        if not result.success:
-            messagebox.showerror("Storage Scanner", f"Could not convert to Excel:\n{result.error}")
-            return
-        messagebox.showinfo("Storage Scanner", f"Converted to:\n{result.output_path}")
+
+        def done(result):
+            if not result.success:
+                error = f"Could not convert to Excel:\n{result.error}"
+                messagebox.showerror("Storage Scanner", error)
+                return
+            messagebox.showinfo("Storage Scanner", f"Converted to:\n{result.output_path}")
+
+        run_busy(
+            self.root,
+            "Convert CSV to Excel",
+            f"Converting {os.path.basename(csv_path)} …",
+            lambda: convert_csv_to_xlsx(csv_path, output_path),
+            done,
+            lambda exc: messagebox.showerror(
+                "Storage Scanner", f"Could not convert to Excel:\n{exc}"
+            ),
+        )

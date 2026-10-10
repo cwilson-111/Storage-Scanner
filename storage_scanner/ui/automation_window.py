@@ -35,6 +35,7 @@ from storage_scanner.platform_support import IS_WINDOWS, resource_path
 from storage_scanner.scheduled_tasks import RegisteredTask, list_windows_tasks
 from storage_scanner.settings import COLORS, px
 from storage_scanner.ui.app_state import AppMixin
+from storage_scanner.ui.busy_task import run_busy
 
 _EXPORT_FILE_TYPES = {
     "csv": [("CSV (one row per file and folder)", "*.csv")],
@@ -75,16 +76,19 @@ class AutomationMixin(AppMixin):
 
         fmt = "json" if filename.lower().endswith(".json") else "csv"
 
-        try:
-            export_to_file(node, filename, fmt)
-        except OSError as exc:
-            logger.warning("Export to %r failed", filename, exc_info=True)
+        def failed(exc):  # run_busy has logged it
             messagebox.showerror("Export Results", f"Could not write the file:\n{exc}")
-            return
 
-        self.status_var.set(
-            f"Exported {node.path} ({human_size(node.size)}, {node.file_count:,} files) "
-            f"to {filename}"
+        run_busy(
+            self.root,
+            "Export Results",
+            f"Writing {os.path.basename(filename)} …",
+            lambda: export_to_file(node, filename, fmt),
+            lambda _result: self.status_var.set(
+                f"Exported {node.path} ({human_size(node.size)}, {node.file_count:,} files) "
+                f"to {filename}"
+            ),
+            failed,
         )
 
     # -- Schedule Scans ---------------------------------------------------- #
