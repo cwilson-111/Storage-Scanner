@@ -1393,8 +1393,18 @@ growth — ✅ done (2026-10-02); cushion shading ✅ (2026-10-03).**
   1904×639: render 50–53 ms + PhotoImage 10 ms, whole redraw 126–142 ms
   (flat 174–192); 450 tiles in the default window 30 ms. Screenshots
   checked.
-- Not done: per-monitor DPI; past the 3,000-tile cap top-level items are
-  left blank (as before, flat too).
+- Not done: per-monitor DPI.
+- Done (3, 2026-10-09): the 3,000-tile cap no longer blanks top-level
+  items. `nested_tiles` filled depth-first, so the first big folders'
+  insides used up the budget. It now fills breadth-first, one level after
+  another (parents still come before their children, so `hit_test` and
+  the cushion surfaces still work), and a folder gets all of its tiles or
+  none. Real app on `C:\Windows`, canvas 2584×1147: top-level tiles went
+  from 7 to 59 of 59 (3,000 tiles both times), and the image was checked.
+  At 2560×1300 the layout takes 55 ms instead of 129 ms.
+  `tests/test_treemap_model.py` checks that 40 folders of 150 files each
+  all get a tile, and that each is either fully filled or left whole.
+  That test failed on the old code.
 
 **P2-20. Everyday table stakes in the main window — ✅ done (2026-10-01);
 Owner and Folders columns ✅ (2026-10-03).**

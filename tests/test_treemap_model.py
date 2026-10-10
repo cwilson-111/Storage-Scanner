@@ -115,15 +115,25 @@ def test_items_past_the_per_level_limit_share_one_more_tile():
     assert len(tiles) == MAX_TILES_PER_LEVEL + 1
 
 
-def test_the_whole_drawing_is_capped():
+def test_the_whole_drawing_is_capped_without_leaving_top_level_items_blank():
     root = _folder(None, "root")
-    for d in range(40):
-        sub = _folder(root, f"d{d}")
+    subs = [_folder(root, f"d{d}") for d in range(40)]
+    for sub in subs:
         for f in range(150):
             _file(sub, f"f{f}", 1000)
     _rollup(root)
 
-    assert len(nested_tiles(root, 4000, 4000, min_px=1, header=2)) <= MAX_TILES
+    tiles = nested_tiles(root, 4000, 4000, min_px=1, header=2)
+    by_node = _by_node(tiles)
+
+    assert len(tiles) <= MAX_TILES
+    # 40 + 40 x 150 tiles won't fit: every folder still gets its own tile,
+    # and each is either filled with all of its files or left whole.
+    assert all(sub in by_node for sub in subs)
+    parents = [tiles[t.parent].node for t in tiles if t.parent is not None]
+    inside = [sum(node is sub for node in parents) for sub in subs]
+    assert set(inside) == {0, 150}
+    assert inside.count(150) == (MAX_TILES - len(subs)) // 150
 
 
 def test_growth_colours_a_folder_by_its_change_and_a_file_by_its_folders():

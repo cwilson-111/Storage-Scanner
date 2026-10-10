@@ -13,6 +13,17 @@ message, copied as written. Where the tag is a lightweight one (no message
 of its own), the text is the message of the commit it points at. Tags
 before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
+## Unreleased
+
+### Fixes
+
+- The treemap no longer leaves part of a large window blank. Past its
+  3,000-tile limit it used to stop drawing, so on `C:\Windows` in a
+  2,600 × 1,500 window only 7 of 59 top-level items got a tile. It now
+  draws every level before the one below it, so the folders shown always
+  get their tiles, and a folder whose contents don't fit within the limit
+  is drawn as one tile instead of being half filled.
+
 ## v1.14.0 — 2026-10-08
 
 ### Main tree

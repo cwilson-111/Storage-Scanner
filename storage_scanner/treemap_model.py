@@ -7,13 +7,16 @@ rest share one "N more" tile, so a folder of 250,000 files draws no more
 tiles than one of 200 (picking them from its size column takes about
 0.1 s). Tiles smaller than MIN_TILE_PX on a side aren't drawn
 (their parent's colour shows through), and a folder only gets tiles inside
-it when there's room below its label strip.
+it when there's room below its label strip. Levels fill breadth-first
+under the MAX_TILES cap, and a folder gets all of its tiles or none, so the
+cap leaves deep folders whole rather than shallow items blank.
 """
 
 import heapq
 import os
 import time
 import zlib
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -51,10 +54,38 @@ def area_of(node):
 
 def nested_tiles(folder, width, height, levels=3, header=HEADER_PX, min_px=MIN_TILE_PX):
     """Tiles for `folder` in a width x height box: its items, and inside
-    each subfolder tile its items, `levels` deep. Parents come before
-    their children, so the last tile containing a point is the deepest."""
+    each subfolder tile its items, `levels` deep. One level is placed before
+    the next, so parents come before their children and the last tile
+    containing a point is the deepest."""
     tiles = []  # type: ignore[var-annotated]
-    _fill(tiles, folder, 0.0, 0.0, float(width), float(height), 1, None, levels, header, min_px)
+    queue = deque([(folder, 0.0, 0.0, float(width), float(height), 1, None)])
+    while queue and len(tiles) < MAX_TILES:
+        node, x, y, w, h, depth, parent = queue.popleft()
+        level = _level(node, x, y, w, h, depth, parent, min_px)
+        if len(tiles) + len(level) > MAX_TILES:
+            continue  # a smaller folder later in the queue may still fit
+        for tile in level:
+            tiles.append(tile)
+            item = tile.node
+            if (
+                item is not None
+                and item.is_dir
+                and item.has_children
+                and depth < levels
+                and tile.h > header + 2 * min_px
+                and tile.w > 2 * min_px
+            ):
+                queue.append(
+                    (
+                        item,
+                        tile.x + 2,
+                        tile.y + header,
+                        tile.w - 4,
+                        tile.h - header - 2,
+                        depth + 1,
+                        len(tiles) - 1,
+                    )
+                )
     return tiles
 
 
@@ -74,40 +105,23 @@ def _largest_items(folder):
     return shown, rest_count, total_bytes - sum(area_of(item) for item in shown)
 
 
-def _fill(tiles, folder, x, y, w, h, depth, parent, levels, header, min_px):
+def _level(folder, x, y, w, h, depth, parent, min_px):
+    """The tiles of `folder`'s own items in the box, without their insides."""
     shown, rest_count, rest_bytes = _largest_items(folder)
     pairs = [(child, area_of(child)) for child in shown]
     if rest_count:
         pairs.append(((rest_count, rest_bytes), rest_bytes))
     largest = area_of(shown[0]) if shown else 1
+    level = []
     for item, rx, ry, rw, rh in compute_layout(pairs, x, y, w, h):
-        if rw < min_px or rh < min_px or len(tiles) >= MAX_TILES:
+        if rw < min_px or rh < min_px:
             continue
         if isinstance(item, tuple):  # the "N more" tile
             count, size = item
-            tiles.append(Tile(None, rx, ry, rw, rh, depth, 0.0, parent, count, size))
-            continue
-        tiles.append(Tile(item, rx, ry, rw, rh, depth, area_of(item) / largest, parent))
-        if (
-            item.is_dir
-            and item.has_children
-            and depth < levels
-            and rh > header + 2 * min_px
-            and rw > 2 * min_px
-        ):
-            _fill(
-                tiles,
-                item,
-                rx + 2,
-                ry + header,
-                rw - 4,
-                rh - header - 2,
-                depth + 1,
-                len(tiles) - 1,
-                levels,
-                header,
-                min_px,
-            )
+            level.append(Tile(None, rx, ry, rw, rh, depth, 0.0, parent, count, size))
+        else:
+            level.append(Tile(item, rx, ry, rw, rh, depth, area_of(item) / largest, parent))
+    return level
 
 
 def hit_test(tiles, x, y):
