@@ -12,11 +12,12 @@ from tkinter import font as tkfont
 
 import pytest
 
-from storage_scanner import scanner
+from storage_scanner import scanner, settings
 from storage_scanner.app import StorageScannerApp
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import date_text, node_display
 from storage_scanner.owner import OwnerLookup
+from storage_scanner.platform_support import IS_WINDOWS
 from storage_scanner.settings import FONT_MONO, apply_theme
 from storage_scanner.ui import main_tree
 from storage_scanner.ui.dpi_follow import rescale
@@ -395,6 +396,7 @@ def test_sorting_by_owner_looks_up_every_listed_row_then_orders_them_a_to_z(app,
     _assert_striped(app, root_iid)
 
 
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows tells the app its window changed DPI")
 def test_the_main_tree_follows_a_dpi_change_and_comes_back_unchanged(app):
     window, tree = app.root, app.tree
     start_dpi = float(window.tk.call("tk", "scaling")) * 72
@@ -409,13 +411,16 @@ def test_the_main_tree_follows_a_dpi_change_and_comes_back_unchanged(app):
             font.metrics("linespace"),
         )
 
-    before = looks()
-    rescale(window, start_dpi * 1.5)
+    before, scale_before = looks(), settings.ui_scale()
+    rescale(window, start_dpi * 2)
     percent_width, size_width, row_height, line = looks()
+    # px() follows Tk's own (rounded) scaling, which never goes under 1.0.
+    ratio = settings.ui_scale() / scale_before
 
     # Pixel sizes grow with the DPI, and so does the named row font, which
     # a (family, size) tuple wouldn't.
-    assert (percent_width, size_width) == (round(before[0] * 1.5), round(before[1] * 1.5))
+    assert ratio > 1.2
+    assert (percent_width, size_width) == (round(before[0] * ratio), round(before[1] * ratio))
     assert line > before[3] and row_height > before[2]
 
     rescale(window, start_dpi)
