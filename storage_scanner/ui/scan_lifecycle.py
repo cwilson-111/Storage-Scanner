@@ -232,19 +232,40 @@ class ScanLifecycleMixin(AppMixin):
         self.root.after(100, self._poll_progress)
 
     def _elevated_scan_worker_headless(self, target, run_scan_fn):
-        ok, output = run_scan_fn(target)
-        if not ok:
-            self.progress_q.put(("error", output))
-            return
+        # Anything this thread doesn't report leaves the scan running for
+        # good: no Cancel button on this path, Scan stays disabled.
         try:
-            node = dict_to_node(json.loads(output))
-        except (ValueError, KeyError) as exc:
-            logger.exception("Elevated scan of %r produced unparseable output", target)
-            self.progress_q.put(("error", f"Elevated scan produced invalid output: {exc}"))
-            return
-        self.progress_q.put(("done", (node, None)))
+            ok, output = run_scan_fn(target)
+            if not ok:
+                self.progress_q.put(("error", output))
+                return
+            try:
+                node = dict_to_node(json.loads(output))
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                logger.exception("Elevated scan of %r produced unparseable output", target)
+                self.progress_q.put(("error", f"Elevated scan produced invalid output: {exc}"))
+                return
+            self.progress_q.put(("done", (node, None)))
+        except Exception as exc:  # noqa: BLE001 - report any failure to the UI
+            logger.exception("Elevated scan of %r failed", target)
+            self.progress_q.put(("error", str(exc)))
 
     def _poll_progress(self):
+        try:
+            if self._drain_progress():
+                return
+        except Exception:
+            if not self._scan_active:
+                raise  # finishing failed: the scan is over and Tk's error dialog says why
+            # A bug in showing progress mustn't strand the scan: the worker
+            # still sends "done", so keep reading, without the live rows.
+            logger.exception("Showing the scan's progress failed; the scan goes on")
+            self._live_freeze()
+        self.root.after(100, self._poll_progress)
+
+    def _drain_progress(self):
+        """Handle what the scan sent since the last tick; True once it has
+        finished (or failed) and nothing more will come."""
         try:
             while True:
                 kind, payload = self.progress_q.get_nowait()
@@ -253,16 +274,16 @@ class ScanLifecycleMixin(AppMixin):
                 elif kind == "done":
                     node, report = payload
                     self._finish_scan(node, report)
-                    return
+                    return True
                 elif kind == "error":
                     self._finish_error(payload)
-                    return
+                    return True
                 else:
                     self._scan_progress_message(kind, payload)
         except queue.Empty:
             pass
         self._live_tick(self._scan_progress_refresh())
-        self.root.after(100, self._poll_progress)
+        return False
 
     # -- History helper functions ------------------------------------------ #
     def _finish_scan(self, node, report=None):

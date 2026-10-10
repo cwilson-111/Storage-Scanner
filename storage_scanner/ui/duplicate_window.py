@@ -117,8 +117,7 @@ class DuplicatesMixin(AppMixin):
                     scan_tree = self._duplicates_scan_root
                     if self._scan_running() or scan_tree is None or scan_tree is not self.root_node:
                         return
-                    self.tools_btn.config(state="normal")
-                    self.top_count_combo.config(state="readonly")
+                    self._duplicate_search_over()
                     self._show_duplicates_window(scan_tree, duplicates)
                     return
 
@@ -126,16 +125,15 @@ class DuplicatesMixin(AppMixin):
                     self._stop_progress()
                     if self._scan_running():  # the scan that cancelled it owns these now
                         return
-                    self.tools_btn.config(state="normal")
-                    self.top_count_combo.config(state="readonly")
+                    self._duplicate_search_over()
                     self.status_var.set("Duplicate scan cancelled.")
                     return
 
                 elif kind == "error":
                     _kind, error_msg = msg
                     self._stop_progress()
-                    self.tools_btn.config(state="normal")
-                    self.top_count_combo.config(state="readonly")
+                    if not self._scan_running():
+                        self._duplicate_search_over()
                     self.status_var.set("Duplicate scan failed.")
                     messagebox.showerror("Storage Scanner", f"Duplicate scan failed:\n{error_msg}")
                     return
@@ -144,6 +142,14 @@ class DuplicatesMixin(AppMixin):
             pass
 
         self.root.after(100, self._poll_duplicate_progress)
+
+    def _duplicate_search_over(self):
+        """Give back the controls the search took, Cancel included (left on,
+        it would 'cancel' nothing and leave "Cancelling …" in the status
+        bar). Not when a scan started since: they're its controls now."""
+        self.tools_btn.config(state="normal")
+        self.top_count_combo.config(state="readonly")
+        self.cancel_btn.config(state="disabled")
 
     def _show_duplicates_window(self, scan_tree, duplicates):
         existing = getattr(self, "_duplicates_win", None)
