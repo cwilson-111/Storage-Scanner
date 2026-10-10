@@ -30,6 +30,30 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   draws every level before the one below it, so the folders shown always
   get their tiles, and a folder whose contents don't fit within the limit
   is drawn as one tile instead of being half filled.
+- After a delete, the On Disk column, the treemap and its title no longer
+  keep counting the deleted bytes until the next scan.
+- The second name of a hard link can be deleted. The scan counts a hard
+  link's bytes once, so that name showed 0 bytes, and every delete of it
+  was refused as "its size changed since it was reviewed".
+- A scan can no longer get stuck "scanning" with Scan greyed out until a
+  restart: a failure in the elevated scan on macOS and Linux, or an error
+  while showing a scan's progress, now ends it properly.
+- Cancel turns off when a duplicate search ends; it used to stay on and
+  leave "Cancelling …" in the status bar if clicked.
+- Search & Filter stays quick on a whole drive: it lists the 5,000
+  largest matches and counts the rest (C:\Windows: 311,453 matches in
+  0.4 s, where listing every one took about 3.5 s).
+- Export Results and Tools ▸ Data Tools no longer freeze the window while
+  they write; a small dialog shows they're working.
+
+### Security
+
+- On Windows 11 22H2 and later, the app and its Turbo Scan helper, when
+  running as administrator, refuse to follow folder junctions made
+  without admin rights. Malware running as you could otherwise have
+  pointed the app's data folder at a system folder and had the elevated
+  helper write its log and cache files there. A scan run as administrator
+  through a junction you made yourself now fails instead of following it.
 
 ## v1.14.0 — 2026-10-08
 

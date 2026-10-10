@@ -1793,6 +1793,68 @@ pre-release suffixes are never "newer"). Reading the scheduled-task list
 works against real system tasks, but this machine has no task registered by
 the app, so that follow-up stays open until one is.
 
+### Code review (2026-10-10)
+
+A read-through of the whole package, tests and CI by four reviewers, with
+each finding checked in the code: engine 8/10, UI and tooling 8/10.
+Fixed, each with a test that fails on the old code unless noted:
+- `models.subtract_totals` took size and counts out of the folders above a
+  delete, but not `alloc_size`: On Disk, the treemap and its title kept the
+  deleted bytes until a rescan.
+- `delete_service.check_stale` refused every second hard link: the scan
+  gives that row size 0 (bytes counted once), so 0 ≠ the size on disk.
+  Now only its modified time is checked. `CachedNode.hardlink_dup` is False.
+- A scan could stay "running" for good: `_elevated_scan_worker_headless`
+  (macOS/Linux) let OSError and non-object JSON escape the thread, and any
+  exception in the live-tree display stopped `_poll_progress` from
+  rescheduling. The worker now reports any failure; a display error is
+  logged, the live rows freeze, and polling goes on (an error while
+  finishing still reaches Tk's error dialog). `tests/test_scan_progress_poll.py`.
+- Cancel stayed enabled after a duplicate search (`_duplicate_search_over`).
+- Elevated runs (the --mft-scan helper, the app restarted as admin) wrote
+  their log, history and Turbo cache under %LOCALAPPDATA% without the link
+  checks `--output` gets, so a junction made without admin rights could aim
+  those writes at a system folder. `redirection_guard.guard_elevated_process`
+  turns on RedirectionGuard (SetProcessMitigationPolicy,
+  ProcessRedirectionTrustPolicy) first thing in `Storage-Scanner.py` when
+  elevated. `tests/test_redirection_guard.py` writes through a fresh
+  junction in a child process: refused with the guard, followed without.
+  Not covered: Windows before 11 22H2 (no such switch), and file symbolic
+  links (they need admin rights or Developer Mode). Not yet run from a real
+  UAC-elevated helper; the next elevated `turbo_checklist.py` run covers it.
+- Search & Filter inserted a row per match on the Tk thread (C:\Windows:
+  311,453 rows, about 3.5 s). `search.largest_matches` keeps the 5,000
+  largest with a heap and counts the rest: 0.41 s in the real app,
+  screenshot checked. `filter_nodes` is gone.
+- Export Results and the CSV converters ran on the Tk thread.
+  `ui/busy_task.run_busy` runs them on a worker under a grabbing dialog: a
+  136 MB JSON export of C:\Windows kept the window responsive (longest
+  stall 0.33 s). Not a regression test; smoke-tested in the real app.
+- CI pasted `github.ref_name` into `python -c` strings and shell arguments
+  in jobs that can sign attestations; it now reads `REF_NAME` from the
+  environment. CI tests Python 3.11 (Ubuntu) and 3.14 (Windows), the ends
+  of README's range (both pass here). The Dependabot and requirements-dev
+  comments now say pins are exact and move by hand.
+
+Left as they are:
+- The Recycle Bin check lists the user's bin folder after every item.
+  Measured here: 0.8 ms per item with 26 items in the bin; it only
+  matters for very large bins and batches.
+- Transitive build dependencies aren't hash-locked (pip-compile
+  --generate-hashes would do it).
+- The UI state machine (live tree, cleanup view, cart) has few direct
+  tests; the coverage floor stays 49%.
+- Duplicates over 3 MiB are matched on sampled windows (documented, warned
+  in the UI); a full byte compare before deleting a duplicate would be
+  cheap insurance.
+
+Found while testing, not fixed: a Tk process can stall in GetMessageW with
+an empty queue, so `after` callbacks stop until any window message arrives
+(a posted WM_NULL or a mouse move wakes it). Seen only in test harnesses
+that start a scan right after building the window, on Tcl 8.6.12 and
+8.6.15 alike, and on the commit before today's changes too; the normal
+`main()` launch didn't stall in 20 tries.
+
 ## Executive assessment
 
 The project is already beyond a basic disk-usage viewer. It combines concurrent scanning, sortable storage analysis, duplicate detection, safe deletion, historical snapshots, growth comparison, capacity forecasting, a custom Tkinter interface, standalone Windows packaging, and automated GitHub releases.
