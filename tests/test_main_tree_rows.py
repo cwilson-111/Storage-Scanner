@@ -7,7 +7,8 @@ import os
 import queue
 import threading
 import time
-from tkinter import BooleanVar, StringVar, TclError, Tk, Toplevel
+from tkinter import BooleanVar, StringVar, TclError, Tk, Toplevel, ttk
+from tkinter import font as tkfont
 
 import pytest
 
@@ -16,8 +17,9 @@ from storage_scanner.app import StorageScannerApp
 from storage_scanner.formatting import human_size
 from storage_scanner.live_tree_model import date_text, node_display
 from storage_scanner.owner import OwnerLookup
-from storage_scanner.settings import apply_theme
+from storage_scanner.settings import FONT_MONO, apply_theme
 from storage_scanner.ui import main_tree
+from storage_scanner.ui.dpi_follow import rescale
 
 # name -> size in bytes. Names differ in case so the name sort is seen to
 # ignore it; every size differs so the size sort has one right answer.
@@ -391,3 +393,30 @@ def test_sorting_by_owner_looks_up_every_listed_row_then_orders_them_a_to_z(app,
     sub_iid = _row(app, root_iid, "sub")
     assert app.tree.set(_row(app, sub_iid, "X.bin"), "owner") == "dave"  # an open level too
     _assert_striped(app, root_iid)
+
+
+def test_the_main_tree_follows_a_dpi_change_and_comes_back_unchanged(app):
+    window, tree = app.root, app.tree
+    start_dpi = float(window.tk.call("tk", "scaling")) * 72
+    font = tkfont.nametofont(FONT_MONO, root=window)
+
+    def looks():
+        window.update_idletasks()
+        return (
+            int(tree.column("percent", "width")),
+            int(tree.column("size", "width")),
+            int(ttk.Style().lookup("Treeview", "rowheight")),
+            font.metrics("linespace"),
+        )
+
+    before = looks()
+    rescale(window, start_dpi * 1.5)
+    percent_width, size_width, row_height, line = looks()
+
+    # Pixel sizes grow with the DPI, and so does the named row font, which
+    # a (family, size) tuple wouldn't.
+    assert (percent_width, size_width) == (round(before[0] * 1.5), round(before[1] * 1.5))
+    assert line > before[3] and row_height > before[2]
+
+    rescale(window, start_dpi)
+    assert looks() == before

@@ -130,7 +130,8 @@ def use_palette(name):
 
 
 # How much bigger than at 96 DPI the screen draws things: Tk's own scaling
-# (pixels per point) over its 96-DPI value. apply_theme sets it.
+# (pixels per point) over its 96-DPI value. apply_theme sets it, and
+# ui/dpi_follow.py when the main window moves to a monitor with another DPI.
 _UI_SCALE = 1.0
 
 
@@ -141,27 +142,57 @@ def px(pixels):
     return round(pixels * _UI_SCALE)
 
 
+def ui_scale():
+    """The scale px() uses: 1.0 at 96 DPI, 1.25 at 120, ..."""
+    return _UI_SCALE
+
+
 # Tkinter can only use fonts actually installed on the OS — there's no
 # @font-face equivalent — so this picks each platform's native modern UI
 # font rather than hardcoding one name and silently falling back on
 # whichever platform doesn't have it.
-# A Tk font spec is (family, size) or (family, size, style) -- the two
-# branches below don't all use the same shape, hence the loose annotation.
-FONT: tuple
-FONT_BOLD: tuple
-FONT_MONO: tuple
-FONT_MONO_BOLD: tuple
+#
+# The app's fonts are named Tk fonts that apply_theme creates. A widget
+# given a name follows the font when it's reconfigured, which is how the
+# whole window follows a DPI change (ui/dpi_follow.py); a font given as a
+# (family, size) tuple keeps the pixel size it got when first used.
+FONT = "StorageScannerFont"
+FONT_BOLD = "StorageScannerFontBold"
+FONT_MONO = "StorageScannerMono"
+FONT_MONO_BOLD = "StorageScannerMonoBold"
 
 if IS_MACOS:
-    FONT = ("Helvetica Neue", 12)
-    FONT_BOLD = ("Helvetica Neue", 12, "bold")
-    FONT_MONO = ("Menlo", 11)
-    FONT_MONO_BOLD = ("Menlo", 11, "bold")
+    _FONT_SPECS = {
+        FONT: {"family": "Helvetica Neue", "size": 12},
+        FONT_BOLD: {"family": "Helvetica Neue", "size": 12, "weight": "bold"},
+        FONT_MONO: {"family": "Menlo", "size": 11},
+        FONT_MONO_BOLD: {"family": "Menlo", "size": 11, "weight": "bold"},
+    }
 else:
-    FONT = ("Segoe UI", 9)
-    FONT_BOLD = ("Segoe UI Semibold", 9)
-    FONT_MONO = ("Consolas", 10)
-    FONT_MONO_BOLD = ("Consolas", 10, "bold")
+    _FONT_SPECS = {
+        FONT: {"family": "Segoe UI", "size": 9},
+        FONT_BOLD: {"family": "Segoe UI Semibold", "size": 9},
+        FONT_MONO: {"family": "Consolas", "size": 10},
+        FONT_MONO_BOLD: {"family": "Consolas", "size": 10, "weight": "bold"},
+    }
+
+
+def refresh_fonts(root):
+    """Create the app's named fonts in `root`'s interpreter, or re-size
+    every named font (the app's and Tk's own, such as TkDefaultFont) for
+    the current `tk scaling`. Tk computes a font's pixel size only when
+    the font is configured, so this is what makes widgets follow a DPI
+    change."""
+    existing = set(root.tk.splitlist(root.tk.call("font", "names")))
+    for name in existing - set(_FONT_SPECS):
+        font = tkfont.nametofont(name, root=root)
+        font.configure(size=font.cget("size"))
+    for name, spec in _FONT_SPECS.items():
+        if name in existing:
+            tkfont.nametofont(name, root=root).configure(**spec)
+        else:
+            font = tkfont.Font(root=root, name=name, **spec)
+            font.delete_font = False  # the name outlives this Python object
 
 
 def heat_color(fraction):
@@ -205,10 +236,12 @@ def contrast_text_color(hex_color):
 
 
 def apply_theme(root):
-    """Style every ttk widget with the palette in COLORS, and record how
-    much this screen scales things (px)."""
+    """Style every ttk widget with the palette in COLORS, record how much
+    this screen scales things (px), and size the fonts for it. Runs again
+    when the DPI changes (ui/dpi_follow.py)."""
     global _UI_SCALE
     _UI_SCALE = max(1.0, float(root.tk.call("tk", "scaling")) / (96 / 72))
+    refresh_fonts(root)
     C = COLORS
     style = ttk.Style()
     try:
@@ -309,7 +342,7 @@ def apply_theme(root):
         fieldbackground=C["panel"],
         foreground=C["fg"],
         # Tall enough for the row font at this DPI; 24 px at 100%.
-        rowheight=max(px(24), tkfont.Font(root=root, font=FONT_MONO).metrics("linespace") + 8),
+        rowheight=max(px(24), tkfont.nametofont(FONT_MONO, root=root).metrics("linespace") + 8),
         font=FONT_MONO,
         bordercolor=C["border"],
         lightcolor=C["border"],

@@ -336,7 +336,9 @@ version, so download the Data build once from the latest release.
   for exactly what this does and doesn't send.
 - **Appearance** — Settings ▸ Appearance: match the system's light or dark
   mode (the default), or always Light or Dark; it applies the next time
-  the app opens. Sharp on high-DPI (125–200%) Windows displays.
+  the app opens. Sharp on high-DPI (125–200%) Windows displays, and when
+  the window moves to a monitor at another scale it redraws at that scale
+  (open windows follow the main window's monitor).
 
 Pure Python standard library for everything above — **no required
 third-party runtime dependencies**. Two features are the exceptions,

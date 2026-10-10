@@ -8,11 +8,12 @@ colours when it's built.
 
 enable_dpi_awareness runs before the first Tk window. Without it, Windows
 draws the app at 96 DPI and stretches the bitmap on a 125-150% display,
-which blurs every letter. It declares *system* DPI awareness, not
-per-monitor: Tk 8.6 doesn't redraw at a new DPI when a window moves to
-another monitor, so on a second monitor with a different scale Windows
-stretching it is the better outcome. Tk then sizes fonts for the real DPI
-and settings.px scales the pixel sizes to match.
+which blurs every letter. It declares per-monitor awareness (v2, Windows
+10 1703+), so the app is sharp on every monitor; Tk 8.6 doesn't redraw at
+a new DPI by itself, so ui/dpi_follow.py rescales the app when the main
+window moves to a monitor with another scale. Older Windows gets system
+awareness: sharp on the main monitor, stretched by Windows elsewhere.
+Tk sizes fonts for the DPI and settings.px scales the pixel sizes to match.
 """
 
 import ctypes
@@ -71,11 +72,23 @@ def resolve(setting):
     return DARK if os_prefers_dark() else LIGHT
 
 
+# SetProcessDpiAwarenessContext's DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
+_PER_MONITOR_AWARE_V2 = -4
+
+
 def enable_dpi_awareness():
-    """Declare system DPI awareness (Windows; nothing elsewhere). Must run
-    before the first window exists. Returns whether it took effect."""
+    """Declare per-monitor (v2) DPI awareness, or system awareness where
+    Windows is too old for it (Windows only; nothing elsewhere). Must run
+    before the first window exists. Returns whether either took effect."""
     if not IS_WINDOWS:
         return False
+    try:
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        user32.SetProcessDpiAwarenessContext.argtypes = (ctypes.c_void_p,)
+        if user32.SetProcessDpiAwarenessContext(_PER_MONITOR_AWARE_V2):
+            return True
+    except (AttributeError, OSError):
+        pass  # before Windows 10 1703
     try:
         # PROCESS_SYSTEM_DPI_AWARE; fails harmlessly if already declared.
         return ctypes.windll.shcore.SetProcessDpiAwareness(1) == 0  # type: ignore[attr-defined]

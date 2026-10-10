@@ -81,12 +81,13 @@ class TreemapPane:
             bd=0,
         )
         self.canvas.pack(side=TOP, fill=BOTH, expand=True, padx=8)
-        self.font = tkfont.Font(root=master, font=FONT)
-        self.char_px = max(1, self.font.measure("0"))
-        self.line_px = self.font.metrics("linespace")  # a Tk call: once, not per label
+        self.font = tkfont.nametofont(FONT, root=master)
+        self._measure()
 
         canvas = self.canvas
         canvas.bind("<Configure>", lambda _e: self.schedule())
+        # The fonts and px() sizes changed (ui/dpi_follow.py).
+        master.winfo_toplevel().bind("<<DpiChanged>>", lambda _e: self.schedule(), add="+")
         canvas.bind("<Motion>", self._on_motion)
         canvas.bind("<Leave>", lambda _e: self.info_var.set(""))
         canvas.bind("<Button-1>", self._on_click)
@@ -150,6 +151,12 @@ class TreemapPane:
     def mode(self):
         return next((mode for mode, label in MODES if label == self.mode_var.get()), SIZE)
 
+    def _measure(self):
+        """The label font's digit width and line height: two Tk calls a
+        drawing, not two per label."""
+        self.char_px = max(1, self.font.measure("0"))
+        self.line_px = self.font.metrics("linespace")
+
     def redraw(self):
         self._pending = None
         canvas = self.canvas
@@ -170,6 +177,7 @@ class TreemapPane:
             return
         folder = self.chain[-1]
         self.title_var.set(f"{folder.path}  —  {human_size(folder.alloc_size)} on disk")
+        self._measure()  # the font follows the DPI
         self.tiles = nested_tiles(folder, width, height, header=px(16), min_px=px(4))
         mode = self.mode()
         app = self.app

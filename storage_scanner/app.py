@@ -32,6 +32,7 @@ from storage_scanner.ui.cart_window import CartMixin
 from storage_scanner.ui.cleanup_window import CleanupMixin
 from storage_scanner.ui.data_tools import DataToolsMixin
 from storage_scanner.ui.delete_dialogs import DeletionMixin
+from storage_scanner.ui.dpi_follow import follow_monitor_dpi
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 from storage_scanner.ui.error_dialog import ErrorDialogMixin
 from storage_scanner.ui.file_windows import FileWindowsMixin
@@ -94,6 +95,7 @@ class StorageScannerApp(
         use_palette(self.appearance)
         apply_theme(root)
         root.geometry(f"{px(960)}x{px(640)}")
+        follow_monitor_dpi(root)
         if self.appearance == appearance.DARK:
             root.after_idle(lambda: appearance.use_dark_title_bar(root))
             root.bind_class("Toplevel", "<Map>", _dark_title_bar_on_map, add="+")

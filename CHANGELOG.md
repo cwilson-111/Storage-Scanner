@@ -15,6 +15,13 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ## Unreleased
 
+### Main window
+
+- On Windows, the app redraws at the right size when its window moves to
+  a monitor with a different scale (for example a 100% laptop screen and
+  a 125% monitor): text stays sharp instead of being stretched by Windows
+  or left too small. Open windows follow the main window's monitor.
+
 ### Fixes
 
 - The treemap no longer leaves part of a large window blank. Past its

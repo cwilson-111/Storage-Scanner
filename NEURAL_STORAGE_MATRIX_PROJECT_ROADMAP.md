@@ -1393,7 +1393,7 @@ growth — ✅ done (2026-10-02); cushion shading ✅ (2026-10-03).**
   1904×639: render 50–53 ms + PhotoImage 10 ms, whole redraw 126–142 ms
   (flat 174–192); 450 tiles in the default window 30 ms. Screenshots
   checked.
-- Not done: per-monitor DPI.
+- Per-monitor DPI: done with P2-21 (2026-10-09).
 - Done (3, 2026-10-09): the 3,000-tile cap no longer blanks top-level
   items. `nested_tiles` filled depth-first, so the first big folders'
   insides used up the budget. It now fills breadth-first, one level after
@@ -1489,8 +1489,8 @@ Owner and Folders columns ✅ (2026-10-03).**
   after recycling one; a recount over 1M files takes 0.71 s, paid only
   while the window is open.
 
-**P2-21. High DPI and a dark theme — ✅ done (2026-10-01); a real 150%
-screen not tried.**
+**P2-21. High DPI and a dark theme — ✅ done (2026-10-01); per-monitor DPI
+✅ (2026-10-09), tested on a real 125% monitor.**
 - Why: nothing declares DPI awareness. The v1.11.0 exe's manifest has
   `longPathAware` but no `dpiAware`, the code never calls
   `SetProcessDpiAwareness`, and the venv's Python reports awareness 0, so
@@ -1525,9 +1525,35 @@ screen not tried.**
   tab borders); light with Tk scaling 2.0 (what a 144-DPI, 150% screen
   gives a DPI-aware process): window 1440×960, rows 36 px, columns and
   text in proportion, nothing clipped. Gates and 750 tests.
-- Not done: a physical 125–150% display (this one is 100%); classic Tk
-  menus and message boxes stay in the system's light style; switching
-  needs a restart.
+- Not done: classic Tk menus and message boxes stay in the system's light
+  style; switching needs a restart.
+- Done (2, 2026-10-09): per-monitor DPI. `enable_dpi_awareness` declares
+  per-monitor v2 (system awareness before Windows 10 1703).
+  `ui/dpi_follow.py` checks the main window's DPI (`GetDpiForWindow`) on
+  each `<Configure>` and, when it changes, rescales the app: `tk scaling`,
+  then `apply_theme` again (px(), row height, scrollbar arrows), then every
+  Treeview column, wrap length, canvas size and given window size times
+  the ratio, then `<<DpiChanged>>` (the treemap redraws and re-measures its
+  font). The app's fonts are now named Tk fonts (`settings.refresh_fonts`):
+  Tk sizes a font tuple once and caches it, so tuples never followed a new
+  `tk scaling`. Tk has one font scale for the whole app, so every window
+  follows the main window's monitor (the owner's choice); a dialog dragged
+  alone to the other monitor keeps that scale. Two Tk quirks handled:
+  setting a column width when the columns overflow the tree squeezes Name
+  (the stretch column) to 20 px for good, so its minimum is held at the
+  new width until the windows have resized; and a size Tk gives a window
+  on a non-primary-scale monitor comes out 2 px narrow (1,201 asked, 1,199
+  got), so the main window's size is kept at 96 DPI and only a real resize
+  changes it, else each move would shrink it.
+- Verified (2): real app on this machine, monitor 1 at 100% and monitor 2
+  (1280×1024) at 125%, moved 1 → 2 → 1 → 2 → 1: main window 960×640 →
+  1199×801 → 960×640 → 1199×801 → 960×640; Size column 110 → 138; row
+  height 24 → 30; label font line 15 → 20 px (TkDefaultFont too); Name
+  column 440 → 551 → 440; File Types window 760×520 → 951×651 → 760×520;
+  treemap re-laid out. Screenshot at 125% checked: sharp, nothing clipped.
+  Plain Tk 8.6.12 with per-monitor awareness does nothing on such a move
+  (`tk scaling` stays 1.333). `tests/test_main_tree_rows.py` checks a 150%
+  round trip of the main tree's columns, row height and row font.
 
 **P2-22. Explorer integration and package managers — ✅ done (folder menu
 and `StorageScanner.exe <folder>` 2026-09-29; Scoop and winget 2026-10-02).**
