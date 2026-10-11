@@ -6,7 +6,9 @@ the Recycle Bin."""
 
 import functools
 import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from tkinter import ttk
@@ -35,7 +37,17 @@ PROTECTED = 500  # system.dll, inside a folder the OS manages
 
 @pytest.fixture
 def folder(tmp_path):
-    folder = tmp_path / "scan"
+    # macOS keeps pytest's tmp_path under /private/var, which this app treats
+    # as an OS-managed (Protected) location; /tmp there is /private/tmp.
+    if sys.platform == "darwin":
+        base = Path(tempfile.mkdtemp(prefix="cleanup-view-", dir="/tmp"))
+        yield from _make_folder(base / "scan")
+        shutil.rmtree(base, ignore_errors=True)
+    else:
+        yield from _make_folder(tmp_path / "scan")
+
+
+def _make_folder(folder):
     marker = DEFAULT_DUPLICATE_EXCLUDES[0].strip("\\/").replace("\\", "/").split("/")
     files = {
         Path(*marker, "system.dll"): b"s" * PROTECTED,
@@ -54,7 +66,7 @@ def folder(tmp_path):
     # The older copy is the one to keep.
     os.utime(folder / "photos" / "a.jpg", (now - 1000, now - 1000))
     os.utime(folder / "downloads" / "a (copy).jpg", (now - 10, now - 10))
-    return folder
+    yield folder
 
 
 @pytest.fixture
