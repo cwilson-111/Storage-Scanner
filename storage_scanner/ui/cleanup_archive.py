@@ -137,7 +137,7 @@ class _ArchiveRun:
 
     def remove_original(self, request):
         view = self.view
-        return view.app._delete_nodes(
+        return view.app._delete_now(
             [request._replace(scan_root=view.scan_path, tree=view.scan_tree)],
             view.win,
             report=False,

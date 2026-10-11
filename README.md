@@ -215,7 +215,9 @@ version, so download the Data build once from the latest release.
   somewhere in between. The Duplicate Files window says how many groups
   that applies to and explains it on each such row, and Cleanup
   Recommendations rates those copies medium rather than low risk, so review
-  before deleting. A file that changed size since the scan is left out
+  before deleting. Deleting a copy from a sampled group first compares it
+  byte for byte with the copies that stay, and keeps it if none matches.
+  A file that changed size since the scan is left out
   rather than compared. Each group gets an automatic **keeper
   recommendation** (prefers a copy outside Downloads/Desktop/Temp, then the
   oldest) with the reasoning shown — and the keeper is genuinely protected:

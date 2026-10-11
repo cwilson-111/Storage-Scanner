@@ -308,6 +308,39 @@ def test_a_second_hard_link_can_be_deleted(tmp_path):
     assert app.trashed == [extra.path]
 
 
+def _sampled_pair(tmp_path, differ_between_windows):
+    """Two 5 MiB files the duplicate finder only samples (first, middle and
+    last 1 MiB), optionally differing in one byte the windows don't cover."""
+    data = bytearray(os.urandom(5 * 1024 * 1024))
+    other = bytearray(data)
+    if differ_between_windows:
+        other[1536 * 1024] ^= 0xFF  # between the first and middle windows
+    _files(tmp_path, {"keep.bin": bytes(data), "copy.bin": bytes(other)})
+    app = _App(tmp_path)
+    [(_size, _digest, group)] = app.duplicates  # the finder took them for copies
+    assert len(group) == 2
+    return app, app.node("copy.bin")
+
+
+def test_a_sampled_duplicate_that_differs_between_the_windows_is_kept(tmp_path):
+    app, copy = _sampled_pair(tmp_path, differ_between_windows=True)
+
+    [result] = app.delete([copy], "Duplicate Files", as_duplicate=True)
+
+    assert result.outcome == REFUSED
+    assert "byte for byte they differ" in result.message
+    assert app.trashed == []
+
+
+def test_a_sampled_duplicate_identical_throughout_is_deleted(tmp_path):
+    app, copy = _sampled_pair(tmp_path, differ_between_windows=False)
+
+    [result] = app.delete([copy], "Duplicate Files", as_duplicate=True)
+
+    assert result.outcome == RECYCLED
+    assert app.trashed == [copy.path]
+
+
 def test_a_cached_cleanup_file_replaced_since_that_session_is_refused(tmp_path):
     """A cold-start Cleanup row keeps the modified time its run saw."""
     _files(tmp_path, {"old.log": b"l" * 10})

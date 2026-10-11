@@ -15,7 +15,11 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from storage_scanner.cleanup_recommendations import is_protected_path, pick_keeper
+from storage_scanner.cleanup_recommendations import (
+    is_protected_path,
+    is_sampled_duplicate,
+    pick_keeper,
+)
 from storage_scanner.delete_guard import name_is_trimmed_by_windows, windows_trims_path
 from storage_scanner.models import FLAG_CLOUD_PLACEHOLDER, FileNode, iter_file_rows
 from storage_scanner.platform_support import IS_WINDOWS
@@ -88,6 +92,27 @@ def sampled_digest(path, size):
         return (edge, None)
     middle = middle_hash_file(path, size, chunk_size=chunk_size)
     return None if middle is None else (edge, middle)
+
+
+_COMPARE_BLOCK = 4 * 1024 * 1024
+
+
+def same_content(path_a, path_b, size):
+    """True if the files at `path_a` and `path_b` are both still `size`
+    bytes and identical byte for byte. Reads until the first difference, so
+    files that differ early cost little; identical ones are read whole."""
+    try:
+        with open(path_a, "rb") as a, open(path_b, "rb") as b:
+            if os.fstat(a.fileno()).st_size != size or os.fstat(b.fileno()).st_size != size:
+                return False
+            while True:
+                block = a.read(_COMPARE_BLOCK)
+                if block != b.read(_COMPARE_BLOCK):
+                    return False
+                if not block:
+                    return True
+    except OSError:
+        return False
 
 
 def _collect_candidates(root_node, stats, progress_q, cancel_event, skip):
@@ -318,8 +343,22 @@ def settle_group(nodes, keeper, deleted):
     return remaining, keeper
 
 
-def another_copy_exists(target, group):
-    """True if some copy in `group` other than `target` is still on disk
-    with the group's size and the same sampled windows the finder hashed."""
+IDENTICAL, ONLY_WINDOWS_MATCH = "identical", "only windows match"
+
+
+def other_copy(target, group, identical=same_content):
+    """Whether a copy in `group` other than `target` is still on disk with
+    the same content: IDENTICAL if one has the group's size and sampled
+    windows and, for a sampled group (the windows don't cover the whole
+    file), the same bytes as `target` throughout, by
+    `identical(target_path, other_path, size)`; ONLY_WINDOWS_MATCH if some
+    have the same windows but none the same bytes; None if none is left."""
     size, digest, nodes = group
-    return any(node != target and sampled_digest(node.path, size) == digest for node in nodes)
+    status = None
+    for node in nodes:
+        if node == target or sampled_digest(node.path, size) != digest:
+            continue
+        if not is_sampled_duplicate(size) or identical(target.path, node.path, size):
+            return IDENTICAL
+        status = ONLY_WINDOWS_MATCH
+    return status

@@ -330,9 +330,9 @@ def sampled_match_warning(count, noun):
         return ""
     window = human_size(DUPLICATE_HASH_CHUNK_BYTES)
     return (
-        f"\n\n⚠ {count} {noun} are from sampled duplicate matches (only the first, "
-        f"middle, and last {window} compared — bytes between the compared windows "
-        "weren't checked)."
+        f"\n\n{count} {noun} are from sampled duplicate matches (only the first, "
+        f"middle, and last {window} compared). Each is compared byte for byte with "
+        "the copy that stays before it's deleted, and kept if they differ."
     )
 
 

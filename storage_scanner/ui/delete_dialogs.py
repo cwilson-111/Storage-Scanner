@@ -10,16 +10,18 @@ subscribes through _watch_deletions() to drop its own rows.
 
 from tkinter import BOTTOM, LEFT, RIGHT, TOP, StringVar, Toplevel, X, messagebox, ttk
 
+from storage_scanner import duplicate_finder
+from storage_scanner.cleanup_recommendations import is_sampled_duplicate
 from storage_scanner.delete_guard import typed_name_matches
 from storage_scanner.delete_outcome import DELETED_PERMANENTLY, RECYCLED, UNVERIFIED
 from storage_scanner.delete_service import DeleteService
-from storage_scanner.duplicate_finder import prune_groups
 from storage_scanner.formatting import human_size
 from storage_scanner.logging_setup import logger
 from storage_scanner.models import remove_from_tree
 from storage_scanner.platform_support import TRASH_NAME, resource_path
 from storage_scanner.settings import COLORS, px
 from storage_scanner.ui.app_state import AppMixin
+from storage_scanner.ui.busy_task import run_busy
 
 # How many refused/failed items one error dialog lists by name.
 _MAX_LISTED = 10
@@ -126,14 +128,80 @@ class DeletionMixin(AppMixin):
 
     def _delete_nodes(self, requests, parent=None, report=True):
         """Run `requests` (delete_service.DeleteRequests) through the delete
-        service, asking any questions over `parent`; returns the results.
-        With `report`, says what happened in the status bar, and in a dialog
-        whatever wasn't simply deleted."""
+        service, asking any questions over `parent`. With `report`, says
+        what happened in the status bar, and in a dialog whatever wasn't
+        simply deleted.
+
+        A copy deleted as a duplicate of a sampled group (only the first,
+        middle and last windows were hashed) is first compared byte for
+        byte with the copies that stay, on a worker thread under a busy
+        dialog; the deletes run once that's done, so this may return before
+        they have."""
         parent = parent or self.root
-        results = self.delete_service.delete(requests, TkConfirmer(parent))
+        checks = self._sampled_duplicate_checks(requests)
+        if not checks:
+            self._delete_now(requests, parent, report)
+            return
+
+        def compare():
+            # As delete_service checks them: the copies that stay whose
+            # sampled windows still match, until one matches byte for byte.
+            answers = {}
+            for path, size, digest, others in checks:
+                for other in others:
+                    if duplicate_finder.sampled_digest(other, size) != digest:
+                        continue
+                    same = duplicate_finder.same_content(path, other, size)
+                    answers[path, other, size] = same
+                    if same:
+                        break
+            return answers
+
+        def compared(answers):
+            def identical(path_a, path_b, size):
+                known = answers.get((path_a, path_b, size))
+                if known is None:  # not reached up front; asked now
+                    return duplicate_finder.same_content(path_a, path_b, size)
+                return known
+
+            self._delete_now(requests, parent, report, identical)
+
+        run_busy(
+            parent,
+            "Checking duplicates",
+            f"Comparing {len(checks):,} large duplicate(s) byte for byte with the copies "
+            "that stay …",
+            compare,
+            compared,
+            lambda exc: messagebox.showerror(
+                "Storage Scanner",
+                f"Couldn't compare the duplicates, so nothing was deleted:\n{exc}",
+                parent=parent,
+            ),
+        )
+
+    def _delete_now(self, requests, parent, report=True, identical=duplicate_finder.same_content):
+        """_delete_nodes without the byte comparison up front; returns the
+        results. For requests that aren't sampled duplicates."""
+        results = self.delete_service.delete(requests, TkConfirmer(parent), identical)
         if report:
             self._report_delete_results(results, parent)
         return results
+
+    def _sampled_duplicate_checks(self, requests):
+        """(path, size, digest, [paths of the other copies]) for each
+        request deleting a copy of a sampled duplicate group."""
+        checks = []
+        for request in requests:
+            node = request.node
+            if not request.as_duplicate or not is_sampled_duplicate(node.size):
+                continue
+            group = duplicate_finder.find_group(self.duplicates, node)
+            if group is not None:
+                size, digest, nodes = group
+                others = [other.path for other in nodes if other != node]
+                checks.append((node.path, size, digest, others))
+        return checks
 
     def _report_delete_results(self, results, parent):
         recycled = sum(1 for r in results if r.outcome in (RECYCLED, UNVERIFIED))
@@ -162,7 +230,7 @@ class DeletionMixin(AppMixin):
     def _after_nodes_deleted(self, deleted):
         self.cart.remove_deleted(deleted)
         if self.duplicates:
-            self.duplicates = prune_groups(self.duplicates, deleted)
+            self.duplicates = duplicate_finder.prune_groups(self.duplicates, deleted)
         self._remove_deleted_from_tree(deleted)
         self._refresh_cart_indicator()
 

@@ -222,6 +222,13 @@ if TYPE_CHECKING:
             requests: Sequence[DeleteRequest],
             parent: Optional[Misc] = None,
             report: bool = True,
+        ) -> None: ...
+        def _delete_now(
+            self,
+            requests: Sequence[DeleteRequest],
+            parent: Misc,
+            report: bool = True,
+            identical: Callable[[str, str, int], bool] = ...,
         ) -> list[DeleteResult]: ...
         def _refresh_cart_indicator(self) -> None: ...
 

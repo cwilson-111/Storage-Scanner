@@ -253,14 +253,17 @@ class DeleteService:
         roots = [root for root in (self._scan_root(), request.scan_root) if root]
         return delete_guard.refusal_reason(node.path, roots) or check_stale(node)
 
-    def delete(self, requests, confirmer):
-        """Delete each request in turn; returns a DeleteResult per request."""
+    def delete(self, requests, confirmer, identical=duplicate_finder.same_content):
+        """Delete each request in turn; returns a DeleteResult per request.
+        `identical(path_a, path_b, size)` is how a copy deleted as a
+        duplicate of a sampled group is compared with the copy that stays
+        (the UI passes answers it worked out off the Tk thread)."""
         results = []
         removed = []
         try:
             for request in requests:
                 try:
-                    result = self._delete_one(request, confirmer)
+                    result = self._delete_one(request, confirmer, identical)
                 except Exception:  # noqa: BLE001 - one bad item mustn't stop the batch
                     logger.exception("Deleting %r failed", request.node.path)
                     result = DeleteResult(request, FAILED, COULD_NOT_DELETE)
@@ -273,7 +276,7 @@ class DeleteService:
                 self._notify(DeletedSet(removed))
         return results
 
-    def _delete_one(self, request, confirmer):
+    def _delete_one(self, request, confirmer, identical):
         node = request.node
         reason = self.refusal(request)
         if reason:
@@ -286,7 +289,7 @@ class DeleteService:
                 "since the scan).",
             )
         if request.as_duplicate:
-            reason = self._last_copy_reason(node)
+            reason = self._last_copy_reason(node, identical)
             if reason:
                 return DeleteResult(request, REFUSED, reason)
         if delete_guard.needs_typed_confirmation(node) and not confirmer.confirm_large_folder(node):
@@ -315,7 +318,7 @@ class DeleteService:
         outcome = self._trash(node.path)
         return DeleteResult(request, outcome, _TRASH_MESSAGES.get(outcome))
 
-    def _last_copy_reason(self, node):
+    def _last_copy_reason(self, node, identical):
         group = duplicate_finder.find_group(self._duplicate_groups(), node)
         if group is None:
             return (
@@ -323,7 +326,14 @@ class DeleteService:
                 "list is from an earlier scan), so it wasn't deleted as a duplicate. If you "
                 "still want it gone, delete it from the main tree."
             )
-        if not duplicate_finder.another_copy_exists(node, group):
+        status = duplicate_finder.other_copy(node, group, identical)
+        if status == duplicate_finder.ONLY_WINDOWS_MATCH:
+            return (
+                "The other copies only match it in the parts the duplicate search "
+                "compared; byte for byte they differ, so it wasn't deleted as a "
+                "duplicate. If you still want it gone, delete it from the main tree."
+            )
+        if status is None:
             return (
                 "No other copy with the same content is left on disk, so this is the last "
                 "one and it wasn't deleted as a duplicate. If you still want it gone, "
