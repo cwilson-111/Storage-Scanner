@@ -6,8 +6,8 @@
 #     pre-commit install
 #
 # Both tools read their settings from pyproject.toml. The versions are the
-# ones CI installs today: requirements-dev.txt only sets floors, so CI takes
-# the newest release, and `pre-commit autoupdate --freeze` catches up. Like
+# ones requirements-dev.txt pins (CI installs them from requirements-dev.lock);
+# move both together. Like
 # the Actions in .github/workflows/build.yml, each hook repo is pinned to an
 # immutable commit SHA, with the tag it corresponds to in the comment.
 repos:

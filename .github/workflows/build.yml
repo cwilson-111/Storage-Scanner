@@ -72,7 +72,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock
 
       # Gates, in cheapest-first order so an obvious lint break fails in
       # seconds instead of after the whole suite. All four read their config
@@ -131,11 +131,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock
 
       - name: Install the Data build's packages
         if: matrix.data-packages
-        run: pip install -r requirements-data.txt
+        run: pip install --require-hashes -r requirements-data.lock
 
       # Tk needs a display: xvfb gives the Linux runner one.
       - name: Run test suite
@@ -170,7 +170,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock
 
       - name: Build Icon
         run: python make_icon.py
@@ -259,7 +259,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build dependencies
-        run: pip install -r requirements-dev.txt -r requirements-data.txt
+        run: pip install --require-hashes -r requirements-data.lock
 
       - name: Build Icon
         run: python make_icon.py
@@ -332,7 +332,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock
 
       - name: Build icons
         run: python make_icon.py
@@ -411,7 +411,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock
 
       - name: Stamp version
         # Same convention as the Windows/macOS build jobs: bakes the git tag

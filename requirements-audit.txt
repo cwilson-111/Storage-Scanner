@@ -1,0 +1,3 @@
+# The dependency audit's own tool (.github/workflows/security.yml), locked
+# with hashes in requirements-audit.lock like the build's tools.
+pip-audit==2.10.1

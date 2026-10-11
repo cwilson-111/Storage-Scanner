@@ -48,14 +48,15 @@ jobs:
           python-version: "3.12"
 
       # pip-audit rather than a third-party action: the whole dependency
-      # surface is requirements-dev.txt (PyInstaller, Pillow, the test/lint
-      # toolchain) and requirements-data.txt (pyarrow, openpyxl), and those
-      # land inside the shipped executables.
+      # surface is requirements-data.lock (PyInstaller, Pillow, the test/lint
+      # toolchain, pyarrow, openpyxl, and everything they pull in), and those
+      # land inside the shipped executables. pip-audit itself is hash-locked
+      # too (requirements-audit.lock).
       - name: Install pip-audit
-        run: pip install pip-audit
+        run: pip install --require-hashes -r requirements-audit.lock
 
       - name: Audit build and test dependencies
-        run: pip-audit --strict --requirement requirements-dev.txt --requirement requirements-data.txt
+        run: pip-audit --strict --require-hashes --disable-pip --requirement requirements-data.lock
 
   secrets:
     name: Secret scan

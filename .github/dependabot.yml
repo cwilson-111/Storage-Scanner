@@ -31,7 +31,8 @@ updates:
   # bundles the same PyInstaller; those pins move by hand. A security
   # advisory still gets a PR, which matters because PyInstaller bundles
   # whatever is installed at build time into the shipped executable. (The
-  # pins cover the tools named there, not what they pull in themselves.)
+  # .lock files pin what they pull in, with hashes; regenerate them with
+  # lock_requirements.py after a Dependabot PR.)
   - package-ecosystem: "pip"
     directory: "/"
     schedule:

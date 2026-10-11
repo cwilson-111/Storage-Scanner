@@ -37,7 +37,7 @@ in order:
 
 **Windows:**
 ```
-pip install -r requirements-dev.txt
+pip install --require-hashes -r requirements-dev.lock
 python make_icon.py
 pyinstaller --onefile --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." Storage-Scanner.py
 pyinstaller --onedir --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." --distpath dist/portable --workpath build/portable Storage-Scanner.py
@@ -48,7 +48,7 @@ as the portable ZIP, and `SHA256SUMS.txt`. Both builds are smoke-tested.
 
 **macOS:**
 ```
-pip install -r requirements-dev.txt
+pip install --require-hashes -r requirements-dev.lock
 python make_icon.py
 pyinstaller --windowed --name StorageScanner --icon icon.icns --add-data "icon.ico:." --add-data "icon.icns:." Storage-Scanner.py
 hdiutil create -volname "Storage Scanner" -srcfolder dist/dmg -ov -format UDZO dist/StorageScanner.dmg
@@ -58,12 +58,17 @@ followed by generating `SHA256SUMS-macos.txt` with `shasum`.
 
 **Linux:**
 ```
-pip install -r requirements-dev.txt
+pip install --require-hashes -r requirements-dev.lock
 pyinstaller --onefile --name StorageScanner --add-data "icon.ico:." Storage-Scanner.py
 tar -czf dist/StorageScanner-linux-x86_64.tar.gz -C dist StorageScanner
 python make_sbom.py --app-version <the git tag> --output dist/sbom-linux.json
 ```
 followed by generating `SHA256SUMS-linux.txt` with `sha256sum`.
+
+The `.lock` files pin everything the build tools pull in as well as the
+tools, each with the SHA-256 of every file PyPI has for that version, so
+pip installs exactly those files or nothing (`lock_requirements.py`
+regenerates them from `requirements-*.txt`).
 
 The full command list for each (also visible in `build.yml` itself) is the
 source of truth if this ever drifts out of sync with that file. The actions
@@ -87,7 +92,7 @@ when that specific feature runs: `pyarrow` (Compress CSV to Parquet) and
 that's actually installed in the build environment when it runs, so the
 standard build doesn't include them; the Windows-only **Data build**
 (`build.yml`'s `build-data` job, from the same tag and in the same release)
-installs `requirements-data.txt` and bundles them. Each release's own
+installs `requirements-data.lock` and bundles them. Each release's own
 `sbom*.json` lists exactly which optional packages made it in — check that
 rather than assuming from this doc.
 
@@ -99,10 +104,10 @@ published against a dependency that hasn't changed still gets found):
 
 - **CodeQL** (`security-extended` query pack) statically analyses the Python
   source; findings land in the repo's Security tab.
-- **`pip-audit --strict`** checks `requirements-dev.txt` — PyInstaller,
-  Pillow and the test toolchain — and `requirements-data.txt` (the Data
-  build's `pyarrow` and `openpyxl`) against the Python advisory database.
-  Those files are the entire dependency surface, and PyInstaller's output
+- **`pip-audit --strict`** checks `requirements-data.lock` — PyInstaller,
+  Pillow, the test toolchain and the Data build's `pyarrow` and `openpyxl`,
+  with everything they pull in — against the Python advisory database.
+  That file is the entire dependency surface, and PyInstaller's output
   embeds what's installed at build time, so a vulnerable build dependency
   is a shipped one.
 - **gitleaks** scans the full commit history, not just the current tip, for
