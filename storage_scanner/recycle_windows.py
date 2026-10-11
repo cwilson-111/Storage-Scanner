@@ -70,6 +70,9 @@ _BIN_SETTINGS_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBuck
 # How far before the delete call a $I file's timestamp may be and still
 # count as this delete's (clock granularity, not a race allowance).
 _BIN_CLOCK_SLACK_SECONDS = 5
+# How long a recycled item's $I file may take to appear, and how often to look.
+_BIN_ARRIVAL_SECONDS = 1.0
+_BIN_POLL_SECONDS = 0.01
 
 
 class _SHFILEOPSTRUCTW(ctypes.Structure):
@@ -91,6 +94,73 @@ class _SHQUERYRBINFO(ctypes.Structure):
         ("i64Size", ctypes.c_longlong),
         ("i64NumItems", ctypes.c_longlong),
     ]
+
+
+class _WIN32_FIND_DATAW(ctypes.Structure):
+    _fields_ = [
+        ("dwFileAttributes", wintypes.DWORD),
+        ("ftCreationTime", wintypes.FILETIME),
+        ("ftLastAccessTime", wintypes.FILETIME),
+        ("ftLastWriteTime", wintypes.FILETIME),
+        ("nFileSizeHigh", wintypes.DWORD),
+        ("nFileSizeLow", wintypes.DWORD),
+        ("dwReserved0", wintypes.DWORD),
+        ("dwReserved1", wintypes.DWORD),
+        ("cFileName", wintypes.WCHAR * 260),
+        ("cAlternateFileName", wintypes.WCHAR * 14),
+    ]
+
+
+_FIND_EX_INFO_BASIC = 1  # no 8.3 names
+_FIND_FIRST_EX_LARGE_FETCH = 2
+_ERROR_FILE_NOT_FOUND = 2
+_ERROR_NO_MORE_FILES = 18
+_FILETIME_EPOCH = 116444736000000000  # 1970-01-01 in 100 ns steps since 1601
+
+
+def _find_files(pattern):
+    """[(name, modified time), ...] of the files matching `pattern` (a
+    path whose last part may hold * and ?), matched by the file system
+    rather than by listing the folder here; None if the folder can't be
+    read."""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    find_first = kernel32.FindFirstFileExW
+    find_first.restype = wintypes.HANDLE
+    find_first.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(_WIN32_FIND_DATAW),
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.FindNextFileW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_WIN32_FIND_DATAW)]
+    kernel32.FindClose.argtypes = [wintypes.HANDLE]
+    data = _WIN32_FIND_DATAW()
+    handle = find_first(
+        pattern, _FIND_EX_INFO_BASIC, ctypes.byref(data), 0, None, _FIND_FIRST_EX_LARGE_FETCH
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        error = ctypes.get_last_error()
+        return [] if error in (_ERROR_FILE_NOT_FOUND, _ERROR_NO_MORE_FILES) else None
+    found = []
+    try:
+        while True:
+            written = data.ftLastWriteTime
+            ticks = (written.dwHighDateTime << 32) | written.dwLowDateTime
+            found.append((data.cFileName, (ticks - _FILETIME_EPOCH) / 10_000_000))
+            if not kernel32.FindNextFileW(handle, ctypes.byref(data)):
+                break
+    finally:
+        kernel32.FindClose(handle)
+    return found
+
+
+def _bin_extension(name):
+    """The extension Windows gives an item's $I and $R files: everything
+    from the last dot of its name (".env" for ".env"), or nothing."""
+    dot = name.rfind(".")
+    return name[dot:] if dot >= 0 else ""
 
 
 def extended_path(path):
@@ -281,10 +351,16 @@ def _read_info_file(path):
     return raw.decode("utf-16-le", errors="replace").split("\x00")[0]
 
 
-def recycled_entries(root, since=None):
+def recycled_entries(root, since=None, name=None):
     """[(original path, $I file, $R item), ...] for this user's items in the
     Recycle Bin of the volume at `root` -- only those put there at or after
-    time.time() value `since`, if given. None if the bin can't be read."""
+    time.time() value `since`, if given, and, given an item's `name`, only
+    those whose $I file carries its extension. The file system matches that
+    pattern, so with thousands of items in the bin a lookup reads only the
+    ones that share it (a folder of 20,000 bin files: 21 ms to list them all
+    here, 1.7 ms by pattern when none shares it). None if the bin can't be
+    read."""
+    pattern = "$I*" + (_bin_extension(name) if name else "")
     readable = False
     found = []
     try:
@@ -292,23 +368,17 @@ def recycled_entries(root, since=None):
     except OSError:
         return None
     for folder in sid_folders:
-        try:
-            items = list(os.scandir(folder))
-        except OSError:
+        listed = _find_files(os.path.join(folder, pattern))
+        if listed is None:
             continue  # another user's
         readable = True
-        for item in items:
-            if not item.name.startswith("$I"):
+        for file_name, modified in listed:
+            if since is not None and modified < since - _BIN_CLOCK_SLACK_SECONDS:
                 continue
-            if since is not None:
-                try:
-                    if item.stat().st_mtime < since - _BIN_CLOCK_SLACK_SECONDS:
-                        continue
-                except OSError:
-                    continue
-            original = _read_info_file(item.path)
+            info = os.path.join(folder, file_name)
+            original = _read_info_file(info)
             if original:
-                found.append((original, item.path, os.path.join(folder, "$R" + item.name[2:])))
+                found.append((original, info, os.path.join(folder, "$R" + file_name[2:])))
     return found if readable else None
 
 
@@ -322,13 +392,32 @@ def recycle(path):
     _result, aborted = _shell_delete(full, _RECYCLE_FLAGS)
     if exists(full):
         return REFUSED if aborted else FAILED
-    entries = recycled_entries(volume_root(full), since=started)
+    root = volume_root(full)
+    key = os.path.normcase(full)
+
+    def arrived(entries):
+        return any(os.path.normcase(original) == key for original, _info, _item in entries)
+
+    # The $I file appears a few milliseconds after SHFileOperationW returns
+    # (measured: up to 17 ms), so it's looked for again for a while before
+    # this counts as a permanent delete; that judgement once called 42 of 60
+    # quick recycles permanent deletes.
+    deadline = time.monotonic() + _BIN_ARRIVAL_SECONDS
+    while True:
+        entries = recycled_entries(root, since=started, name=os.path.basename(full))
+        if entries is None:
+            return UNVERIFIED
+        if arrived(entries):
+            return RECYCLED
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_BIN_POLL_SECONDS)
+    # Last, through everything the bin got since, in case Windows named its
+    # $I file some other way than by the extension.
+    entries = recycled_entries(root, since=started)
     if entries is None:
         return UNVERIFIED
-    key = os.path.normcase(full)
-    if any(os.path.normcase(original) == key for original, _info, _item in entries):
-        return RECYCLED
-    return DELETED_PERMANENTLY
+    return RECYCLED if arrived(entries) else DELETED_PERMANENTLY
 
 
 def delete_permanently(path):

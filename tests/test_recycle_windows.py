@@ -114,8 +114,11 @@ def test_a_short_folder_holding_a_deep_file_is_refused(tmp_path):
     assert any("holds a path" in reason for reason in blockers), blockers
 
 
-def test_an_ordinary_file_lands_in_the_recycle_bin(tmp_path):
-    path = _write(str(tmp_path / "ordinary.txt"))
+# The bin is searched by the extension Windows gives the $I file, which for
+# ".env" is the whole name and for "notes" is nothing.
+@pytest.mark.parametrize("name", ["ordinary.txt", ".env", "notes", "backup.tar.gz"])
+def test_an_ordinary_file_lands_in_the_recycle_bin(tmp_path, name):
+    path = _write(str(tmp_path / name))
     root = recycle_windows.volume_root(path)
     if recycle_windows.bin_blockers(path, is_dir=False):
         pytest.skip(f"this machine's Recycle Bin can't take files from {root}")
@@ -127,9 +130,31 @@ def test_an_ordinary_file_lands_in_the_recycle_bin(tmp_path):
         assert not os.path.exists(path)
         assert records[0]["outcome"] == RECYCLED
     finally:
-        key = os.path.normcase(path)
-        for original, info, item in recycle_windows.recycled_entries(root) or []:
-            if os.path.normcase(original) == key:
-                for leftover in (item, info):
-                    if os.path.exists(leftover):
-                        os.remove(leftover)
+        _empty_from_bin(root, [path])
+
+
+def test_files_recycled_one_after_another_are_all_recorded_as_recycled(tmp_path):
+    """The $I file shows up a few milliseconds after Windows says it's done;
+    looked for at once, 42 of 60 quick recycles were recorded as permanent
+    deletes."""
+    paths = [_write(str(tmp_path / f"quick{i}.bin")) for i in range(40)]
+    root = recycle_windows.volume_root(paths[0])
+    if recycle_windows.bin_blockers(paths[0], is_dir=False):
+        pytest.skip(f"this machine's Recycle Bin can't take files from {root}")
+
+    try:
+        outcomes = [recycle_windows.recycle(path) for path in paths]
+
+        assert outcomes == [RECYCLED] * len(paths)
+    finally:
+        _empty_from_bin(root, paths)
+
+
+def _empty_from_bin(root, paths):
+    """Take what this test sent to the Recycle Bin back out of it."""
+    keys = {os.path.normcase(path) for path in paths}
+    for original, info, item in recycle_windows.recycled_entries(root) or []:
+        if os.path.normcase(original) in keys:
+            for leftover in (item, info):
+                if os.path.exists(leftover):
+                    os.remove(leftover)
