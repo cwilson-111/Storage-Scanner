@@ -45,6 +45,15 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   0.4 s, where listing every one took about 3.5 s).
 - Export Results and Tools ▸ Data Tools no longer freeze the window while
   they write; a small dialog shows they're working.
+- Deleting a copy of a large duplicate (over 3 MB, where the search only
+  compares the first, middle and last 1 MB) now first compares it byte for
+  byte with the copies that stay, while a small dialog shows it's working.
+  A copy that differs anywhere is kept and the reason shown.
+- Items sent to the Recycle Bin one after another were often recorded in
+  the Audit Log as deleted permanently (42 of 60 in a quick test), because
+  the bin's record of each appears a few milliseconds late. They're now
+  recorded as recycled. Looking each one up is also faster when the bin
+  holds thousands of items.
 
 ### Security
 
@@ -54,6 +63,13 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   pointed the app's data folder at a system folder and had the elevated
   helper write its log and cache files there. A scan run as administrator
   through a junction you made yourself now fails instead of following it.
+
+### Developer
+
+- CI installs its build and test tools from hash-locked files
+  (`requirements-*.lock`): every package those tools pull in is pinned too,
+  with the checksum of each file, so a build can only use exactly those
+  files. `lock_requirements.py` regenerates the locks.
 
 ## v1.14.0 — 2026-10-08
 

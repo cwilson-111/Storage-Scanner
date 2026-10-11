@@ -1836,24 +1836,54 @@ Fixed, each with a test that fails on the old code unless noted:
   of README's range (both pass here). The Dependabot and requirements-dev
   comments now say pins are exact and move by hand.
 
-Left as they are:
-- The Recycle Bin check lists the user's bin folder after every item.
-  Measured here: 0.8 ms per item with 26 items in the bin; it only
-  matters for very large bins and batches.
-- Transitive build dependencies aren't hash-locked (pip-compile
-  --generate-hashes would do it).
-- The UI state machine (live tree, cleanup view, cart) has few direct
-  tests; the coverage floor stays 49%.
-- Duplicates over 3 MiB are matched on sampled windows (documented, warned
-  in the UI); a full byte compare before deleting a duplicate would be
-  cheap insurance.
+Left open by this review, then done (2026-10-11):
+- Sampled duplicates: deleting a copy as a duplicate of a group over 3 MiB
+  now needs a copy that stays to match it byte for byte
+  (`duplicate_finder.same_content`, `other_copy`). The UI does the reading
+  on a worker under `run_busy` before the deletes run
+  (`DeletionMixin._delete_nodes`); the service falls back to comparing
+  itself for anything not compared up front. A copy that only matches on
+  the windows is refused with its own message. Tests: two 5 MiB files
+  differing in one byte between the windows (refused; recycled on the old
+  code) and identical ones (recycled). Real app: 64 MiB keep/same/differs,
+  same.bin recycled, differs.bin kept with the message, the window
+  returned while comparing.
+- Recycle Bin lookup: `recycled_entries(root, since, name)` lists only
+  `$I*<extension>` through FindFirstFileExW (a folder of 20,000 bin files:
+  21 ms listed in Python, 1.7 ms by pattern with no match). Measuring it
+  found a real bug: the $I file appears up to 17 ms after
+  SHFileOperationW returns, so `recycle()` called 42 of 60 quick recycles
+  permanent deletes in the Audit Log. It now looks again for up to 1 s,
+  then once through everything since, before saying permanent. Test: 40
+  quick recycles, all RECYCLED (fails on the old code); names `.env`,
+  `notes`, `backup.tar.gz` found (Windows' extension is from the last dot,
+  `.env` included).
+- Hash locks: `requirements-dev.lock`, `requirements-data.lock`,
+  `requirements-audit.lock` from `uv pip compile --universal
+  --generate-hashes --python-version 3.11` (`lock_requirements.py`); every
+  CI install is `--require-hashes`, and pip-audit audits
+  `requirements-data.lock` with `--require-hashes`. Installed here in fresh
+  venvs on 3.11 and 3.14.
+- UI state tests: 17 tests on the real main window
+  (`tests/test_live_tree.py`, `test_cart_window.py`,
+  `test_cleanup_view.py`): live rows filling and re-sorting during a scan,
+  a folder opened mid-scan, Cancel and a failure giving Scan back with the
+  rows frozen, deletes waiting for the scan, the finished tree reopening
+  the folders opened during the scan, the Cart's listing, totals, execute,
+  refusals and a new scan emptying it, and Cleanup Recommendations' rows
+  and deletes. Several were checked by breaking the code they cover. The
+  shared Tk interpreter and the app fixtures moved to `tests/conftest.py`.
+  Coverage 61.7% → 71.5% (scan_lifecycle 38% → 74%); the floor is 69%. No
+  production bug turned up.
 
-Found while testing, not fixed: a Tk process can stall in GetMessageW with
-an empty queue, so `after` callbacks stop until any window message arrives
-(a posted WM_NULL or a mouse move wakes it). Seen only in test harnesses
-that start a scan right after building the window, on Tcl 8.6.12 and
-8.6.15 alike, and on the commit before today's changes too; the normal
-`main()` launch didn't stall in 20 tries.
+Found while testing, not fixed in the app: a Tk process can stall in
+GetMessageW with an empty queue, so `after` callbacks stop until any
+window message arrives (a posted WM_NULL or a mouse move wakes it). Seen in
+test harnesses that start a scan right after building the window, on Tcl
+8.6.12 and 8.6.15 alike, and on the commit before these changes too; the
+normal `main()` launch didn't stall in 20 tries. The new UI tests hit it
+once in five runs, so `tests/conftest.py`'s `run_tk_until` posts WM_NULL
+to the window every 50 ms while it runs the main loop (Windows only).
 
 ## Executive assessment
 
@@ -2254,7 +2284,10 @@ Add Ruff, Black, mypy, pytest, coverage thresholds, and a GitHub Actions test jo
   tests failing), then went up to 49% (2026-09-24) after a full Windows run
   — 430 passed, 2 platform skips — measured 49.7%. The UI modules
   (`ui/main_window.py`, `ui/history_window.py` and the other Tk windows) are
-  most of the uncovered code.
+  most of the uncovered code. On 2026-10-11 it went up to 69%: tests on the
+  real main window (a scan's live rows, Cancel and a failure, the finished
+  tree; the Cleanup Cart; Cleanup Recommendations) took a full Windows run
+  from 61.7% to 71.5%, and the floor is that rounded down, less 2.
 - **mypy with matplotlib installed.** `history.py`'s optional-import
   fallback (`plt = None`) failed mypy whenever matplotlib was actually
   installed; CI only passed because its runner doesn't install it. Fixed

@@ -7,7 +7,7 @@ import os
 import queue
 import threading
 import time
-from tkinter import BooleanVar, StringVar, TclError, Tk, Toplevel, ttk
+from tkinter import BooleanVar, StringVar, Toplevel, ttk
 from tkinter import font as tkfont
 
 import pytest
@@ -52,30 +52,10 @@ class _TreeOnly(StorageScannerApp):
         self._build_tree()
 
 
-_TK_ROOT: list = []  # the one Tk interpreter, made by the first test that needs it
-
-
 @pytest.fixture
-def app(capsys):
-    """The trimmed app in a window of its own.
-
-    Every test shares one Tk interpreter, made while pytest's output
-    capture is off and never deleted before the process exits. Made under
-    capture (and deleted after each test, or not), the next interpreter in
-    the process often failed to start: "couldn't read file ... init.tcl:
-    No error", in test_make_sbom's Tcl() or in the next test here. Tcl
-    keeps the standard handles its first interpreter found, and under
-    capture those are pytest's temporary files, closed once the test ends;
-    a reused handle number is the likely culprit."""
-    if not _TK_ROOT:
-        with capsys.disabled():
-            try:
-                root = Tk()
-            except TclError as exc:  # no display
-                pytest.skip(f"Tk unavailable: {exc}")
-        root.withdraw()
-        _TK_ROOT.append(root)
-    window = Toplevel(_TK_ROOT[0])
+def app(tk_root):
+    """The trimmed app in a window of its own, on the shared interpreter."""
+    window = Toplevel(tk_root)
     window.withdraw()
     app = _TreeOnly(window)
     try:
