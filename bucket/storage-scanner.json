@@ -1,5 +1,5 @@
 {
-    "version": "1.14.0",
+    "version": "1.15.0",
     "description": "Fast disk-usage analyzer: a size-sorted folder tree, duplicate finder, review-first cleanup, treemap and growth history.",
     "homepage": "https://github.com/cwilson-111/Storage-Scanner",
     "license": "MIT",
@@ -10,8 +10,8 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.14.0/StorageScanner-portable.zip",
-            "hash": "a1a9c2aecfb667b6af10624305aeb80805c3e249d0245c22ed92a04d95b364a5"
+            "url": "https://github.com/cwilson-111/Storage-Scanner/releases/download/v1.15.0/StorageScanner-portable.zip",
+            "hash": "a74ee71e8e58ce74a6f58fb9c7102882b7ef1b1ec9aab56899d9bd2039cdde9e"
         }
     },
     "pre_install": [
