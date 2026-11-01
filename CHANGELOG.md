@@ -70,6 +70,10 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   (`requirements-*.lock`): every package those tools pull in is pinned too,
   with the checksum of each file, so a build can only use exactly those
   files. `lock_requirements.py` regenerates the locks.
+- Build and test tools moved past security advisories found by the weekly
+  dependency audit: Pillow 13.0.0 (used only to regenerate the icon),
+  black 26.10.1, and setuptools 84.2.1 (pulled in by PyInstaller). The app
+  imports none of them.
 
 ## v1.14.0 — 2026-10-08
 
