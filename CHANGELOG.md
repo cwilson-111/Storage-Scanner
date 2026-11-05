@@ -13,6 +13,26 @@ message, copied as written. Where the tag is a lightweight one (no message
 of its own), the text is the message of the commit it points at. Tags
 before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
+## Unreleased
+
+### Development
+
+- `pytest tests/` no longer fails on macOS and Linux. The coverage floor
+  was in `pyproject.toml`'s `addopts`, so it applied everywhere, but only
+  the Windows CI job runs the Windows-only suites — off Windows those
+  tests skip and the modules they cover (`explorer_menu`,
+  `scheduled_tasks`, `recycle_windows`, `redirection_guard`) stay in the
+  total at 0%. The command the README tells contributors to run therefore
+  reported 64.6% against a floor of 69 and exited 1, on a clean tree, for
+  a reason that had nothing to do with their change. The floor moved to
+  the job that can meet it (`pytest tests/ --cov-fail-under=69` in
+  `build.yml`'s Windows `test` job); a local run still prints the coverage
+  report. The `pyproject.toml` comment also claimed a local Windows run
+  matches that job — it doesn't: CI runners are administrators, so
+  `tests/test_redirection_guard.py` skips there and not locally, and the
+  job installs only `requirements-dev.lock`, so the `csv_to_*`
+  conversions skip there and not in a dev venv holding pyarrow/openpyxl.
+
 ## v1.15.0 — 2026-11-01
 
 ### Main window

@@ -75,8 +75,12 @@ jobs:
         run: pip install --require-hashes -r requirements-dev.lock
 
       # Gates, in cheapest-first order so an obvious lint break fails in
-      # seconds instead of after the whole suite. All four read their config
-      # from pyproject.toml, so these commands match a local run exactly.
+      # seconds instead of after the whole suite. They read their config
+      # from pyproject.toml, so these commands match a local run exactly --
+      # except the coverage floor, which is passed here rather than living
+      # in addopts. This is the only job that runs the Windows-only suites,
+      # so it is the only one whose total can clear the floor; off Windows
+      # those tests skip and their modules sit in the denominator at 0%.
       # `.` rather than an explicit file list: PowerShell does not expand
       # `*.py` for a native command, and both tools recurse the repo while
       # honouring pyproject.toml's exclusions anyway.
@@ -90,7 +94,7 @@ jobs:
         run: mypy storage_scanner/
 
       - name: Run test suite with coverage
-        run: pytest tests/
+        run: pytest tests/ --cov-fail-under=69
 
       # Scale regressions: bytes per scanned file, per history scan and per
       # Turbo cache record, and how many records a small-folder rescan loads,
@@ -101,11 +105,13 @@ jobs:
   test-other-os:
     # The macOS and Linux builds ship too, and more than one Python runs the
     # app from source. Windows-only tests carry @pytest.mark.windows and are
-    # skipped off Windows (tests/conftest.py); lint, types, coverage and the
-    # scale gate run once, in the job above. Every build waits for both.
-    # The Windows leg also installs the Data build's packages, so the
-    # csv_to_* tests run their real conversions there (they skip without
+    # skipped off Windows (tests/conftest.py); lint, types, the coverage
+    # floor and the scale gate run once, in the job above. Every build waits
+    # for both. The Windows leg also installs the Data build's packages, so
+    # the csv_to_* tests run their real conversions there (they skip without
     # pyarrow and openpyxl, as in the job above and the standard build).
+    # `--no-cov` here is about speed, not the floor: measuring coverage
+    # across six legs buys nothing when only the job above gates on it.
     needs: tagged
     if: needs.tagged.outputs.skip != 'true'
     runs-on: ${{ matrix.os }}

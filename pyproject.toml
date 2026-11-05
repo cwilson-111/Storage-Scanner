@@ -46,14 +46,28 @@ check_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Coverage floor, set under the measured Windows total: a full local run on
-# Windows (the same OS as the CI `test` job, where every Windows-only
-# NTFS/Turbo Scan, schedule and drive-letter suite executes) measured 71.5%
-# (2026-10-11, after the UI tests on the real main window: tests/
-# test_live_tree.py, test_cart_window.py, test_cleanup_view.py); the floor
-# is that rounded down, less 2, so ordinary churn doesn't trip it. Raise it
-# as coverage grows; never lower it to get a build through.
-addopts = "--cov=storage_scanner --cov-report=term-missing --cov-fail-under=69"
+# Coverage is measured everywhere; the floor is NOT enforced here. It lives
+# on the one job that can actually meet it -- `pytest tests/
+# --cov-fail-under=69` in build.yml's Windows `test` job.
+#
+# Why not here: tests/conftest.py skips every @pytest.mark.windows item off
+# Windows, and the Windows-only modules those tests are the sole importers
+# of (explorer_menu, scheduled_tasks, recycle_windows, redirection_guard)
+# then stay in the denominator at 0%. A full macOS run measures 64.6%
+# (742 passed, 103 skipped, 2026-11-04) against the same code that measures
+# ~71% on Windows. With the floor in addopts, the plain `pytest tests/` the
+# README tells contributors to run failed on macOS and Linux for a reason
+# that has nothing to do with their change.
+#
+# The 69 is the Windows CI job's own total rounded down, less a couple of
+# points so ordinary churn doesn't trip it. Set it from that job's TOTAL
+# line, never from a local run: an unelevated local run also executes
+# tests/test_redirection_guard.py (skipped in CI, whose runners are
+# administrators) and a dev venv holding pyarrow/openpyxl runs the csv_to_*
+# conversions (`importorskip`ped in the `test` job, which installs only
+# requirements-dev.lock). Raise it as coverage grows; never lower it to get
+# a build through.
+addopts = "--cov=storage_scanner --cov-report=term-missing"
 
 [tool.coverage.run]
 branch = true

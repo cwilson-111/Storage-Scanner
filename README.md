@@ -383,7 +383,7 @@ notes (the release fails if there isn't one).
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests/          # also enforces the coverage floor
+pytest tests/          # suite + a coverage report
 ruff check .           # lint + import order
 black --check .        # formatting (drop --check to apply)
 mypy storage_scanner/  # type checking
@@ -397,6 +397,13 @@ file, history size per scan, the scans and bytes two years of daily scans
 leave behind, the SQLite work to save and compare a 20,000-folder scan,
 Turbo cache size per record, or the records a folder rescan loads get more
 than 15% worse than `benchmarks/baseline.json`.
+
+The coverage **floor** is the one gate that is not in `pyproject.toml`: CI
+adds `--cov-fail-under=69` to that Windows job, because it is the only one
+that runs the Windows-only suites. Off Windows those tests skip and the
+modules they cover sit in the total at 0%, so a macOS or Linux run reports
+roughly 65% on exactly the same code. Compare your number to a previous run
+on the same OS, not to 69.
 
 `pip install pre-commit` then `pre-commit install` runs the ruff and black
 checks on every commit, pinned to the versions CI uses
