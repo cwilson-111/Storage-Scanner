@@ -51,13 +51,15 @@ testpaths = ["tests"]
 # --cov-fail-under=69` in build.yml's Windows `test` job.
 #
 # Why not here: tests/conftest.py skips every @pytest.mark.windows item off
-# Windows, and the Windows-only modules those tests are the sole importers
-# of (explorer_menu, scheduled_tasks, recycle_windows, redirection_guard)
-# then stay in the denominator at 0%. A full macOS run measures 64.6%
-# (742 passed, 103 skipped, 2026-11-04) against the same code that measures
-# ~71% on Windows. With the floor in addopts, the plain `pytest tests/` the
-# README tells contributors to run failed on macOS and Linux for a reason
-# that has nothing to do with their change.
+# Windows. `--cov=storage_scanner` measures the whole package, and the
+# Windows-only modules (explorer_menu, scheduled_tasks, recycle_windows,
+# redirection_guard) are still imported by production code -- app.py,
+# delete_service.py, ui/toolbar.py, ui/automation_window.py -- so they stay
+# in the denominator while almost nothing in them runs. A macOS run
+# measures 64.6% (742 passed, 103 skipped, 2026-11-04) on the same code
+# that measures ~71% on Windows. With the floor in addopts, the plain
+# `pytest tests/` the README tells contributors to run failed on macOS and
+# Linux for a reason that had nothing to do with their change.
 #
 # The 69 is the Windows CI job's own total rounded down, less a couple of
 # points so ordinary churn doesn't trip it. Set it from that job's TOTAL
