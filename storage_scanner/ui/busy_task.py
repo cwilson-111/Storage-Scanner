@@ -1,9 +1,18 @@
-"""Run one long job (a CSV conversion, an export) off the Tk thread.
+"""Run one long job off the Tk thread: a CSV conversion, an export, or the
+byte-for-byte comparison a sampled-duplicate delete needs first (see
+ui/delete_dialogs.py).
 
 The window keeps repainting while it runs, under a small dialog that holds
 the app's input (grab_set), so the scanned tree can't be changed under a
-job reading it. The job itself can't be cancelled: none of these
-converters stop part-way.
+job reading it.
+
+No job here can be cancelled, which is why the dialog has no button and
+ignores its close box. The converters don't stop part-way. The duplicate
+comparison could be stopped, but its answer is all-or-nothing: the delete
+service may only remove a copy once another copy is known to be identical,
+so abandoning the comparison refuses the whole batch anyway. Its runtime
+is bounded only by the size of the two files -- minutes for a multi-GiB
+pair -- so it, not the converters, is this dialog's worst case.
 """
 
 import queue

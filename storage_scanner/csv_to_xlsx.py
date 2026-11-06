@@ -44,8 +44,10 @@ def openpyxl_available():
 
 def default_output_path(csv_path):
     """`csv_path` with its extension replaced by ".xlsx", or with
-    " (2).xlsx" etc. appended if that path is already taken -- same
-    collision-avoidance convention as archive.py's _unique_archive_path."""
+    " (2).xlsx" etc. appended if that path is already taken -- the same
+    naming as archive.py's _create_unique_archive. This one only suggests
+    a name for a file picker the user then confirms, so unlike the archive
+    it doesn't need the create itself to be the collision check."""
     base = os.path.splitext(csv_path)[0]
     candidate = base + ".xlsx"
     if not os.path.exists(candidate):

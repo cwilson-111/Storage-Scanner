@@ -53,18 +53,39 @@ def _append_stream(path):
     ("a" mode). On Windows "a" mode only moves to the end before each
     write, so two processes overwrite each other's lines (1,778 of 30,000
     lost without any rotation); a handle opened for FILE_APPEND_DATA alone
-    makes Windows itself append every write."""
+    makes Windows itself append every write.
+
+    The Windows handle is also refused if it turns out to be a link to
+    somewhere else. This process may be elevated and the log lives under
+    the user's %LOCALAPPDATA%, which an unelevated process at the same
+    user can rename; redirection_guard is the other half of that defence
+    but its ProcessRedirectionTrustPolicy switch doesn't exist before
+    Windows 11 22H2, which would leave this with no mitigation at all."""
     if sys.platform != "win32":
         return open(path, "a", encoding="utf-8")
     import ctypes
     import msvcrt
     from ctypes import wintypes
 
-    # Its own instance, so the prototype set here doesn't change the shared
+    class _FileInfo(ctypes.Structure):  # BY_HANDLE_FILE_INFORMATION
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("created", wintypes.FILETIME),
+            ("accessed", wintypes.FILETIME),
+            ("written", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("index_high", wintypes.DWORD),
+            ("index_low", wintypes.DWORD),
+        ]
+
+    # Its own instance, so the prototypes set here don't change the shared
     # ctypes.windll.kernel32 other modules call.
-    create_file = ctypes.WinDLL("kernel32", use_last_error=True).CreateFileW
-    create_file.restype = wintypes.HANDLE
-    create_file.argtypes = [
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
         wintypes.DWORD,
@@ -73,10 +94,31 @@ def _append_stream(path):
         wintypes.DWORD,
         wintypes.HANDLE,
     ]
+    kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     file_append_data, share_all, open_always, normal = 0x4, 0x7, 4, 0x80
-    handle = create_file(str(path), file_append_data, share_all, None, open_always, normal, None)
+    open_reparse_point = 0x00200000  # open a link itself, never its target
+    reparse_attribute = 0x400
+
+    handle = kernel32.CreateFileW(
+        str(path),
+        file_append_data,
+        share_all,
+        None,
+        open_always,
+        normal | open_reparse_point,
+        None,
+    )
     if handle is None or handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
+    info = _FileInfo()
+    if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+        error = ctypes.WinError(ctypes.get_last_error())
+        kernel32.CloseHandle(handle)
+        raise error
+    if info.attributes & reparse_attribute or info.links != 1:
+        kernel32.CloseHandle(handle)
+        raise OSError(f"Refusing to write {path}: it's a link to somewhere else")
     fd = msvcrt.open_osfhandle(handle, os.O_APPEND | os.O_BINARY)  # type: ignore[attr-defined]
     return open(fd, "a", encoding="utf-8")
 
@@ -104,9 +146,13 @@ def setup_logging():
         logger.addHandler(handler)
         log_dir = folder
     except OSError:
-        # Can't write logs at all (read-only volume, locked-down profile,
-        # etc.) — fall back to stderr so diagnostics aren't lost entirely.
+        # Can't write logs there (read-only volume, locked-down profile, or
+        # _append_stream refusing a log file that turned out to be a link)
+        # -- fall back to stderr so diagnostics aren't lost entirely, and
+        # say why: silently having no log file reads as a log file with
+        # nothing in it.
         logger.addHandler(logging.StreamHandler())
+        logger.warning("Logging to %s failed; logging to stderr instead", folder, exc_info=True)
 
     def _log_unhandled_exception(exc_type, exc_value, exc_tb):
         logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))

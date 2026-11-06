@@ -1,3 +1,4 @@
+import os
 import queue
 import sys
 import threading
@@ -279,8 +280,8 @@ def test_elevated_helper_result_carries_the_node_and_how_the_mft_was_read(monkey
 
 
 @pytest.mark.windows
-def test_a_helper_result_outside_the_requested_folder_is_refused():
-    """P3-7: the elevated helper's result comes back through a temp file."""
+def test_a_turbo_result_outside_the_requested_folder_is_refused():
+    """P3-7: both Turbo paths produce names the user can influence."""
     root = Node("C:\\Data", "Data")
     inside = Node("C:\\Data\\sub", "sub")
     root.dirs.append(inside)
@@ -294,3 +295,57 @@ def test_a_helper_result_outside_the_requested_folder_is_refused():
     root.dirs.remove(stray)
     inside.add_file("..\\..\\Windows\\win.ini", 1)
     assert turbo_scan._first_path_outside(root, "C:\\Data") is not None
+
+
+def _escaping_tree(requested):
+    """A Turbo result whose child climbs out of the folder that was asked
+    for -- what a tampered cache name or helper output would produce."""
+    root = Node(requested, os.path.basename(requested) or requested)
+    root.dirs.append(Node(os.path.join(requested, "..", "..", "etc"), "etc"))
+    return root
+
+
+@pytest.mark.parametrize("elevated", [True, False])
+def test_neither_turbo_path_may_return_a_tree_outside_the_requested_folder(
+    monkeypatch, tmp_path, elevated
+):
+    """The elevated in-process read used to skip this check: `IS_ROOT` is
+    IsUserAnAdmin(), so every scan after the app's own "Run as Admin"
+    restart took the unchecked branch, and the names it joins come out of
+    turbo_scan_cache.db under %LOCALAPPDATA% -- writable by the same user
+    at medium integrity while the app runs elevated. The tree built from
+    them is what the Cleanup and Cart windows hand to DeleteService as
+    node.path."""
+    requested = str(tmp_path / "scanme")
+    read = MftRead(incremental=False, full_read_reason="test")
+
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", elevated)
+    monkeypatch.setattr(
+        turbo_scan,
+        "_run_turbo_in_process",
+        lambda *a: (_escaping_tree(requested), read),
+    )
+    monkeypatch.setattr(
+        turbo_scan,
+        "_run_turbo_via_elevated_helper",
+        lambda *a: (_escaping_tree(requested), read),
+    )
+
+    with pytest.raises(RuntimeError, match="outside"):
+        turbo_scan._attempt_turbo_scan(requested, None, None)
+
+
+@pytest.mark.parametrize("elevated", [True, False])
+def test_a_turbo_tree_inside_the_requested_folder_is_returned_unchanged(
+    monkeypatch, tmp_path, elevated
+):
+    requested = str(tmp_path / "scanme")
+    node = Node(requested, "scanme")
+    node.dirs.append(Node(os.path.join(requested, "sub"), "sub"))
+    read = MftRead(incremental=True, full_read_reason=None)
+
+    monkeypatch.setattr(turbo_scan, "IS_ROOT", elevated)
+    monkeypatch.setattr(turbo_scan, "_run_turbo_in_process", lambda *a: (node, read))
+    monkeypatch.setattr(turbo_scan, "_run_turbo_via_elevated_helper", lambda *a: (node, read))
+
+    assert turbo_scan._attempt_turbo_scan(requested, None, None) == (node, read)

@@ -39,17 +39,70 @@ def test_likely_compresses_well_false_for_already_compressed_formats():
     assert archive.likely_compresses_well("/tmp/archive.zip") is False
 
 
-def test_unique_archive_path_avoids_collisions(tmp_path):
+def test_the_archive_name_falls_back_to_two_when_zip_is_taken(tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("hello")
 
-    first = archive._unique_archive_path(str(target))
+    first, stream = archive._create_unique_archive(str(target))
+    stream.close()
     assert first == str(target) + ".zip"
 
-    # If that path is already taken, the next call should pick "(2)".
-    Path(first).write_text("placeholder")
-    second = archive._unique_archive_path(str(target))
+    # Picking the name created it, so the next call must step past it.
+    second, stream = archive._create_unique_archive(str(target))
+    stream.close()
     assert second == f"{target} (2).zip"
+
+    third, stream = archive._create_unique_archive(str(target))
+    stream.close()
+    assert third == f"{target} (3).zip"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+def test_an_archive_name_that_is_a_link_is_never_written_through(tmp_path):
+    """P3-7 again: archiving can run elevated and the destination sits in
+    a folder another process at the same user can write, so a name swapped
+    for a link must not become a write to the link's target. A dangling
+    link is the case os.path.exists() used to miss entirely."""
+    target = tmp_path / "notes.txt"
+    target.write_text("hello world" * 100)
+    decoy = tmp_path / "decoy.txt"
+    os.symlink(decoy, f"{target}.zip")  # the name archiving picks first
+
+    node = detached_file(str(target), size=target.stat().st_size)
+    archive_path = archive.write_verified_archive(node)
+
+    assert not decoy.exists(), "the archive was written through the link"
+    assert archive_path == f"{target} (2).zip"
+    with zipfile.ZipFile(archive_path) as zf:
+        assert zf.read("notes.txt").decode() == "hello world" * 100
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+def test_a_link_left_at_the_chosen_name_cannot_truncate_its_target(tmp_path, monkeypatch):
+    """The race the exclusive create closes: whatever another process does
+    between picking a free name and opening it, the archive is a file this
+    process brought into existence, never an existing one emptied."""
+    target = tmp_path / "notes.txt"
+    target.write_text("hello world" * 100)
+    decoy = tmp_path / "decoy.txt"
+    decoy.write_text("keep me")
+    chosen = f"{target}.zip"
+
+    real_exists = os.path.exists
+
+    def exists_then_lose_the_race(path):
+        found = real_exists(path)
+        if not found and str(path) == chosen and not os.path.islink(chosen):
+            os.symlink(decoy, chosen)  # the attacker wins the window
+        return found
+
+    monkeypatch.setattr(os.path, "exists", exists_then_lose_the_race)
+
+    node = detached_file(str(target), size=target.stat().st_size)
+    archive_path = archive.write_verified_archive(node)
+
+    assert decoy.read_text() == "keep me"
+    assert zipfile.is_zipfile(archive_path)
 
 
 def test_archive_file_compresses_and_removes_original(tmp_path):

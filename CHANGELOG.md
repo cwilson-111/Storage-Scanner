@@ -15,6 +15,66 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ## Unreleased
 
+### Security
+
+- A Turbo Scan done by an already-elevated app is now checked for paths
+  outside the folder you asked to scan, the same way the elevated
+  helper's result always was. The check lived inside the helper branch
+  only, and `IS_ROOT` is `IsUserAnAdmin()`, so every scan after the app's
+  own "Run as Admin" restart took the unchecked branch. The names that
+  branch joins into paths come out of `turbo_scan_cache.db` under
+  `%LOCALAPPDATA%`, which the same user can write at medium integrity
+  while the app runs elevated — a name like `..\..\Windows` would have
+  put nodes outside the scan, and those nodes are what the Cleanup and
+  Cart windows hand to the delete service. A tree that escapes now falls
+  back to the Compatible scan, which walks real directory entries.
+- Archiving a file creates the `.zip` with an exclusive create that
+  refuses a link, instead of checking `os.path.exists` and then opening
+  the name. Between those two steps another process running as the same
+  user could drop a symlink or hard link at the name and have an
+  elevated Storage Scanner truncate the target. Picking a free name and
+  taking it are now one operation, so the ` (2).zip` fallback is atomic
+  too.
+- The log file is opened without following a reparse point or a second
+  hard link, matching what the elevated scan helper already did for its
+  temp files. Before Windows 11 22H2 there is no redirection-trust
+  policy to fall back on, so an elevated run had nothing stopping a
+  junction planted at the log folder. A refused log now falls back to
+  stderr and says so, rather than looking like a log that recorded
+  nothing.
+
+### Fixes
+
+- Deleting several copies of one large sampled duplicate no longer
+  freezes the window. The byte-for-byte comparison done up front on a
+  worker thread stopped at the first matching copy, so for the second
+  and later copies in a group the delete service asked about a pair that
+  had never been compared — and that comparison then ran on the UI
+  thread, after the progress dialog had already closed, reading two
+  whole files. Every matching pair is now answered up front, and a pair
+  is compared once rather than once per direction.
+- The Cart empties when its deletes finish, not when they start. Since
+  the comparison moved to a worker thread the cart was clearing itself
+  and resetting the toolbar button immediately, while the deletes were
+  still running — minutes early for multi-gigabyte copies.
+- A failed write to the Turbo Scan cache closes its database connection.
+  Four write paths closed only on success, and a connection left open
+  stops Windows from deleting the cache file, so a cache damaged once
+  could never be rebuilt and every later scan silently fell back to
+  reading the whole MFT.
+- Recycling a file no longer reloads `kernel32` up to a hundred times
+  while it waits for the Recycle Bin to record the delete.
+
+### Downloads
+
+- `SHA256SUMS-macos.txt` and `SHA256SUMS-linux.txt` now list bare file
+  names instead of `dist/StorageScanner.dmg`. Verifying a download in
+  the folder you downloaded it to reported "No such file or directory"
+  for every line, so the one integrity check offered in place of code
+  signing appeared to fail. The Windows file was never affected. The
+  README's command was also wrong for macOS, which ships `shasum`, not
+  `sha256sum`.
+
 ### Development
 
 - `pytest tests/` no longer fails on macOS and Linux. The coverage floor

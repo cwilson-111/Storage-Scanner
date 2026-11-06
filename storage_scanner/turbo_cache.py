@@ -126,6 +126,23 @@ def _reading(query):
         conn.close()
 
 
+def _writing(work):
+    """Runs `work(conn)` on a fresh connection, closed whatever happens --
+    the write half of _reading(). A failing insert, DELETE, commit or
+    VACUUM used to leave the connection open with its transaction and WAL
+    behind it, and turbo_read swallows save failures (caching is a pure
+    optimization), so nothing noticed: the next discard() then hit a file
+    Windows still had open, raised PermissionError rather than the
+    FileNotFoundError it suppresses, and left the cache un-rebuildable --
+    every later scan silently back to a full MFT read. `work` gets the
+    connection, not a cursor: a write commits, and a full save compacts."""
+    conn = _connect()
+    try:
+        return work(conn)
+    finally:
+        conn.close()
+
+
 def get_cached_volume(volume_serial):
     """The cached_volumes row for `volume_serial` as a dict, or None if this
     volume has never been cached. Raises TurboCacheCorruptError if the
@@ -150,41 +167,43 @@ def save_full_scan(volume_serial, volume_root, root_frn, record_size, records):
     it any earlier would risk losing changes made while the scan itself was
     still running)."""
     now = datetime.now().isoformat(timespec="seconds")
-    conn = _connect()
-    cur = conn.cursor()
 
-    cur.execute(
-        """
-        INSERT INTO cached_volumes
-            (volume_serial, volume_root, root_frn, record_size,
-             full_scan_completed_at, last_refreshed_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(volume_serial) DO UPDATE SET
-            volume_root = excluded.volume_root,
-            root_frn = excluded.root_frn,
-            record_size = excluded.record_size,
-            full_scan_completed_at = excluded.full_scan_completed_at,
-            last_refreshed_at = excluded.last_refreshed_at
-    """,
-        (volume_serial, volume_root, root_frn, record_size, now, now),
-    )
+    def write(conn):
+        cur = conn.cursor()
 
-    cur.execute("DELETE FROM cached_names WHERE volume_serial = ?", (volume_serial,))
-    cur.execute("DELETE FROM cached_records WHERE volume_serial = ?", (volume_serial,))
-    cur.executemany(_INSERT_RECORD, (_record_row(volume_serial, r) for r in records))
-    cur.executemany(_INSERT_NAME, _name_rows(volume_serial, records))
+        cur.execute(
+            """
+            INSERT INTO cached_volumes
+                (volume_serial, volume_root, root_frn, record_size,
+                 full_scan_completed_at, last_refreshed_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(volume_serial) DO UPDATE SET
+                volume_root = excluded.volume_root,
+                root_frn = excluded.root_frn,
+                record_size = excluded.record_size,
+                full_scan_completed_at = excluded.full_scan_completed_at,
+                last_refreshed_at = excluded.last_refreshed_at
+        """,
+            (volume_serial, volume_root, root_frn, record_size, now, now),
+        )
 
-    stale_before = (datetime.now() - timedelta(days=STALE_VOLUME_DAYS)).isoformat(
-        timespec="seconds"
-    )
-    # Cascades to their records and names.
-    cur.execute(
-        "DELETE FROM cached_volumes WHERE volume_serial != ? AND last_refreshed_at < ?",
-        (volume_serial, stale_before),
-    )
-    conn.commit()
-    _compact_if_mostly_empty(conn)
-    conn.close()
+        cur.execute("DELETE FROM cached_names WHERE volume_serial = ?", (volume_serial,))
+        cur.execute("DELETE FROM cached_records WHERE volume_serial = ?", (volume_serial,))
+        cur.executemany(_INSERT_RECORD, (_record_row(volume_serial, r) for r in records))
+        cur.executemany(_INSERT_NAME, _name_rows(volume_serial, records))
+
+        stale_before = (datetime.now() - timedelta(days=STALE_VOLUME_DAYS)).isoformat(
+            timespec="seconds"
+        )
+        # Cascades to their records and names.
+        cur.execute(
+            "DELETE FROM cached_volumes WHERE volume_serial != ? AND last_refreshed_at < ?",
+            (volume_serial, stale_before),
+        )
+        conn.commit()
+        _compact_if_mostly_empty(conn)
+
+    _writing(write)
     logger.debug(
         "turbo_cache: saved full scan of volume %s (%d records)",
         volume_serial,
@@ -214,18 +233,20 @@ def save_journal_cursor(volume_serial, usn_journal_id, next_usn):
     """Record the USN resume point captured right after a full scan
     finished, or after a successful incremental refresh."""
     now = datetime.now().isoformat(timespec="seconds")
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE cached_volumes
-        SET usn_journal_id = ?, next_usn = ?, last_refreshed_at = ?
-        WHERE volume_serial = ?
-    """,
-        (usn_journal_id, next_usn, now, volume_serial),
-    )
-    conn.commit()
-    conn.close()
+
+    def write(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE cached_volumes
+            SET usn_journal_id = ?, next_usn = ?, last_refreshed_at = ?
+            WHERE volume_serial = ?
+        """,
+            (usn_journal_id, next_usn, now, volume_serial),
+        )
+        conn.commit()
+
+    _writing(write)
 
 
 def apply_incremental_changes(volume_serial, upserts, deletes, new_next_usn):
@@ -234,32 +255,34 @@ def apply_incremental_changes(volume_serial, upserts, deletes, new_next_usn):
     in `deletes` (a record that no longer parses / is no longer in use),
     then advance the volume's USN cursor."""
     now = datetime.now().isoformat(timespec="seconds")
-    conn = _connect()
-    cur = conn.cursor()
 
-    touched = [r.frn & _FRN_RECORD_NUMBER_MASK for r in upserts] + list(deletes)
-    cur.executemany(
-        "DELETE FROM cached_names WHERE volume_serial = ? AND record_number = ?",
-        ((volume_serial, record_number) for record_number in touched),
-    )
-    cur.executemany(
-        "DELETE FROM cached_records WHERE volume_serial = ? AND record_number = ?",
-        ((volume_serial, record_number) for record_number in deletes),
-    )
-    cur.executemany(_INSERT_RECORD, (_record_row(volume_serial, r) for r in upserts))
-    cur.executemany(_INSERT_NAME, _name_rows(volume_serial, upserts))
+    def write(conn):
+        cur = conn.cursor()
 
-    cur.execute(
-        """
-        UPDATE cached_volumes
-        SET next_usn = ?, last_refreshed_at = ?
-        WHERE volume_serial = ?
-    """,
-        (new_next_usn, now, volume_serial),
-    )
+        touched = [r.frn & _FRN_RECORD_NUMBER_MASK for r in upserts] + list(deletes)
+        cur.executemany(
+            "DELETE FROM cached_names WHERE volume_serial = ? AND record_number = ?",
+            ((volume_serial, record_number) for record_number in touched),
+        )
+        cur.executemany(
+            "DELETE FROM cached_records WHERE volume_serial = ? AND record_number = ?",
+            ((volume_serial, record_number) for record_number in deletes),
+        )
+        cur.executemany(_INSERT_RECORD, (_record_row(volume_serial, r) for r in upserts))
+        cur.executemany(_INSERT_NAME, _name_rows(volume_serial, upserts))
 
-    conn.commit()
-    conn.close()
+        cur.execute(
+            """
+            UPDATE cached_volumes
+            SET next_usn = ?, last_refreshed_at = ?
+            WHERE volume_serial = ?
+        """,
+            (new_next_usn, now, volume_serial),
+        )
+
+        conn.commit()
+
+    _writing(write)
     logger.debug(
         "turbo_cache: applied incremental refresh to volume %s (%d upserts, %d deletes)",
         volume_serial,
@@ -381,9 +404,11 @@ def invalidate_volume(volume_serial):
     full rebuild. Called whenever a cache/journal invalidation trigger
     fires -- a mismatched USN journal ID, a wrapped journal, a damaged
     database, or any other refresh failure."""
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM cached_volumes WHERE volume_serial = ?", (volume_serial,))
-    conn.commit()
-    conn.close()
+
+    def write(conn):
+        cur = conn.cursor()
+        cur.execute("DELETE FROM cached_volumes WHERE volume_serial = ?", (volume_serial,))
+        conn.commit()
+
+    _writing(write)
     logger.debug("turbo_cache: invalidated cache for volume %s", volume_serial)

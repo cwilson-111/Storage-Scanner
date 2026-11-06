@@ -11,11 +11,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from storage_scanner import duplicate_finder
 from storage_scanner.formatting import human_size
 from storage_scanner.platform_support import TRASH_NAME
+from storage_scanner.ui import delete_dialogs
 
 FILES = {"A.txt": 100, "keep.txt": 300, "sub/X.bin": 50, "sub/y.bin": 10}
 SUB = 60
+DUP_SIZE = 4 * 1024 * 1024  # over the 3 MB threshold: such a group is sampled
 
 
 @pytest.fixture
@@ -218,3 +221,55 @@ def test_a_new_scan_empties_the_cart_it_listed_from_the_old_one(app, folder, run
         assert app.cart_btn.cget("text") == "🛒 Cart"
     finally:
         assert run_tk(lambda: not app._deleting_blocked())
+
+
+@pytest.fixture
+def duplicates_folder(tmp_path):
+    """Two copies of one file, each big enough that the duplicate finder
+    only hashed their first/middle/last windows."""
+    folder = tmp_path / "dups"
+    folder.mkdir()
+    payload = bytes(range(256)) * (DUP_SIZE // 256)
+    for name in ("one.bin", "two.bin"):
+        (folder / name).write_bytes(payload)
+    return folder
+
+
+def test_executing_a_sampled_duplicate_keeps_the_cart_until_the_deletes_are_done(
+    scanner_app, scan_in_app, duplicates_folder, dialogs, recycle_bin, monkeypatch
+):
+    """A sampled copy is compared byte for byte with the copy that stays
+    before anything is deleted, on a worker thread that can take minutes.
+    The cart used to empty itself the moment that comparison was handed
+    off, so the window and the toolbar button said the work was over while
+    the file was still on disk."""
+    app = scanner_app
+    scan_in_app(duplicates_folder)
+    one, two = _node(app, "one.bin"), _node(app, "two.bin")
+    app.duplicates = [(one.size, duplicate_finder.sampled_digest(one.path, one.size), [one, two])]
+    app.cart.add(one, "Duplicate Files", is_sampled=True, as_duplicate=True)
+    app._refresh_cart_indicator()
+    cart = _CartWindow(app)
+
+    # run_busy, held open: the comparison is still running.
+    busy = []
+    monkeypatch.setattr(delete_dialogs, "run_busy", lambda *args: busy.append(args))
+    dialogs.answers = [True]
+
+    cart.click("Execute Deletions")
+
+    assert cart.rows() == [
+        ("Duplicate Files", "File", human_size(DUP_SIZE), str(duplicates_folder / "one.bin"))
+    ]
+    assert app.cart_btn.cget("text") == f"🛒 Cart (1) — {human_size(DUP_SIZE)}"
+    assert (duplicates_folder / "one.bin").exists()
+
+    # Finish it the way run_busy does: the work off the Tk thread, then its
+    # result back on it.
+    _parent, _title, _message, work, on_done, _on_error = busy[0]
+    on_done(work())
+
+    assert cart.rows() == []
+    assert app.cart_btn.cget("text") == "🛒 Cart"
+    assert not (duplicates_folder / "one.bin").exists()
+    assert len(list(recycle_bin.iterdir())) == 1

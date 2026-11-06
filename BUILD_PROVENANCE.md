@@ -16,7 +16,10 @@ same source commit, built in parallel by three independent CI jobs.
   `--onefile` ELF binary.
 
 All three are built from exactly the Python source in this repository at
-the commit a release was tagged from. Nothing else is added at build time.
+the commit a release was tagged from, with one deliberate edit: each build
+job overwrites `storage_scanner/version.py` with the tag it is building,
+so the frozen app knows its own version (the update notice needs it). No
+third-party code and nothing generated elsewhere is added.
 
 ## Exact build steps
 
@@ -39,6 +42,7 @@ in order:
 ```
 pip install --require-hashes -r requirements-dev.lock
 python make_icon.py
+python -c "...write storage_scanner/version.py = the git tag..."
 pyinstaller --onefile --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." Storage-Scanner.py
 pyinstaller --onedir --windowed --name StorageScanner --icon icon.ico --add-data "icon.ico;." --distpath dist/portable --workpath build/portable Storage-Scanner.py
 python make_sbom.py --app-version <the git tag> --output dist/sbom.json
@@ -50,20 +54,24 @@ as the portable ZIP, and `SHA256SUMS.txt`. Both builds are smoke-tested.
 ```
 pip install --require-hashes -r requirements-dev.lock
 python make_icon.py
+python -c "...write storage_scanner/version.py = the git tag..."
 pyinstaller --windowed --name StorageScanner --icon icon.icns --add-data "icon.ico:." --add-data "icon.icns:." Storage-Scanner.py
 hdiutil create -volname "Storage Scanner" -srcfolder dist/dmg -ov -format UDZO dist/StorageScanner.dmg
 python make_sbom.py --app-version <the git tag> --output dist/sbom-macos.json
 ```
-followed by generating `SHA256SUMS-macos.txt` with `shasum`.
+followed by generating `SHA256SUMS-macos.txt` with `shasum`, from inside
+`dist` so the file records bare names a downloader can verify against.
 
 **Linux:**
 ```
 pip install --require-hashes -r requirements-dev.lock
+python -c "...write storage_scanner/version.py = the git tag..."
 pyinstaller --onefile --name StorageScanner --add-data "icon.ico:." Storage-Scanner.py
 tar -czf dist/StorageScanner-linux-x86_64.tar.gz -C dist StorageScanner
 python make_sbom.py --app-version <the git tag> --output dist/sbom-linux.json
 ```
-followed by generating `SHA256SUMS-linux.txt` with `sha256sum`.
+followed by generating `SHA256SUMS-linux.txt` with `sha256sum`, from
+inside `dist` for the same reason as macOS.
 
 The `.lock` files pin everything the build tools pull in as well as the
 tools, each with the SHA-256 of every file PyPI has for that version, so

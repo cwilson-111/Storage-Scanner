@@ -189,12 +189,22 @@ class CartMixin(AppMixin):
                 )
                 for node, source_label in effective
             ]
-            self._delete_nodes(requests, parent=win)
-            # Refused or failed items leave the cart too: each was reported.
-            for node, _label in effective:
-                self.cart.remove(node)
-            populate()
-            self._refresh_cart_indicator()
+
+            def cart_emptied(_results):
+                # Refused or failed items leave the cart too: each was
+                # reported. This runs once the deletes are over, which for
+                # a sampled duplicate is after a byte-for-byte comparison
+                # that can take minutes; clearing the cart inline emptied
+                # it (and reset the toolbar button) while the deletes were
+                # still outstanding.
+                for node, _label in effective:
+                    self.cart.remove(node)
+                # Not populate(): this window may have been closed, or
+                # replaced by a newer one, while the comparison ran. The
+                # indicator repopulates whichever cart window is open now.
+                self._refresh_cart_indicator()
+
+            self._delete_nodes(requests, parent=win, on_done=cart_emptied)
 
         button_bar = ttk.Frame(win, padding=(10, 0, 10, 10))
         button_bar.pack(side=BOTTOM, fill=X)

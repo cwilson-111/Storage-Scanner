@@ -110,6 +110,14 @@ class TkConfirmer:
         )
 
 
+def _pair_key(path_a, path_b, size):
+    """One key for both directions of a byte-for-byte comparison.
+    same_content(a, b, size) and same_content(b, a, size) are the same
+    read, and two selected copies of one group each ask about the other,
+    so without this the pair would be compared twice."""
+    return (path_a, path_b, size) if path_a <= path_b else (path_b, path_a, size)
+
+
 class DeletionMixin(AppMixin):
     def _init_deletion(self):
         self.delete_service = DeleteService(
@@ -126,7 +134,7 @@ class DeletionMixin(AppMixin):
         """Call `listener(DeletedSet)` after each delete while `win` is open."""
         self.delete_service.subscribe(listener, alive=win.winfo_exists)
 
-    def _delete_nodes(self, requests, parent=None, report=True):
+    def _delete_nodes(self, requests, parent=None, report=True, on_done=None):
         """Run `requests` (delete_service.DeleteRequests) through the delete
         service, asking any questions over `parent`. With `report`, says
         what happened in the status bar, and in a dialog whatever wasn't
@@ -136,35 +144,46 @@ class DeletionMixin(AppMixin):
         middle and last windows were hashed) is first compared byte for
         byte with the copies that stay, on a worker thread under a busy
         dialog; the deletes run once that's done, so this may return before
-        they have."""
+        they have. `on_done(results)`, if given, runs on the Tk thread once
+        they have -- not at all if the comparison failed, since then
+        nothing was deleted."""
         parent = parent or self.root
         checks = self._sampled_duplicate_checks(requests)
         if not checks:
-            self._delete_now(requests, parent, report)
+            results = self._delete_now(requests, parent, report)
+            if on_done is not None:
+                on_done(results)
             return
 
         def compare():
             # As delete_service checks them: the copies that stay whose
-            # sampled windows still match, until one matches byte for byte.
+            # sampled windows still match. Every matching pair is answered,
+            # not just up to the first identical one: delete_service asks
+            # other_copy() again per request, after the earlier requests in
+            # the batch are already recycled, so with two copies of one
+            # group selected it asks about a pair an early exit would have
+            # skipped -- and identical() would then read both files whole
+            # on the Tk thread, with the busy dialog already gone.
             answers = {}
             for path, size, digest, others in checks:
                 for other in others:
                     if duplicate_finder.sampled_digest(other, size) != digest:
                         continue
-                    same = duplicate_finder.same_content(path, other, size)
-                    answers[path, other, size] = same
-                    if same:
-                        break
+                    key = _pair_key(path, other, size)
+                    if key not in answers:
+                        answers[key] = duplicate_finder.same_content(path, other, size)
             return answers
 
         def compared(answers):
             def identical(path_a, path_b, size):
-                known = answers.get((path_a, path_b, size))
+                known = answers.get(_pair_key(path_a, path_b, size))
                 if known is None:  # not reached up front; asked now
                     return duplicate_finder.same_content(path_a, path_b, size)
                 return known
 
-            self._delete_now(requests, parent, report, identical)
+            results = self._delete_now(requests, parent, report, identical)
+            if on_done is not None:
+                on_done(results)
 
         run_busy(
             parent,

@@ -31,6 +31,7 @@ Every Win32 call is made inside a function, so this imports anywhere.
 
 import contextlib
 import ctypes
+import functools
 import os
 import stat
 import struct
@@ -118,15 +119,20 @@ _ERROR_NO_MORE_FILES = 18
 _FILETIME_EPOCH = 116444736000000000  # 1970-01-01 in 100 ns steps since 1601
 
 
-def _find_files(pattern):
-    """[(name, modified time), ...] of the files matching `pattern` (a
-    path whose last part may hold * and ?), matched by the file system
-    rather than by listing the folder here; None if the folder can't be
-    read."""
+@functools.lru_cache(maxsize=1)
+def _kernel32():
+    """kernel32 with the find-file prototypes used here: an instance of
+    its own, so it doesn't change the shared ctypes.windll one other
+    modules call (owner._win32 does the same for advapi32).
+
+    Loaded once, not per call: recycle() polls for a recycled item's $I
+    file up to _BIN_ARRIVAL_SECONDS / _BIN_POLL_SECONDS times, each poll
+    reaching here once per SID folder, and ctypes.WinDLL() is a
+    LoadLibraryW this module never frees -- a reference and a round of
+    prototype assignments leaked per poll, on the Tk thread."""
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    find_first = kernel32.FindFirstFileExW
-    find_first.restype = wintypes.HANDLE
-    find_first.argtypes = [
+    kernel32.FindFirstFileExW.restype = wintypes.HANDLE
+    kernel32.FindFirstFileExW.argtypes = [
         wintypes.LPCWSTR,
         ctypes.c_int,
         ctypes.POINTER(_WIN32_FIND_DATAW),
@@ -136,8 +142,17 @@ def _find_files(pattern):
     ]
     kernel32.FindNextFileW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_WIN32_FIND_DATAW)]
     kernel32.FindClose.argtypes = [wintypes.HANDLE]
+    return kernel32
+
+
+def _find_files(pattern):
+    """[(name, modified time), ...] of the files matching `pattern` (a
+    path whose last part may hold * and ?), matched by the file system
+    rather than by listing the folder here; None if the folder can't be
+    read."""
+    kernel32 = _kernel32()
     data = _WIN32_FIND_DATAW()
-    handle = find_first(
+    handle = kernel32.FindFirstFileExW(
         pattern, _FIND_EX_INFO_BASIC, ctypes.byref(data), 0, None, _FIND_FIRST_EX_LARGE_FETCH
     )
     if handle == wintypes.HANDLE(-1).value:

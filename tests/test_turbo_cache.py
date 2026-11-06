@@ -448,3 +448,87 @@ def test_a_cache_file_that_is_not_a_database_is_started_over(tmp_path, monkeypat
     _save([_root()])
 
     assert turbo_cache.get_cached_volume(VOLUME_SERIAL) is not None
+
+
+# -- writes that fail ------------------------------------------------------------- #
+
+
+class _FailingCursor:
+    """A cursor whose every statement fails the way a disk error does."""
+
+    def execute(self, *args):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    executemany = execute
+
+
+class _TrackedConnection:
+    """The real connection, handing out a cursor that can't write and
+    remembering whether it was closed."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.closed = False
+
+    def cursor(self):
+        return _FailingCursor()
+
+    def close(self):
+        self.closed = True
+        self.conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+
+def _break_the_writes(monkeypatch):
+    """Make every connection turbo_cache opens from here on fail at its
+    first statement. Returns the list each one is recorded in."""
+    real_connect = turbo_cache._connect
+    opened = []
+
+    def connect():
+        conn = _TrackedConnection(real_connect())
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(turbo_cache, "_connect", connect)
+    return opened
+
+
+_FAILING_WRITES = {
+    "save_full_scan": lambda: _save([_root()]),
+    "save_journal_cursor": lambda: turbo_cache.save_journal_cursor(VOLUME_SERIAL, 7, 1000),
+    "apply_incremental_changes": lambda: turbo_cache.apply_incremental_changes(
+        VOLUME_SERIAL, [_root()], [], 1001
+    ),
+    "invalidate_volume": lambda: turbo_cache.invalidate_volume(VOLUME_SERIAL),
+}
+
+
+@pytest.mark.parametrize("write", list(_FAILING_WRITES))
+def test_a_write_that_fails_closes_its_connection_and_still_raises(tmp_path, monkeypatch, write):
+    """A connection left open keeps its transaction and -wal with it, and
+    turbo_read swallows save failures, so nothing upstream notices."""
+    _init_db(tmp_path, monkeypatch)
+    opened = _break_the_writes(monkeypatch)
+
+    with pytest.raises(sqlite3.OperationalError):
+        _FAILING_WRITES[write]()
+
+    assert [conn.closed for conn in opened] == [True]
+
+
+@pytest.mark.windows
+def test_the_cache_can_still_be_discarded_after_a_write_fails(tmp_path, monkeypatch):
+    """What the leak cost on Windows: the open connection held the file, so
+    discard()'s os.remove raised PermissionError (it suppresses only
+    FileNotFoundError) and no later scan could rebuild the cache."""
+    db_path = _init_db(tmp_path, monkeypatch)
+    _break_the_writes(monkeypatch)
+    with pytest.raises(sqlite3.OperationalError):
+        _save([_root()])
+
+    turbo_cache.discard()
+
+    assert not db_path.exists()

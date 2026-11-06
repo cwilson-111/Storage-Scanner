@@ -102,8 +102,11 @@ Every release includes, per platform:
   time. Core scanning, duplicate detection, and cleanup need no third-party
   runtime package at all.
 - **`SHA256SUMS*.txt`** — checksums for that platform's files, so you can
-  confirm what you downloaded matches what was actually built
-  (`sha256sum -c SHA256SUMS*.txt` on macOS/Linux, `Get-FileHash` on Windows).
+  confirm what you downloaded matches what was actually built. Run it in
+  the folder you downloaded into: `shasum -a 256 -c SHA256SUMS-macos.txt`
+  on macOS (stock macOS ships `shasum`, not `sha256sum`),
+  `sha256sum -c SHA256SUMS-linux.txt` on Linux, and on Windows
+  `Get-FileHash StorageScanner.exe` compared against `SHA256SUMS.txt`.
 
 No release is code-signed or notarized yet — checksums let you verify
 integrity, but don't establish who built it, which is what signing/notarization
@@ -460,8 +463,9 @@ The full plan, with what's done and what's next, is in
 **Next: the improvement backlog** ("Improvement backlog (review
 2026-09-26)" near the top of the roadmap). The delete-safety fixes (P0) and
 the next-release fixes (P1), including Turbo Scan's size and link
-handling, are done, except two: checking Turbo Scan on real hardware and
-code signing. Showing what changed since the last scan, in the main tree
+handling, are done, except one: code signing. Turbo Scan and its cache
+were checked on real hardware against a written checklist on 2026-10-08
+(roadmap P1-3). Showing what changed since the last scan, in the main tree
 and the treemap, is done, as is the scale work (bounded history, a compact
 in-memory tree).
 

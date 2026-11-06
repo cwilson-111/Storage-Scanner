@@ -380,9 +380,17 @@ jobs:
         run: python make_sbom.py --app-version "$REF_NAME" --output dist/sbom-macos.json
 
       - name: Generate SHA-256 checksums
+        # `cd dist` so the file records bare names, not `dist/...`: a user
+        # downloads the .dmg and this file side by side and runs
+        # `shasum -a 256 -c SHA256SUMS-macos.txt` in that folder, which
+        # looks for each recorded path verbatim. With the prefix every
+        # line reported "No such file or directory" -- the one integrity
+        # check offered in place of code signing appeared to fail. The
+        # Windows job never had this because Split-Path -Leaf strips it.
         run: |
-          shasum -a 256 dist/StorageScanner.dmg dist/sbom-macos.json > dist/SHA256SUMS-macos.txt
-          cat dist/SHA256SUMS-macos.txt
+          cd dist
+          shasum -a 256 StorageScanner.dmg sbom-macos.json > SHA256SUMS-macos.txt
+          cat SHA256SUMS-macos.txt
 
       - name: Attest build provenance
         # See the build job's step of the same name.
@@ -452,9 +460,12 @@ jobs:
           tar -czf dist/StorageScanner-linux-x86_64.tar.gz -C dist StorageScanner
 
       - name: Generate SHA-256 checksums
+        # Bare names, not `dist/...` -- see the macOS job's step of the
+        # same name.
         run: |
-          sha256sum dist/StorageScanner-linux-x86_64.tar.gz dist/sbom-linux.json > dist/SHA256SUMS-linux.txt
-          cat dist/SHA256SUMS-linux.txt
+          cd dist
+          sha256sum StorageScanner-linux-x86_64.tar.gz sbom-linux.json > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
 
       - name: Attest build provenance
         # See the build job's step of the same name.

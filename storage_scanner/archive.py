@@ -7,7 +7,9 @@ the app uses — after the archive has been written *and verified*, never
 before.
 """
 
+import errno
 import os
+import sys
 import zipfile
 from collections import namedtuple
 
@@ -56,17 +58,98 @@ def likely_compresses_well(path):
     return ext not in _POOR_COMPRESSION_EXTENSIONS
 
 
-def _unique_archive_path(path):
-    """`path` + ".zip", or "`path` (2).zip" etc. if that's already taken."""
-    candidate = path + ".zip"
-    if not os.path.exists(candidate):
-        return candidate
-    n = 2
+def _create_new_archive_file(path):
+    """`path` brought into existence and opened as a binary stream, or
+    FileExistsError if anything is there already -- file, symbolic link,
+    junction or extra hard link. Never creates or truncates a link's
+    target.
+
+    zipfile opens a path 'w+b', which follows a link and empties whatever
+    it points at, and archiving can run elevated over a destination a
+    same-user process at medium integrity is free to rename. So the
+    archive has to be a file this call itself created: same hazard, same
+    answer as mft_scan_cli.open_without_following_links.
+    """
+    if sys.platform != "win32":
+        # O_EXCL refuses an existing symbolic link rather than following
+        # it (even a dangling one), and a file it just created has exactly
+        # one name, so no link-count check is needed here.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        return os.fdopen(fd, "wb")
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _FileInfo(ctypes.Structure):  # BY_HANDLE_FILE_INFORMATION
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("created", wintypes.FILETIME),
+            ("accessed", wintypes.FILETIME),
+            ("written", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("index_high", wintypes.DWORD),
+            ("index_low", wintypes.DWORD),
+        ]
+
+    # Its own instance, so these prototypes don't change the shared
+    # ctypes.windll.kernel32 other modules call.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    generic_write, create_new = 0x40000000, 1
+    open_reparse_point = 0x00200000  # open a link itself, never its target
+    reparse_attribute = 0x400
+    already_there = (80, 183)  # ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS
+
+    handle = kernel32.CreateFileW(
+        str(path), generic_write, 0, None, create_new, open_reparse_point, None
+    )
+    if handle is None or handle == wintypes.HANDLE(-1).value:
+        error = ctypes.get_last_error()
+        if error in already_there:
+            # The caller's cue to try the next " (n).zip"; raised by hand
+            # because ctypes.WinError's errno mapping isn't guaranteed.
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(path))
+        raise ctypes.WinError(error)
+    info = _FileInfo()
+    if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+        error = ctypes.WinError(ctypes.get_last_error())
+        kernel32.CloseHandle(handle)
+        raise error
+    if info.attributes & reparse_attribute or info.links != 1:
+        kernel32.CloseHandle(handle)
+        raise OSError(f"Refusing to write {path}: it's a link to somewhere else")
+    fd = msvcrt.open_osfhandle(handle, os.O_BINARY)  # type: ignore[attr-defined]
+    return os.fdopen(fd, "wb")
+
+
+def _create_unique_archive(path):
+    """(`path` + ".zip", a binary stream to it), or "`path` (2).zip" etc.
+    if that name is taken. Choosing the name and creating the file are one
+    exclusive create, not os.path.exists() followed by an open: the gap
+    between a check and a use is both a lost race with another archiver
+    and the window to leave a link at the name we picked."""
+    attempt = 1
     while True:
-        candidate = f"{path} ({n}).zip"
-        if not os.path.exists(candidate):
-            return candidate
-        n += 1
+        candidate = f"{path}.zip" if attempt == 1 else f"{path} ({attempt}).zip"
+        try:
+            return candidate, _create_new_archive_file(candidate)
+        except FileExistsError:
+            attempt += 1
 
 
 # How much is read, compressed and reported at a time: small enough that
@@ -86,7 +169,7 @@ def write_verified_archive(node, cancel_event=None, progress=None):
     then verifying: total is twice the file's size). A failure raises
     OSError or zipfile.BadZipFile, a set `cancel_event` ArchiveCancelled;
     either way the partial archive is removed first."""
-    archive_path = _unique_archive_path(node.path)
+    archive_path, archive_file = _create_unique_archive(node.path)
     total = 2 * max(node.size, 1)
     done = 0
 
@@ -100,7 +183,8 @@ def write_verified_archive(node, cancel_event=None, progress=None):
 
     try:
         with (
-            zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf,
+            archive_file,
+            zipfile.ZipFile(archive_file, "w", zipfile.ZIP_DEFLATED) as zf,
             open(node.path, "rb") as source,
             zf.open(node.name, "w", force_zip64=True) as out,
         ):

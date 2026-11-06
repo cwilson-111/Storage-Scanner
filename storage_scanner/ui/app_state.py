@@ -222,6 +222,7 @@ if TYPE_CHECKING:
             requests: Sequence[DeleteRequest],
             parent: Optional[Misc] = None,
             report: bool = True,
+            on_done: Optional[Callable[[list[DeleteResult]], object]] = None,
         ) -> None: ...
         def _delete_now(
             self,

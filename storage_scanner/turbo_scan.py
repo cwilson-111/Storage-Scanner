@@ -160,19 +160,22 @@ def _run_turbo_via_elevated_helper(path, progress_q, cancel_event):
     ok, result = run_elevated_scan_windows(path, progress_q, cancel_event)
     if not ok:
         raise RuntimeError(result)
-    node = dict_to_node(result["node"])
-    outside = _first_path_outside(node, path)
-    if outside is not None:
-        raise RuntimeError(f"Turbo Scan helper returned {outside!r}, outside {path!r}")
-    return node, MftRead.from_dict(result["mft_read"])
+    return dict_to_node(result["node"]), MftRead.from_dict(result["mft_read"])
 
 
 def _first_path_outside(node, requested):
-    """A path in the helper's result that isn't `requested` or under it, or
-    None. The result comes back through a file in the user's temp folder,
-    so it's checked before the app shows it or deletes anything in it
-    (P3-7): every folder's path, and every file name (a file's path is its
-    folder's plus its name, so a name must not climb out of it)."""
+    """A path in a Turbo Scan result that isn't `requested` or under it, or
+    None. Every folder's path, and every file name (a file's path is its
+    folder's plus its name, so a name must not climb out of it).
+
+    Both Turbo paths are checked, not just the elevated helper's (P3-7).
+    The helper's result comes back through a file in the user's temp
+    folder; the in-process path's names can come out of
+    turbo_scan_cache.db under %LOCALAPPDATA%, which is writable by the
+    same user at medium integrity while the app itself may be running
+    elevated. Either way the names are attacker-reachable and the tree
+    they build is what the Cleanup and Cart windows hand to
+    DeleteService as node.path, so neither may escape the scanned root."""
     root = os.path.normcase(os.path.normpath(requested))
     prefix = root if root.endswith(os.sep) else root + os.sep
     stack = [node]
@@ -189,10 +192,20 @@ def _first_path_outside(node, requested):
 
 
 def _attempt_turbo_scan(path, progress_q, cancel_event):
-    """(Node, MftRead) from whichever Turbo path fits this process."""
+    """(Node, MftRead) from whichever Turbo path fits this process, after
+    confirming the tree it produced stays inside `path`."""
     if IS_ROOT:
-        return _run_turbo_in_process(path, progress_q, cancel_event)
-    return _run_turbo_via_elevated_helper(path, progress_q, cancel_event)
+        node, mft_read = _run_turbo_in_process(path, progress_q, cancel_event)
+        source = "in-process read"
+    else:
+        node, mft_read = _run_turbo_via_elevated_helper(path, progress_q, cancel_event)
+        source = "helper"
+    outside = _first_path_outside(node, path)
+    if outside is not None:
+        # scan_with_best_engine's broad except turns this into a fallback
+        # to the Compatible engine, which walks real dirents.
+        raise RuntimeError(f"Turbo Scan {source} returned {outside!r}, outside {path!r}")
+    return node, mft_read
 
 
 def scan_with_best_engine(path, progress_q, cancel_event, workers=None, turbo_enabled=None):
